@@ -1,0 +1,7 @@
+# web/vendor/ holds byte-exact copies of the extension's shipped UI, and
+# check-ui-vendor.mjs authenticates those exact bytes against the committed
+# hash manifest (which the Docker build runs too). Git must never normalize
+# line endings here: the source files carry mixed EOLs, and a normalized blob
+# checks out with different bytes than sync-ui hashed — which is invisible on
+# the machine that ran sync-ui and breaks every fresh clone (Railway).
+web/vendor/** -text

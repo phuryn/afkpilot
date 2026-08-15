@@ -1,0 +1,2973 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+  The remote chat client = the extension's webview UI (vendored chat.js/chat.css,
+  run `npm run sync-ui`) behind an acquireVsCodeApi -> WebSocket shim.
+  Body structure mirrors getHtml() in grok-build-vscode/src/sidebar.ts — if that
+  page gains/renames an element chat.js needs, update this copy too.
+-->
+<head>
+<meta charset="UTF-8" />
+<!-- No viewport-fit=cover: on edge-to-edge Android it extends the layout
+     under the system nav bar while env(safe-area-inset-bottom) stays 0,
+     cropping the composer's toolbar row. Without it every browser keeps the
+     viewport clear of system bars on its own. -->
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script>
+  (function () {
+    var root = document.documentElement;
+    var saved;
+    try { saved = localStorage.getItem("grok-remote-theme"); } catch (e) {}
+    var initial = saved || ((window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark");
+    root.setAttribute("data-theme", initial);
+    // The vendored chat.css keys its light-mode diff colors off VS Code's own
+    // body class (body.vscode-light) — mirror data-theme onto it. body doesn't
+    // exist yet in this head script, so sync on DOMContentLoaded too.
+    function syncBodyTheme() {
+      if (document.body) document.body.classList.toggle("vscode-light", root.getAttribute("data-theme") === "light");
+    }
+    document.addEventListener("DOMContentLoaded", syncBodyTheme);
+    window.__toggleTheme = function () {
+      var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem("grok-remote-theme", next); } catch (e) {}
+      syncBodyTheme();
+    };
+  })();
+</script>
+<title>AFK Pilot — chat</title>
+<meta name="description" content="AFK Pilot chat client — drive your Grok Build for VS Code (Community) agent from the browser." />
+<meta name="robots" content="noindex" />
+<link rel="icon" href="/favicon.svg" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<style>
+:root {
+  color-scheme: dark;
+  /* The site's --font-sans, not VS Code's shorter stack — one family across
+     the product (visible mainly on desktops with Inter; Android resolves to
+     Roboto either way). */
+  --vscode-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, Helvetica, Arial, sans-serif;
+  --vscode-editor-font-family: "SF Mono", Menlo, Consolas, monospace;
+  /* Prose ink: near-white (not #fff — halation on OLED), brighter than VS
+     Code's #cccccc — this is a reading surface, not a side panel. Secondary
+     chrome (tool rows, timestamps) keeps descriptionForeground gray, which
+     sharpens the prose/chrome hierarchy. */
+  --vscode-foreground: #e6e6e6;
+  --vscode-descriptionForeground: #9d9d9d;
+  --vscode-editor-background: #1e1e1e;
+  --vscode-sideBar-background: #1e1e1e;
+  --vscode-editorWidget-background: #252526;
+  --vscode-editorWidget-border: #454545;
+  --vscode-widget-border: #454545;
+  --vscode-panel-border: #2b2b2b;
+  --vscode-focusBorder: #007fd4;
+  --vscode-button-background: #0e639c;
+  --vscode-button-foreground: #ffffff;
+  --vscode-button-hoverBackground: #1177bb;
+  /* Dark Modern's input surface. Dark+'s #3c3c3c sat well above the editor
+     background and made the composer read as a raised panel rather than a
+     field, which is the difference visible against VS Code side by side. */
+  --vscode-input-background: #313131;
+  /* Typed text carries the same ink as the prose it becomes. */
+  --vscode-input-foreground: #e6e6e6;
+  --vscode-input-border: #3c3c3c;
+  --vscode-textLink-foreground: #3794ff;
+  --vscode-textCodeBlock-background: #0a0a0a;
+  --vscode-list-hoverBackground: #2a2d2e;
+  /* The vendored CSS marks the current session/repo/mode with
+     --vscode-list-activeSelection*, which in VS Code comes from the user's real
+     theme. Here the shim IS the theme, and it carried legacy Dark+ (#094771) —
+     a saturated blue that read as "button", not "current". VS Code's neutral
+     selection grey is what an editor actually shows for this, so use it rather
+     than the Dark Modern accent (#04395e): the marker should recede.
+     activeSelectionForeground is set explicitly per theme — the vendored rules
+     fall back to --vscode-foreground, which is fine on dark but would put pale
+     ink on the light-theme grey. */
+  --vscode-list-activeSelectionBackground: #37373d;
+  --vscode-list-activeSelectionForeground: #ffffff;
+  --vscode-list-inactiveSelectionBackground: #37373d;
+  --vscode-toolbar-hoverBackground: #383b3d;
+  --vscode-badge-background: #4d4d4d;
+  --vscode-badge-foreground: #ffffff;
+  --vscode-errorForeground: #f48771;
+  --vscode-charts-green: #4ec9b0;
+  --vscode-charts-blue: #3794ff;
+  --vscode-charts-yellow: #d7ba7d;
+  --vscode-charts-red: #f48771;
+  /* The vendored scrollbar styles key off these — undefined = an invisible
+     thumb, so desktop showed no scrollbar. */
+  --vscode-scrollbarSlider-background: rgba(121,121,121,0.4);
+  --vscode-scrollbarSlider-hoverBackground: rgba(100,100,100,0.7);
+  --vscode-scrollbarSlider-activeBackground: rgba(191,191,191,0.5);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --vscode-foreground: #3b3b3b;
+  --vscode-descriptionForeground: #6e6e6e;
+  --vscode-editor-background: #ffffff;
+  --vscode-sideBar-background: #ffffff;
+  --vscode-editorWidget-background: #f8f8f8;
+  --vscode-editorWidget-border: #d4d4d4;
+  --vscode-widget-border: #d4d4d4;
+  --vscode-panel-border: #e5e5e5;
+  --vscode-focusBorder: #005fb8;
+  --vscode-button-background: #005fb8;
+  --vscode-button-foreground: #ffffff;
+  --vscode-button-hoverBackground: #0258a8;
+  --vscode-input-background: #ffffff;
+  --vscode-input-foreground: #3b3b3b;
+  --vscode-input-border: #cecece;
+  --vscode-textLink-foreground: #005fb8;
+  --vscode-textCodeBlock-background: #f6f6f6;
+  --vscode-list-hoverBackground: #f2f2f2;
+  --vscode-list-activeSelectionBackground: #e4e6f1;
+  --vscode-list-activeSelectionForeground: #3b3b3b;
+  --vscode-list-inactiveSelectionBackground: #e4e6f1;
+  --vscode-toolbar-hoverBackground: #e5e5e5;
+  --vscode-badge-background: #cccccc;
+  --vscode-badge-foreground: #333333;
+  --vscode-errorForeground: #cd3131;
+  --vscode-charts-green: #388a34;
+  --vscode-charts-blue: #1a85ff;
+  --vscode-charts-yellow: #bf8803;
+  --vscode-charts-red: #cd3131;
+  --vscode-scrollbarSlider-background: rgba(100,100,100,0.35);
+  --vscode-scrollbarSlider-hoverBackground: rgba(100,100,100,0.55);
+  --vscode-scrollbarSlider-activeBackground: rgba(0,0,0,0.6);
+}
+html { background: #1a1a1a; }
+:root[data-theme="light"] { background: #fbfbfc; }
+html, body { margin: 0; color: var(--vscode-foreground); font-family: var(--vscode-font-family); }
+/* Bulletproof app shell: the DOCUMENT must never scroll. Mobile Chrome
+   scrolls the ROOT to reveal a focused input, which walked the whole page —
+   top bar included — out of view, and stale keyboard heights left the
+   composer cropped. Pinning body to the viewport (fixed inset:0 tracks the
+   layout viewport, keyboard resizes included) makes #messages the ONLY
+   scroller; the header and composer physically cannot leave the screen. */
+html { height: 100%; overflow: hidden; overscroll-behavior: none; }
+body {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+@media (max-width: 899px) {
+  .composer { padding-bottom: max(6px, env(safe-area-inset-bottom)); }
+}
+html body { background: #1a1a1a; }
+:root[data-theme="light"] body { background: #fbfbfc; }
+/* Desktop browsers: the vendored UI was drawn for a sidebar — cap and center
+   the app column so a full-screen tab stays readable. 1120px = the site's
+   --wrap, so /chat aligns with every other page; hairline borders define the
+   column when the viewport is wider. (The VS Code webview never loads this
+   file.) */
+body { width: 100%; }
+#app {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  background: var(--vscode-sideBar-background);
+}
+/* Author `display:flex` would otherwise beat the UA [hidden] rule and leave
+   the chat UI painted under the update-your-extension notice. */
+#app[hidden] { display: none; }
+/* Both wrappers dissolve on phones, so the markup keeps the original
+   single-column flow: header, messages, composer. The rail is not a column
+   here — it is a drawer, and `position: fixed` takes it out of this flow
+   entirely, so `display: contents` on the wrappers costs it nothing. */
+#app-body,
+#chat-main-row,
+#chat-stack,
+#chat-column { display: contents; }
+/* The file panel's dock. Narrow viewports have no third column to give it, so
+   it is absent here and the panel mounts as an overlay — see the @media block
+   below for the docked case. */
+#file-panel-dock { display: none; }
+/* `body #projects-rail` (1-0-1), not the bare id, ON PURPOSE. This <style>
+   block is loaded BEFORE the vendored chat.css, so every rail declaration they
+   share at equal specificity is won by the vendored file — and chat.css styles
+   the DOCKED rail. That is not theoretical: the drawer shipped to production
+   398px wide on paper and 149px on a real phone, because chat.css's
+   `width: min(260px, 38vw)` quietly took over. Anything here that contradicts
+   a docked-rail rule needs the extra specificity for the same reason. */
+body #projects-rail {
+  position: fixed;
+  z-index: 40;
+  inset-block: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: min(86vw, 330px);
+  color: var(--vscode-foreground);
+  background: var(--vscode-sideBar-background);
+  border-right: 1px solid var(--vscode-panel-border);
+  /* Off-canvas by default. `visibility` rides with it so a closed drawer is
+     also out of the tab order — a hidden panel that still takes focus is how a
+     keyboard ends up somewhere the eye cannot follow. */
+  visibility: hidden;
+  transform: translateX(-100%);
+  transition: transform .18s ease, visibility 0s linear .18s;
+}
+body.rail-open #projects-rail {
+  visibility: visible;
+  transform: none;
+  transition: transform .18s ease, visibility 0s;
+  box-shadow: 0 0 40px rgba(0,0,0,.45);
+}
+@media (prefers-reduced-motion: reduce) {
+  #projects-rail { transition: none; }
+}
+/* A drag handle is for a rail with a visible edge. The drawer is off-canvas
+   and slides over the conversation, so there is no edge to pull — and a phone
+   has no hover to reveal what the handle would do. Beats chat.css's
+   `body.has-rail .rail-resizer` (0-2-1) on specificity, since source order
+   would go the other way. */
+body.has-rail #rail-resizer { display: none; }
+#rail-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+  background: rgba(0,0,0,.5);
+}
+#rail-scrim[hidden] { display: none; }
+
+/* Where the rail exists, it IS the app chrome: the project controls moved into
+   it, and what remains belongs to the conversation, so the app-wide bar goes.
+   Without a rail (an extension too old to send `repos`) nothing else can carry
+   New/History, so the bar stays exactly as it was — capability, not version. */
+body.has-rail .top-bar { display: none; }
+#session-head { display: none; }
+body.has-rail #session-head {
+  display: flex;
+  align-items: center;
+  flex: none;
+  /* Anchor and stacking context for the history dropdown, which is reparented
+     here (see the shim) and positions itself against its offset parent. */
+  position: relative;
+  z-index: 3;
+  gap: 2px;
+  box-sizing: border-box;
+  min-height: 46px;
+  padding: 3px 6px;
+  background: var(--vscode-sideBar-background);
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+/* A label, not a control: it says which conversation you are reading and which
+   project it is in, and nothing is hidden behind it. History and New are their
+   own icons to its right, the same two controls the VS Code top bar has. */
+#session-head-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 1px;
+  padding: 4px 8px;
+  color: var(--vscode-foreground);
+}
+#session-head-titlerow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  min-width: 0;
+}
+/* #session-head-main is a column with align-items:flex-start, so this row is
+   sized by its content — which made the edit field NARROWER than the name it
+   replaced, because `width: 100%` on the input resolved against a row that had
+   already shrunk to the input's own default width. Stretching the row fixes
+   that, but on a wide header it overshot into a full-width field for a short
+   name; the cap keeps it a field rather than a banner, and on a narrow screen
+   the stretch is what applies. */
+#session-head-titlerow:has(.session-name-input) {
+  align-self: stretch;
+  max-width: 300px;
+}
+#session-head-title,
+#session-head-sub {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#session-head-title { font-size: 15px; font-weight: 600; line-height: 1.4; }
+/* The name is the header's headline here, not the quiet 12px chip the VS Code
+   top bar wants — so the shared label styling is overridden back to this
+   header's own type. `min-width: 0` keeps the ellipsis working inside the row. */
+#session-head-title.session-name-label {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  background: transparent;
+}
+#session-head-title.session-name-label:hover { color: inherit; text-decoration: underline; }
+/* Exception: the rename pencil is an inline title adornment — glyph 16, not
+   the 20px bar-icon primitive — but it still uses color-hover / no-box. */
+#session-head-edit {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+#session-head-edit:hover { color: var(--vscode-foreground); background: transparent; }
+#session-head-edit svg { width: 16px; height: 16px; }
+/* Touch floor for the two controls this page owns by id, so they cannot be
+   reached by the shared rule in chat.css. The pencil was 22x22 — under the
+   WCAG 2.5.8 AA minimum — and the title it sits beside was 21px tall, which is
+   the whole tap area for "rename this conversation". Coarse pointers only; a
+   mouse keeps the compact header. See the note at the end of chat.css. */
+@media (hover: none) and (pointer: coarse) {
+  #session-head-edit { min-width: 36px; min-height: 36px; }
+  #session-head-edit svg { width: 16px; height: 16px; }
+  #session-head-title.session-name-label { min-height: 36px; display: flex; align-items: center; }
+}
+/* Editing in place must not resize the header, so the input takes the row it
+   replaces rather than the full width of the column. */
+#session-head-titlerow .session-name-input {
+  font-size: 15px;
+  font-weight: 600;
+  width: 100%;
+}
+/* The repo line is what the mobile repo chip used to say, and it says more: the
+   chip named the project, this names the conversation AND the project. */
+#session-head-sub { font-size: 11px; color: var(--vscode-descriptionForeground); line-height: 1.45; }
+#session-head-sub:empty, #session-head-sub[hidden] { display: none; }
+#session-head-actions { display: flex; flex: 0 0 auto; }
+/* chat.css gives the ⋯ slot a trailing divider to separate it from the desktop
+   app's panel toggles. This page has no panel toggles — the ⋯ is the last
+   control in the header — so the divider ends the bar against nothing. Scoped
+   to #session-head (which only this page has) rather than fought with
+   :last-child: the history popover is reparented in here at runtime, so the
+   slot is not structurally last even though it is visually last. */
+#session-head #session-head-actions { margin-right: 0; padding-right: 0; border-right: 0; }
+#rail-open, #session-history, #session-new { flex: 0 0 auto; }
+/* One reading measure for the prose and the control that produces it. Wide
+   blocks — diffs, terminal output, tables — keep their own horizontal scroll
+   inside it rather than widening the column. On a phone the max() collapses to
+   the vendored padding, so this rule costs nothing there. */
+body.has-rail #messages,
+body.has-rail .composer,
+body.has-rail #quota-wall { padding-inline: max(10px, calc((100% - 800px) / 2)); }
+
+@media (min-width: 1152px) {
+  /* The side borders framed a centred column. Full bleed has no column to frame
+     — they would just be hairlines drawn on the window edges. */
+  #app { border-inline: 1px solid var(--vscode-panel-border); }
+  body.has-rail #app { border-inline: 0; }
+}
+.welcome { visibility: hidden; }
+.auth-overlay { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 24px; background: rgba(20,20,20,.72); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+:root[data-theme="light"] .auth-overlay { background: rgba(0,0,0,.35); }
+.auth-overlay[hidden] { display: none; }
+.auth-overlay .panel {
+  background: var(--vscode-editorWidget-background);
+  border: 1px solid var(--vscode-editorWidget-border);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.4), 0 28px 64px rgba(0,0,0,.55);
+  padding: 30px 34px;
+  width: min(380px, 100%);
+  text-align: center;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--vscode-foreground);
+}
+.auth-overlay .panel::before {
+  content: "";
+  display: block;
+  width: 30px; height: 30px;
+  margin: 0 auto 16px;
+  background-color: var(--vscode-foreground);
+  -webkit-mask: url(/logo.svg) center / contain no-repeat;
+  mask: url(/logo.svg) center / contain no-repeat;
+}
+.auth-overlay .panel p { margin: 0 0 4px; }
+.auth-overlay .muted { color: var(--vscode-descriptionForeground); font-size: 13px; }
+.auth-overlay a { color: var(--vscode-textLink-foreground); }
+.auth-overlay button {
+  margin-top: 18px;
+  padding: 10px 26px;
+  font-size: 15px;
+  font-family: inherit;
+  background: var(--vscode-button-background);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--vscode-button-foreground);
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.auth-overlay button:hover { background: var(--vscode-button-hoverBackground); }
+.auth-overlay button:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 2px; }
+.auth-overlay button.quiet { background: transparent; border-color: var(--vscode-editorWidget-border); color: var(--vscode-foreground); }
+.auth-overlay button.quiet:hover { background: var(--vscode-toolbar-hoverBackground); }
+.auth-overlay .actions { display: flex; gap: 10px; justify-content: center; }
+/* Remote-only chrome: the AFK Pilot brand in the top bar (the extension's own
+   webview has no such element — this file adds it around the vendored UI). */
+.top-bar .afk-brand {
+  margin-right: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+  height: 28px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  border-radius: 4px;
+}
+/* Brand is a wordmark, not a button — match the home page: no color/bg/
+   underline shift on hover, on either the mobile chip or the desktop header. */
+.top-bar .afk-brand:hover { text-decoration: none; }
+.site-brand:hover { color: var(--sb-heading); text-decoration: none; }
+.afk-brand .mark {
+  width: 15px; height: 15px; flex: none;
+  background-color: currentColor;
+  -webkit-mask: url(/logo.svg) center / contain no-repeat;
+  mask: url(/logo.svg) center / contain no-repeat;
+}
+@media (max-width: 899px) {
+  /* Match the brand chip to the header scale: the mark was 15px next to the
+     20px header icons, the wordmark 12px next to 16px prose — both read small.
+     Chip height grows to keep them vertically centered. */
+  .top-bar .afk-brand { font-size: 15px; height: 36px; }
+  .afk-brand .mark { width: 20px; height: 20px; }
+  /* The repo chip and the brand both want the left of .top-bar, and both ship
+     `margin-right: auto` — two auto gaps would split the free space and strand
+     the chip mid-bar. The chip wins the slot: which repo you're driving is
+     state you cannot infer from anywhere else on the page, whereas the
+     wordmark repeats on every other page and the mark alone still carries the
+     brand (and the link home). Desktop is unaffected — there .afk-brand is
+     display:none and the brand lives in #site-bar. */
+  .top-bar .afk-brand { margin-right: 0; }
+  /* ...but the chip only exists once the HOST advertises `repos`. Against an
+     older extension it stays [hidden], and then nothing carries the auto gap:
+     .top-bar is justify-content:flex-end, so the brand would pack against the
+     icons on the right. Hand the slot back when the chip isn't there. */
+  .top-bar:has(.repo-chip[hidden]) .afk-brand { margin-right: auto; }
+  .afk-brand-word { display: none; }
+}
+/* The desktop header is the SAME header as index/link — metrics and colors
+   copied from theme.css (.site-header/.brand/.wordmark/.icon-toggle) with the
+   site tokens scoped locally, so /chat doesn't import theme.css (its global
+   rules would fight the vendored chat css). Sits on the page backdrop. */
+#site-bar {
+  display: none;
+  flex: none;
+  width: 100%;
+  background: #1a1a1a;
+  --sb-heading: #ededed;
+  --sb-muted: #9d9d9d;
+  --sb-border: #454545;
+  --sb-surface: #252526;
+  --sb-faint: #6f6f6f;
+  --sb-logo: #ffffff;
+}
+:root[data-theme="light"] #site-bar {
+  background: #fbfbfc;
+  --sb-heading: #14171c;
+  --sb-muted: #565d67;
+  --sb-border: #e2e4e8;
+  --sb-surface: #ffffff;
+  --sb-faint: #8a909a;
+  --sb-logo: #14171c;
+}
+.site-bar-inner {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding-block: 1.35rem;
+  padding-inline: clamp(1.25rem, 4vw, 2.5rem);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.site-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--sb-heading);
+  font-weight: 600;
+  text-decoration: none;
+}
+.site-brand .mark {
+  width: 26px; height: 26px; flex: none;
+  background-color: var(--sb-logo);
+  -webkit-mask: url(/logo.svg) center / contain no-repeat;
+  mask: url(/logo.svg) center / contain no-repeat;
+}
+.site-brand .wordmark { font-size: 1.0625rem; letter-spacing: -0.01em; }
+.site-brand .wordmark b { font-weight: 600; }
+.site-brand .wordmark .dim { color: var(--sb-muted); font-weight: 500; }
+.site-actions { display: inline-flex; align-items: center; gap: 0.6rem; }
+.icon-toggle {
+  width: 38px;
+  height: 38px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--sb-border);
+  border-radius: 9px;
+  background: var(--sb-surface);
+  color: var(--sb-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.icon-toggle:hover { color: var(--sb-heading); border-color: var(--sb-faint); }
+.icon-toggle svg { width: 17px; height: 17px; display: block; }
+:root[data-theme="dark"] .i-sun { display: block; }
+:root[data-theme="dark"] .i-moon { display: none; }
+:root[data-theme="light"] .i-sun { display: none; }
+:root[data-theme="light"] .i-moon { display: block; }
+#theme-btn svg { width: 20px; height: 20px; }
+@media (min-width: 900px) {
+  /* #app stays a column: the rail and the chat sit side by side in #app-body
+     beneath it. On phones both wrappers are display:contents and the rail is a
+     fixed-position drawer, so that single-column flow is untouched. */
+  #app-body {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: row;
+    min-height: 0;
+  }
+  /* Full bleed, so the rail sits against the window edge instead of floating in
+     a centred card. The reading measure does the capping now (#messages pads
+     itself to 800px), which is what the outer max-width used to be for — keeping
+     both just moved the whole app inward and wasted the margins.
+     WITHOUT a rail there is nothing to anchor a full-width layout and the chat
+     would be one very wide column, so the legacy path keeps the centred 1120px
+     it has always had. Same capability latch as everything else here. */
+  body.has-rail #app { max-width: none; }
+  #chat-column {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+  /* Below the conversation header: transcript+composer on the left, the docked
+     file panel on the right. This is what puts the header ABOVE the panel
+     rather than beside it — the desktop's shape, where the top bar spans the
+     full width and the panel starts under it. */
+  #chat-main-row {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: row;
+    min-width: 0;
+    min-height: 0;
+  }
+  #chat-stack {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+  /* Third column, after the chat. `flex: 0 0 auto` so it takes exactly what the
+     panel inside it asks for and nothing when it is empty — the chat keeps the
+     rest. `min-width: 0` for the same reason the rail needs it: a flex item's
+     default min-width is its content minimum, and one long file name would
+     otherwise push the panel wider than it was dragged to. */
+  #file-panel-dock {
+    display: flex;
+    flex: 0 0 auto;
+    min-width: 0;
+    min-height: 0;
+  }
+  /* Docked, not a drawer — undo every off-canvas rule from the base block.
+     `min-width: 0` is load-bearing, not tidiness: a flex item defaults to
+     min-width:auto, which is its CONTENT minimum unless the item itself scrolls.
+     The scroller moved inside (so the brand and account rows could stay fixed),
+     which handed the aside back an auto minimum — and one long project name then
+     pushed a 272px rail out to ~475px. The declared width only means anything
+     with this. */
+  /* `--rail-width` is set on :root by chat.js when the edge is dragged (and
+     restored from localStorage at boot). It has to be threaded through the
+     flex-basis HERE as well as chat.css's `width`, because a flex-basis other
+     than `auto` is what actually sizes a flex item — leaving 256px hardcoded
+     would make every drag a no-op on the browser client while working fine on
+     the desktop. */
+  /* `body #projects-rail`, matching the base block it undoes. A media query
+     adds NO specificity, so this only wins by being a later rule of equal
+     weight — the moment the base block needed `body ` to outrank chat.css,
+     this one needed it too or the desktop rail would stay off-canvas. */
+  body #projects-rail {
+    position: static;
+    display: none;
+    flex: 0 0 var(--rail-width, 256px);
+    width: auto;
+    min-width: 0;
+    visibility: visible;
+    transform: none;
+    transition: none;
+    box-shadow: none;
+  }
+  body.has-rail #projects-rail { display: flex; }
+  body.rail-collapsed #projects-rail { display: none; }
+  /* The handle comes back with the edge. The base block hides it because a
+     drawer slides OVER the conversation and has nothing to pull; docked, the
+     rail has a real edge and the same drag the desktop app has. A media query
+     adds no specificity, so this has to repeat the id-weight selector that hid
+     it (1-1-1) and win on source order — and the collapsed rule needs the same
+     weight, or it would lose to the line above it instead of to chat.css's
+     0-2-1 version. */
+  body.has-rail #rail-resizer { display: block; }
+  body.rail-collapsed #rail-resizer { display: none; }
+  #rail-scrim { display: none; }
+  /* The rail carries the brand here, so the site header would be a second one.
+     It comes back only where there is no rail at all. */
+  body.has-rail #site-bar { display: none; }
+  /* The drawer handle is only needed once the rail is gone. History and New
+     stay: they are this conversation's controls, in this project, and the
+     rail's per-project + is a different act — it moves the whole tab. */
+  body.has-rail:not(.rail-collapsed) #rail-open { display: none; }
+  body.has-rail #session-head { min-height: 50px; padding-inline: 10px; }
+
+  #site-bar { display: flex; }
+  .top-bar .afk-brand { display: none; }
+  #theme-btn { display: none; }
+  body.has-rail #repo-btn { display: none; }
+
+  /* Desktop header = ONE app-chrome band, not two floating bars. The brand
+     row (#site-bar) and the vendored .top-bar (history/new) share the column
+     surface; a single full-width hairline AFTER .top-bar terminates the whole
+     header and continues the column's side-border frame. Compact 0.625rem
+     padding kills the marketing-header feel. (Synthesized with a Codex
+     consult; scroll-shadow deliberately rejected — the header sits outside
+     the #messages scroller, so a shadow would fall on the wrong layer.) */
+  #site-bar { background: var(--vscode-sideBar-background); }
+  .site-bar-inner { padding-block: 0.625rem; }
+  #site-bar .icon-toggle { width: 34px; height: 34px; border-radius: 7px; }
+  /* #app-prefixed to outrank the vendored `.top-bar { border-bottom }` (this
+     style block loads BEFORE the vendored sheet, so equal specificity would
+     lose to it — and the vendored column-width border rendering alongside the
+     divider below was the doubled line). */
+  #app .top-bar {
+    position: relative;
+    /* Keep header popovers above positioned composer descendants (the textarea
+       itself is z-index:1). A tie only becomes visible when zoom makes the
+       dropdown and composer overlap: later composer content then wins paint
+       order and intercepts clicks meant for repository rows. */
+    z-index: 2;
+    isolation: isolate;
+    gap: 2px;
+    padding: 2px clamp(1.25rem, 4vw, 2.5rem);
+    border-bottom: 0;
+    background: transparent;
+  }
+  /* .top-bar is width-clamped by #app; its surface + terminal divider span
+     the viewport. CSS viewport units ignore an ancestor's `zoom`, so divide
+     out --chat-zoom before the body scales this box back to the real width
+     (body overflow:hidden clips it, with no horizontal scroll). */
+  #app .top-bar::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset-block: 0;
+    left: 50%;
+    width: calc(100vw / var(--chat-zoom, 1));
+    transform: translateX(-50%);
+    background: var(--vscode-sideBar-background);
+    border-bottom: 1px solid var(--vscode-panel-border);
+    pointer-events: none;
+  }
+  /* No hairline above .top-bar. It earned one while the bar sat BESIDE the rail
+     and read as a floating strip; now that the bar spans the app again it is
+     back in one band with #site-bar, and a rule between them would split the
+     header into the two floating bars that band exists to avoid. */
+}
+</style>
+<script src="/auth.js"></script>
+<script src="/host-version.js"></script>
+<script>
+// Tells the vendored chat.js it runs in the browser client, not the VS Code
+// webview — it then hides host-only affordances (worktree/rewind actions, the
+// AFK Pilot account section) and allows renaming worktree sessions. Must be set
+// before chat.js loads.
+window.grokRemoteClient = true;
+(function () {
+  var device = new URLSearchParams(location.search).get("device") || "";
+  var ws, queue = [], saved = {};
+  var pendingRepoOpen = null;
+  var pendingRepoOpenAt = 0;
+  // Which intent the pending switch carries. The rail's per-project "+" wants a
+  // NEW session in a repo the host has not selected yet, and `newSession` names
+  // no repo — so the switch has to complete first and this flag says what to do
+  // when it does. Set from window.__grokRailNewIntent, which the rail writes
+  // immediately before posting its selectRepo.
+  var pendingRepoNew = false;
+  var lastSelectedCwd = null;
+  var armedForSessions = false;
+  var REPO_OPEN_WINDOW_MS = 10000;
+  var REMOTE_IMAGE_MAX_EDGE = 2560;
+  // Mirrors MAX_VISION_IMAGE_BYTES in the extension. The host remains the
+  // authority; this preflight keeps an image it will reject off both WS legs.
+  var REMOTE_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+  var REMOTE_IMAGE_JPEG_QUALITY = 0.85;
+  var REMOTE_FILE_MAX_BYTES = 20 * 1024 * 1024;
+  var REMOTE_FILE_ACCEPT = ".md,.txt,.pdf,.csv,.xlsx,.docx";
+  var remoteUploadFileCapable = false;
+  var remoteVoiceCapable = false;
+
+  // Only a local user gesture arms this single-shot bridge. Any session id/cwd
+  // replayed below came from the host's immediately-following newest-first list;
+  // the host still re-authorizes the resumeSession message.
+  // Must agree with cwdKey() in the vendored chat.js — this shim and that script
+  // compare the same host-sent paths, and a disagreement means one of them
+  // correlates a repo switch the other thinks is a different repo. A repo cwd is
+  // always absolute, so a leading "/" identifies POSIX, where case is
+  // significant AND a backslash is an ordinary filename character. Everything
+  // else is a Windows spelling (drive letter or UNC), where both fold.
+  function cwdKey(cwd) {
+    var raw = String(cwd || "");
+    if (raw.charAt(0) === "/") return raw.replace(/\/+$/, "");
+    return raw.replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
+  }
+  function sameCwd(a, b) {
+    return cwdKey(a) === cwdKey(b);
+  }
+  function repoOpenWindowMs() {
+    var override = Number(window.__grokRepoOpenWindowMs);
+    return override > 0 && isFinite(override) ? override : REPO_OPEN_WINDOW_MS;
+  }
+  function repoOpenIsFresh() {
+    var age = Date.now() - pendingRepoOpenAt;
+    return !!pendingRepoOpen && age >= 0 && age < repoOpenWindowMs();
+  }
+  function clearRepoOpen() {
+    pendingRepoOpen = null;
+    pendingRepoOpenAt = 0;
+    pendingRepoNew = false;
+    armedForSessions = false;
+  }
+  function sendRepoOpen(message) {
+    var historyPopover = document.getElementById("history-popover");
+    if (historyPopover) historyPopover.hidden = true;
+    ws.send(JSON.stringify(message));
+  }
+  function inspectRepoOpenFrame(data) {
+    if (!data) return;
+    if (data.type === "repos") {
+      lastSelectedCwd = data.selectedCwd || "";
+      if (pendingRepoOpen && !repoOpenIsFresh()) {
+        clearRepoOpen();
+        return;
+      }
+      armedForSessions = !!pendingRepoOpen && sameCwd(pendingRepoOpen, lastSelectedCwd);
+      return;
+    }
+    if (
+      data.type !== "sessions" ||
+      data.offset !== 0 ||
+      (data.query || "") !== "" ||
+      !armedForSessions
+    ) return;
+
+    // Backstop the arming decision at the point of action: an intervening
+    // selection or an expired gesture can never spend the pending capability.
+    if (!repoOpenIsFresh() || !sameCwd(pendingRepoOpen, lastSelectedCwd)) {
+      clearRepoOpen();
+      return;
+    }
+    var entries = Array.isArray(data.entries) ? data.entries : [];
+    var top = entries[0];
+    if (pendingRepoNew) {
+      // The gesture asked for a NEW conversation here, so the repo's newest one
+      // is exactly what it does not want. The switch has landed (checked above),
+      // so `newSession` now names the right repo.
+      sendRepoOpen({ type: "newSession" });
+    } else if (top && top.id !== data.activeId) {
+      sendRepoOpen({ type: "resumeSession", id: top.id, cwd: top.cwd });
+    } else if (!top) {
+      sendRepoOpen({ type: "newSession" });
+    }
+    clearRepoOpen();
+  }
+
+  // Survive tab discards: an answer or send tapped while the socket was down
+  // used to vanish with the page (Android discards background tabs freely).
+  // The outbound queue mirrors to sessionStorage, but a reconnect receives a
+  // fresh relay clientId. It may flush only after host frames confirm that the
+  // remembered repository AND session belong to that new id (see connect()).
+  // Byte-bearing attachment/voice payloads are live, ephemeral transport and
+  // must never enter persisted browser storage. Purge any left by an older
+  // client before doing anything with the restored queue.
+  var QKEY = "afk-outbox:" + device;
+  var REMOTE_SESSION_KEY = "grok.remote.tabSession:" + (device || "default");
+  var REMOTE_TAB_TOKEN_KEY = "grok.remote.tabToken:" + (device || "default");
+  var initialRemoteTabToken = null;
+  var remoteTabToken = null;
+  var remoteTabTokenPromise = null;
+  var hasRemoteTabTokenContract = false;
+  var resolveLegacyRemoteTabToken = null;
+  var legacyRemoteTabTokenPromise = new Promise(function (resolve) {
+    resolveLegacyRemoteTabToken = resolve;
+  });
+  try { initialRemoteTabToken = sessionStorage.getItem(REMOTE_TAB_TOKEN_KEY); } catch (_) { /* private mode */ }
+  try { queue = JSON.parse(sessionStorage.getItem(QKEY) || "[]"); } catch (_) { queue = []; }
+  var restoredQueuedSendIds = new Set();
+  queue = Array.isArray(queue) ? queue.filter(function (raw) {
+    try {
+      var message = JSON.parse(raw);
+      var type = message.type;
+      if (type === "send" && typeof message.queuedSendId === "string") {
+        if (restoredQueuedSendIds.has(message.queuedSendId)) return false;
+        restoredQueuedSendIds.add(message.queuedSendId);
+      }
+      return type !== "ready" &&
+        type !== "pasteImage" &&
+        type !== "uploadFile" &&
+        type !== "remoteVoiceStart" &&
+        type !== "remoteVoiceChunk" &&
+        type !== "remoteVoiceStop" &&
+        // Destructive turn controls are now-or-never (see the shim): a Stop
+        // restored from an old tab would cancel whatever NEWER turn is
+        // running by then — purge any a previous client version persisted.
+        type !== "cancel" &&
+        type !== "clearQueuedSends";
+    } catch (_) { return true; }
+  }) : [];
+  function saveQueue() {
+    try { sessionStorage.setItem(QKEY, JSON.stringify(queue)); } catch (_) { /* private mode */ }
+  }
+  function persistOutboxMessage(raw, message) {
+    // Only a host-issued queuedSendId identifies the same logical submission.
+    // Ordinary sends deliberately have no id and must survive even when their
+    // text is identical.
+    if (message && message.type === "send" && typeof message.queuedSendId === "string") {
+      var duplicate = queue.some(function (queuedRaw) {
+        try {
+          var queued = JSON.parse(queuedRaw);
+          return queued.type === "send" && queued.queuedSendId === message.queuedSendId;
+        } catch (_) {
+          return false;
+        }
+      });
+      if (duplicate) return;
+    }
+    queue.push(raw);
+    saveQueue();
+  }
+  saveQueue();
+
+  function storedRemoteTabToken() {
+    try { return sessionStorage.getItem(REMOTE_TAB_TOKEN_KEY) || undefined; }
+    catch (_) { return undefined; }
+  }
+
+  function legacyRemoteTabToken() {
+    // Older chat.js builds publish their settled token through their delayed
+    // `ready` postMessage. Prefer that signal, but do not let a broken/missing
+    // vendor script deadlock the page.
+    return Promise.race([
+      legacyRemoteTabTokenPromise,
+      new Promise(function (resolve) {
+        setTimeout(function () { resolve(storedRemoteTabToken()); }, 250);
+      }),
+    ]);
+  }
+
+  function finalRemoteTabToken() {
+    if (remoteTabTokenPromise) return remoteTabTokenPromise;
+    var contract = window.__grokTabTokenReady;
+    hasRemoteTabTokenContract = !!contract && typeof contract.then === "function";
+    // The pinned promise is authoritative when present. Older vendored builds
+    // have no contract, so use their eventual ready message with a bounded
+    // storage fallback.
+    remoteTabTokenPromise = (hasRemoteTabTokenContract
+      ? Promise.resolve(contract).catch(legacyRemoteTabToken)
+      : legacyRemoteTabToken()
+    ).then(function (token) {
+      remoteTabToken = typeof token === "string" && token ? token : null;
+      // window.open copies sessionStorage. A changed final token proves this is
+      // the independent duplicate, so its copied queued work belongs to the
+      // original logical tab and must never be replayed here.
+      if (
+        initialRemoteTabToken &&
+        remoteTabToken &&
+        initialRemoteTabToken !== remoteTabToken
+      ) {
+        queue = [];
+        saveQueue();
+      }
+      return remoteTabToken || undefined;
+    });
+    return remoteTabTokenPromise;
+  }
+
+  function showRemoteAttachError(kind, text) {
+    window.dispatchEvent(new MessageEvent("message", {
+      data: { type: "error", text: "Could not attach " + kind + " — " + text },
+    }));
+  }
+
+  function loadRemoteImage(file) {
+    return new Promise(function (resolve, reject) {
+      var url;
+      try {
+        url = URL.createObjectURL(file);
+      } catch (_) {
+        reject(new Error("the selected file could not be read."));
+        return;
+      }
+      var img = new Image();
+      var done = function () { if (url) URL.revokeObjectURL(url); };
+      img.onload = function () { done(); resolve(img); };
+      img.onerror = function () { done(); reject(new Error("this browser could not decode that image format.")); };
+      img.src = url;
+    });
+  }
+
+  function canvasJpegBlob(canvas, quality) {
+    return new Promise(function (resolve, reject) {
+      try {
+        canvas.toBlob(function (blob) {
+          if (blob) resolve(blob);
+          else reject(new Error("the browser could not encode the image as JPEG."));
+        }, "image/jpeg", quality == null ? REMOTE_IMAGE_JPEG_QUALITY : quality);
+      } catch (_) {
+        reject(new Error("the browser could not encode the image as JPEG."));
+      }
+    });
+  }
+
+  function blobBase64(blob) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error("the normalized image could not be read.")); };
+      reader.onload = function () {
+        var match = String(reader.result || "").match(/^data:image\/jpeg;base64,(.+)$/);
+        if (match) resolve(match[1]);
+        else reject(new Error("the normalized image could not be read."));
+      };
+      try {
+        reader.readAsDataURL(blob);
+      } catch (_) {
+        reject(new Error("the normalized image could not be read."));
+      }
+    });
+  }
+
+  async function normalizeRemoteImage(file) {
+    var img = await loadRemoteImage(file);
+    var width = img.naturalWidth || img.width;
+    var height = img.naturalHeight || img.height;
+    if (!(width > 0 && height > 0)) throw new Error("the selected image has no readable dimensions.");
+    function drawCanvas(maxEdge) {
+      var scale = Math.min(1, maxEdge / Math.max(width, height));
+      var canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(width * scale));
+      canvas.height = Math.max(1, Math.round(height * scale));
+      var context = canvas.getContext("2d");
+      if (!context) throw new Error("this browser could not prepare the image.");
+      // JPEG has no alpha channel. White prevents transparent screenshots from
+      // acquiring a black background that can destroy text contrast.
+      context.fillStyle = "#fff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(img, 0, 0, canvas.width, canvas.height);
+      return canvas;
+    }
+    var canvas = drawCanvas(REMOTE_IMAGE_MAX_EDGE);
+    var blob = await canvasJpegBlob(canvas);
+    var previewCanvas = drawCanvas(320);
+    var previewBlob = await canvasJpegBlob(previewCanvas, 0.7);
+    var previewData = "data:image/jpeg;base64," + await blobBase64(previewBlob);
+    // Release the potentially multi-megapixel backing store before FileReader
+    // allocates its base64 copy.
+    canvas.width = 1;
+    canvas.height = 1;
+    previewCanvas.width = 1;
+    previewCanvas.height = 1;
+    if (blob.size > REMOTE_IMAGE_MAX_BYTES) {
+      throw new Error("the normalized image exceeds the 20 MiB attachment limit.");
+    }
+    return { data: await blobBase64(blob), preview: previewData };
+  }
+
+  function sendEphemeralImage(image) {
+    if (!identityRestoreComplete) {
+      showRemoteAttachError("image", "the conversation is reconnecting. Try again when it is restored.");
+      return;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      showRemoteAttachError("image", "the device is reconnecting. Try again when it is online.");
+      return;
+    }
+    try {
+      var registerPreview = window.grokRegisterRemoteImagePreview;
+      var previewId = typeof registerPreview === "function" ? registerPreview(image.preview) : null;
+      ws.send(JSON.stringify({
+        type: "pasteImage",
+        mimeType: "image/jpeg",
+        data: image.data,
+        ...(previewId ? { previewId: previewId } : {}),
+      }));
+    } catch (_) {
+      showRemoteAttachError("image", "the connection dropped before the image could be sent. Please try again.");
+    }
+  }
+
+  function pickRemoteImage() {
+    var picker = document.createElement("input");
+    picker.type = "file";
+    picker.accept = "image/*";
+    picker.hidden = true;
+    picker.setAttribute("aria-hidden", "true");
+    document.body.appendChild(picker);
+    picker.addEventListener("change", async function () {
+      var file = picker.files && picker.files[0];
+      picker.remove();
+      if (!file) return;
+      try {
+        sendEphemeralImage(await normalizeRemoteImage(file));
+      } catch (e) {
+        showRemoteAttachError("image", (e && e.message) || "the selected file could not be processed.");
+      }
+    }, { once: true });
+    // A cancelled native picker does not consistently fire `change`; remove
+    // this one-shot element once focus returns so it cannot accumulate.
+    window.addEventListener("focus", function () {
+      setTimeout(function () { if (picker.isConnected && !(picker.files && picker.files.length)) picker.remove(); }, 0);
+    }, { once: true });
+    picker.click();
+  }
+
+  function remoteFileBase64(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error("the selected file could not be read.")); };
+      reader.onload = function () {
+        var result = String(reader.result || "");
+        var comma = result.indexOf(",");
+        if (comma > 0 && /;base64$/i.test(result.slice(0, comma))) resolve(result.slice(comma + 1));
+        else reject(new Error("the selected file could not be read."));
+      };
+      try {
+        reader.readAsDataURL(file);
+      } catch (_) {
+        reject(new Error("the selected file could not be read."));
+      }
+    });
+  }
+
+  function sendEphemeralFile(message) {
+    if (!remoteUploadFileCapable) {
+      showRemoteAttachError("document", "this device's extension does not support document uploads.");
+      return;
+    }
+    if (!identityRestoreComplete) {
+      showRemoteAttachError("document", "the conversation is reconnecting. Try again when it is restored.");
+      return;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      showRemoteAttachError("document", "the device is reconnecting. Try again when it is online.");
+      return;
+    }
+    try {
+      ws.send(JSON.stringify(message));
+    } catch (_) {
+      showRemoteAttachError("document", "the connection dropped before the file could be sent. Please try again.");
+    }
+  }
+
+  function pickRemoteFile() {
+    if (!remoteUploadFileCapable) {
+      showRemoteAttachError("document", "this device's extension does not support document uploads.");
+      return;
+    }
+    var picker = document.createElement("input");
+    picker.type = "file";
+    picker.accept = REMOTE_FILE_ACCEPT;
+    picker.hidden = true;
+    picker.setAttribute("aria-hidden", "true");
+    document.body.appendChild(picker);
+    picker.addEventListener("change", async function () {
+      var file = picker.files && picker.files[0];
+      picker.remove();
+      if (!file) return;
+      if (!/\.(md|txt|pdf|csv|xlsx|docx)$/i.test(file.name || "")) {
+        showRemoteAttachError("document", "choose a .md, .txt, .pdf, .csv, .xlsx, or .docx file.");
+        return;
+      }
+      if (file.size === 0) {
+        showRemoteAttachError("document", "the selected file is empty.");
+        return;
+      }
+      if (file.size > REMOTE_FILE_MAX_BYTES) {
+        showRemoteAttachError("document", "the selected file exceeds the 20 MiB attachment limit.");
+        return;
+      }
+      try {
+        sendEphemeralFile({ type: "uploadFile", name: file.name, data: await remoteFileBase64(file) });
+      } catch (e) {
+        showRemoteAttachError("document", (e && e.message) || "the selected file could not be processed.");
+      }
+    }, { once: true });
+    window.addEventListener("focus", function () {
+      setTimeout(function () { if (picker.isConnected && !(picker.files && picker.files.length)) picker.remove(); }, 0);
+    }, { once: true });
+    picker.click();
+  }
+
+  function syncRemoteUploadRows() {
+    var popover = document.getElementById("add-popover");
+    if (!popover) return;
+    var photo = popover.querySelector("[data-afk-photo-upload]");
+    if (!photo) {
+      photo = popover.querySelector(".toolbar-popover-item");
+      if (!photo) return;
+      photo.setAttribute("data-afk-photo-upload", "");
+      photo.classList.add("remote-upload-item");
+      var photoLabel = photo.querySelector("span:last-child");
+      if (photoLabel) photoLabel.textContent = "Add photo";
+    }
+    var documentItem = popover.querySelector("[data-afk-document-upload]");
+    if (!remoteUploadFileCapable) {
+      if (documentItem) documentItem.remove();
+      return;
+    }
+    if (documentItem) return;
+    documentItem = document.createElement("div");
+    documentItem.className = "toolbar-popover-item remote-upload-item";
+    documentItem.setAttribute("data-afk-document-upload", "");
+    documentItem.setAttribute("role", "button");
+    documentItem.tabIndex = 0;
+    var icon = photo.querySelector(".add-item-icon");
+    documentItem.innerHTML =
+      '<span class="add-item-icon">' + (icon ? icon.innerHTML : "") + '</span><span>Add document</span>';
+    documentItem.onclick = function (e) {
+      e.stopPropagation();
+      popover.hidden = true;
+      pickRemoteFile();
+    };
+    documentItem.onkeydown = function (e) {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        documentItem.click();
+      }
+    };
+    popover.appendChild(documentItem);
+  }
+
+  function syncRemoteVoiceButton() {
+    var mic = document.getElementById("mic-btn");
+    if (mic) mic.hidden = !remoteVoiceCapable;
+  }
+
+  window.addEventListener("message", function (e) {
+    var data = e.data;
+    if (!data || data.type !== "initialState") return;
+    remoteUploadFileCapable = !!(
+      data.capabilities && data.capabilities.uploadFile === true
+    );
+    remoteVoiceCapable = !!(
+      data.capabilities && data.capabilities.remoteVoice === true
+    );
+    syncRemoteUploadRows();
+    syncRemoteVoiceButton();
+  });
+
+  domReady().then(function () {
+    var popover = document.getElementById("add-popover");
+    if (!popover) return;
+    new MutationObserver(syncRemoteUploadRows).observe(popover, { childList: true });
+    syncRemoteUploadRows();
+    syncRemoteVoiceButton();
+  });
+
+  // ---- the projects panel: docked column on desktop, drawer on a phone ----
+  //
+  // One panel, two presentations, and therefore one control: the toggle in the
+  // rail head and the handle in the conversation header are the same act. Which
+  // class carries it differs because the two states differ — a phone's drawer is
+  // CLOSED at rest and opens over the conversation; a desktop rail is OPEN at
+  // rest and collapses out of the way. Collapsing is a desktop preference worth
+  // remembering; a drawer left open is not.
+  var RAIL_COLLAPSE_KEY = "grok-remote-rail-collapsed";
+  function railIsDrawer() { return !window.matchMedia("(min-width: 900px)").matches; }
+  function setRailOpen(open) {
+    if (railIsDrawer()) {
+      document.body.classList.toggle("rail-open", open);
+      var scrim = document.getElementById("rail-scrim");
+      if (scrim) scrim.hidden = !open;
+    } else {
+      document.body.classList.toggle("rail-collapsed", !open);
+      try { localStorage.setItem(RAIL_COLLAPSE_KEY, open ? "0" : "1"); } catch (_) { /* private mode */ }
+    }
+    var toggle = document.getElementById("rail-toggle");
+    if (toggle) toggle.setAttribute("aria-expanded", String(!!open));
+  }
+  function railIsOpen() {
+    return railIsDrawer()
+      ? document.body.classList.contains("rail-open")
+      : !document.body.classList.contains("rail-collapsed");
+  }
+
+  domReady().then(function () {
+    try {
+      if (localStorage.getItem(RAIL_COLLAPSE_KEY) === "1") document.body.classList.add("rail-collapsed");
+    } catch (_) { /* private mode */ }
+
+    var toggle = document.getElementById("rail-toggle");
+    var open = document.getElementById("rail-open");
+    var scrim = document.getElementById("rail-scrim");
+    if (toggle) toggle.onclick = function (e) { e.stopPropagation(); setRailOpen(false); };
+    if (open) open.onclick = function (e) { e.stopPropagation(); setRailOpen(true); };
+    if (scrim) scrim.onclick = function () { setRailOpen(false); };
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && railIsDrawer() && railIsOpen()) setRailOpen(false);
+    });
+
+    // A drawer that stays open over the conversation you just picked has not
+    // finished the job. Menu buttons are excluded: their menu opens on this same
+    // click, and closing the drawer under it would take the menu with it.
+    var scroll = document.getElementById("rail-scroll");
+    if (scroll) {
+      scroll.addEventListener("click", function (e) {
+        if (!railIsDrawer() || !railIsOpen()) return;
+        if (e.target.closest(".rail-menu-btn, .rail-twisty, .rail-more")) return;
+        if (e.target.closest(".rail-session, .rail-repo-name, .rail-action-btn")) setRailOpen(false);
+      });
+    }
+
+    // The account button is one Clerk-mounted node, and it belongs wherever the
+    // chrome currently is: the rail's foot once there is a rail, the site header
+    // otherwise. Moving the node keeps the single mount — remounting would make
+    // two instances and leave the stale one listening.
+    var railUser = document.getElementById("rail-user");
+    var siteActions = document.querySelector("#site-bar .site-actions");
+    function placeUserButton() {
+      var btn = document.getElementById("user-button");
+      if (!btn || !railUser || !siteActions) return;
+      var wantRail = document.body.classList.contains("has-rail");
+      var host = wantRail ? railUser : siteActions;
+      if (btn.parentElement !== host) host.appendChild(btn);
+    }
+
+    // Same reparenting problem, different reason. The history dropdown measures
+    // its own parent to place itself, and with a rail the .top-bar it was born
+    // in is display:none — a zero rect, so it would size and position off
+    // nothing. Its trigger is the conversation title now, so it lives beside it.
+    var head = document.getElementById("session-head");
+    function placeHistoryPopover() {
+      var pop = document.getElementById("history-popover");
+      var bar = document.querySelector("#app > .top-bar");
+      if (!pop || !head || !bar) return;
+      var host = document.body.classList.contains("has-rail") ? head : bar;
+      if (pop.parentElement !== host) host.appendChild(pop);
+    }
+
+    function syncChrome() { placeUserButton(); placeHistoryPopover(); }
+    syncChrome();
+    new MutationObserver(syncChrome).observe(document.body, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+  });
+
+  // ClerkJS keeps the __session cookie fresh on our origin; the same-origin
+  // upgrade carries it automatically. NEVER put the session token in the URL.
+  var overlayEl = null;
+  function overlay() {
+    if (!overlayEl) {
+      overlayEl = document.createElement("div");
+      overlayEl.className = "auth-overlay";
+      overlayEl.innerHTML = '<div class="panel"></div>';
+      document.body.appendChild(overlayEl);
+    }
+    overlayEl.hidden = false;
+    return overlayEl.querySelector(".panel");
+  }
+  function hideOverlay() { if (overlayEl) overlayEl.hidden = true; }
+  function notice(html) { overlay().innerHTML = html; }
+  function gateSignIn() {
+    var panel = overlay();
+    panel.innerHTML = "";
+    return window.grokAuth.requireSignIn(panel).then(hideOverlay);
+  }
+
+  // A reconnect (deploy, backgrounded phone, dropped radio) triggers a full
+  // snapshot resync — clear + replay — which used to yank the reader to the
+  // bottom. Capture the scroll position at reconnect when the reader is NOT
+  // near the bottom, and restore it once the replay stream goes quiet.
+  var hostBlocked = false;
+  function showHostTooOld(version) {
+    hostBlocked = true;
+    clearTimeout(identityTimer);
+    identityTimer = null;
+    identityTarget = null;
+    document.body.classList.remove("identity-restoring");
+    clearIdentityFailTimer();
+    var copy = document.getElementById("host-too-old-copy");
+    if (copy) {
+      copy.textContent = "Update the Grok Build extension on your computer to use remote control — this device runs v" + String(version) + ".";
+    }
+    var notice = document.getElementById("host-too-old");
+    if (notice) notice.hidden = false;
+    var app = document.getElementById("app");
+    if (app) app.hidden = true;
+    document.body.classList.add("host-too-old");
+  }
+
+  var firstConnect = true;
+  var resyncScrollTop = null;
+  var restoreTimer = null;
+  var offlineHold = null;
+  var resyncTimer = null;
+  var deviceOffline = false;
+  var identityTimer = null;
+  var identityFailTimer = null;
+  var identityTarget = null;
+  var identityRepoConfirmed = false;
+  var identitySessionConfirmed = false;
+  var identityRestoreComplete = false;
+  var voiceTransportReady = false;
+  var interruptingVoice = false;
+  var DEVICE_OFFLINE_GRACE_MS = 12000;
+  var IDENTITY_RESTORE_TIMEOUT_MS = 15000;
+  var IDENTITY_RESTORE_FAIL_MS = 60000;
+  function deviceOfflineGraceMs() {
+    var override = Number(window.__grokDeviceOfflineGraceMs);
+    return override > 0 && isFinite(override) ? override : DEVICE_OFFLINE_GRACE_MS;
+  }
+  function identityRestoreTimeoutMs() {
+    var override = Number(window.__grokIdentityRestoreTimeoutMs);
+    return override > 0 && isFinite(override) ? override : IDENTITY_RESTORE_TIMEOUT_MS;
+  }
+  function identityRestoreFailMs() {
+    var override = Number(window.__grokIdentityRestoreFailMs);
+    return override > 0 && isFinite(override) ? override : IDENTITY_RESTORE_FAIL_MS;
+  }
+  function clearOfflineGrace() {
+    if (offlineHold) { clearTimeout(offlineHold); offlineHold = null; }
+    if (resyncTimer) { clearInterval(resyncTimer); resyncTimer = null; }
+  }
+
+  // Over-quota wall (above the composer). Shown when the relay bounces a send
+  // over the weekly limit, and proactively on load when /api/me says the
+  // window is already spent.
+  var quotaWall = null;
+  function showQuotaWall(resetTxt) {
+    if (!quotaWall) {
+      quotaWall = document.createElement("div");
+      quotaWall.id = "quota-wall";
+      var footer = document.querySelector(".composer");
+      if (!footer) return;
+      footer.parentNode.insertBefore(quotaWall, footer);
+    }
+    quotaWall.innerHTML =
+      "Free weekly limit reached" + (resetTxt ? " — resets in " + resetTxt : "") +
+      '. Only messages you send count; agent replies and approvals are free. ' +
+      '<a href="/" data-native-link target="_blank" rel="noopener">Upgrade</a>';
+    // The vendored chat.js swallows every anchor click (routes it to the host
+    // as openFile/openUrl — dropped on remotes, and it preventDefaults). "/"
+    // isn't http so our capture handler skips it too. Open the portal
+    // explicitly and stop the click before the vendored handler eats it.
+    quotaWall.querySelector("a").addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      window.open("/", "_blank", "noopener");
+    });
+    // The send path is dead until the window resets — disable and dim the
+    // input, send, and mic so it's clear (the relay also blocks it). Gear/
+    // history stay reachable; a reload re-checks /api/me and clears this.
+    document.body.classList.add("quota-exceeded");
+    var inp = document.getElementById("input");
+    if (inp) { inp.readOnly = true; inp.blur(); }
+  }
+  function coarseReset(iso) {
+    var ms = new Date(iso).getTime() - Date.now();
+    if (!(ms > 0)) return "";
+    if (ms >= 172800000) return Math.round(ms / 86400000) + "d";
+    if (ms >= 3600000) return Math.round(ms / 3600000) + "h";
+    return Math.max(1, Math.round(ms / 60000)) + "m";
+  }
+
+  // Reconnect veil: old content stays visible under a light overlay while the
+  // snapshot replays; hidden once the replay stream settles.
+  var overlayHideTimer = null;
+  function showReconnecting() {
+    // While the update-your-extension notice is up, the veil would cover the
+    // one instruction the user needs — and a dropped socket is EXPECTED there
+    // (updating the extension restarts the host). Keep the notice on top; the
+    // reconnect still happens underneath and self-heals on the new snapshot.
+    if (hostBlocked) return;
+    var panel = overlay();
+    panel.innerHTML = '<p class="muted">Reconnecting…</p>';
+    overlayEl.classList.add("reconnecting");
+  }
+  function settleReconnectVeil() {
+    if (!overlayEl || !overlayEl.classList.contains("reconnecting")) return;
+    clearTimeout(overlayHideTimer);
+    overlayHideTimer = setTimeout(function () {
+      overlayEl.classList.remove("reconnecting");
+      hideOverlay();
+    }, 450);
+  }
+
+  function readyMessage() {
+    return {
+      type: "ready",
+      ...(remoteTabToken ? { tabToken: remoteTabToken } : {}),
+    };
+  }
+
+  function rememberedIdentity() {
+    try {
+      var value = JSON.parse(sessionStorage.getItem(REMOTE_SESSION_KEY) || "null");
+      return value &&
+        typeof value.id === "string" &&
+        typeof value.repoCwd === "string" &&
+        (!value.cwd || typeof value.cwd === "string")
+        ? value
+        : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function queuedSendTexts() {
+    var texts = [];
+    for (var i = 0; i < queue.length; i++) {
+      try {
+        var queued = JSON.parse(queue[i]);
+        // All three submission shapes carry the user's typed words: plain
+        // send, and the busy-turn queueSend/steerSend pair (pre-existing
+        // gap — only "send" was recovered, so text queued mid-turn vanished
+        // on a refused restore; review find, 2026-08-15).
+        if (queued &&
+            (queued.type === "send" || queued.type === "queueSend" || queued.type === "steerSend") &&
+            typeof queued.text === "string" && queued.text) {
+          texts.push(queued.text);
+        }
+      } catch (_) { /* keep scanning */ }
+    }
+    return texts;
+  }
+
+  function returnQueuedSendsToComposer(texts) {
+    if (!texts.length) return false;
+    var input = document.getElementById("input");
+    if (!input) return false;
+    // Blank-line separators keep each recovered send a visibly distinct
+    // block, and the existing draft is preserved BYTE-FOR-BYTE (trailing
+    // whitespace can be intentional — Markdown hard breaks).
+    var recovered = texts.join("\n\n");
+    // length, not trim(): a whitespace-only draft is still the user's bytes
+    // (Markdown hard-breaks are trailing spaces) and must not be replaced.
+    if (String(input.value || "").length) {
+      input.value = String(input.value) + "\n\n" + recovered;
+    } else {
+      input.value = recovered;
+    }
+    try { input.dispatchEvent(new Event("input", { bubbles: true })); } catch (_) { /* highlight is best-effort */ }
+    return true;
+  }
+
+  // Boot BOOKKEEPING the page re-issues by itself on a fresh load — the ONLY
+  // queue entries whose loss stays silent. Everything else is treated as user
+  // work and mourned. The polarity is deliberate and was learned the hard
+  // way: a first cut allowlisted the MOURNABLE types instead, and silently
+  // discarded queueSend/steerSend typed text the moment a new user-action
+  // type wasn't on the list (review find, 2026-08-15). Unknown or
+  // unparseable entries therefore count as mattering.
+  var BOOKKEEPING_QUEUE_TYPES = {
+    remotePreferences: true,
+    listSessions: true,
+    listRepoSessions: true, // auto-posted when the snapshot delivers repos
+    mentionQuery: true, // one per keystroke while typing @ during reconnect
+    // The two project-file reads are not perfectly re-issued (a browse view
+    // may need a re-tap, and a pending read shows its timeout notice), but
+    // they are read-only — nothing typed is ever in them — and mourning
+    // them would false-alarm on every refresh with the panel open.
+    listProjectDir: true,
+    readProjectFile: true,
+  };
+
+  function mournableQueueCount() {
+    var count = 0;
+    for (var i = 0; i < queue.length; i++) {
+      try {
+        var queued = JSON.parse(queue[i]);
+        if (!queued || !BOOKKEEPING_QUEUE_TYPES[queued.type]) count++;
+      } catch (_) { count++; }
+    }
+    return count;
+  }
+
+  function reportOutboxFailure(text) {
+    if (!queue.length) return;
+    var count = mournableQueueCount();
+    var handedBack = returnQueuedSendsToComposer(queuedSendTexts());
+    queue = [];
+    saveQueue();
+    // A queue of pure bookkeeping empties silently: there is nothing the
+    // user needs to review, and the restore banner (when one applies) is
+    // already on screen.
+    if (!count) return;
+    window.dispatchEvent(new MessageEvent("message", {
+      data: {
+        type: "error",
+        text: count + " queued " + (count === 1 ? "action was" : "actions were") +
+          " not sent because " + text +
+          (handedBack
+            ? " Your unsent message was returned to the input."
+            : " Review the conversation and try again."),
+      },
+    }));
+  }
+
+  function reportOutboxDelay() {
+    // Same accounting as the failure notice: bookkeeping is not "queued
+    // actions", and a slow restore over pure bookkeeping needs no banner.
+    var count = mournableQueueCount();
+    if (!count) return;
+    window.dispatchEvent(new MessageEvent("message", {
+      data: {
+        type: "error",
+        text: "Still restoring the previous conversation. " + count + " queued " +
+          (count === 1 ? "action is" : "actions are") +
+          " preserved and will be sent after the restore is confirmed.",
+      },
+    }));
+  }
+
+  function interruptRemoteVoice(text) {
+    if (interruptingVoice) return;
+    var mic = document.getElementById("mic-btn");
+    var active = !!mic && (
+      mic.classList.contains("connecting") ||
+      mic.classList.contains("listening") ||
+      mic.classList.contains("transcribing")
+    );
+    if (!active) return;
+    interruptingVoice = true;
+    // A connecting capture has an in-flight getUserMedia promise. Let chat.js's
+    // own click path mark that attempt cancelled before forcing the host state
+    // back to idle; listening captures are cleaned by the idle frame itself.
+    if (mic.classList.contains("connecting")) {
+      try { mic.click(); } catch (_) { /* best effort */ }
+    }
+    window.dispatchEvent(new MessageEvent("message", {
+      data: { type: "voiceState", status: "idle" },
+    }));
+    window.dispatchEvent(new MessageEvent("message", {
+      data: { type: "error", text: text },
+    }));
+    interruptingVoice = false;
+  }
+
+  function setVoiceTransportReady(value) {
+    voiceTransportReady = value;
+    document.body && document.body.classList.toggle("remote-disconnected", !value);
+  }
+
+  function identityRestoreIsLive() {
+    return !!identityTarget &&
+      !identityRestoreComplete &&
+      !deviceOffline &&
+      !offlineHold &&
+      !!ws &&
+      ws.readyState === WebSocket.OPEN;
+  }
+
+  function clearIdentityFailTimer() {
+    if (identityFailTimer) { clearTimeout(identityFailTimer); identityFailTimer = null; }
+  }
+
+  function armIdentityFailTimer() {
+    clearIdentityFailTimer();
+    if (!identityRestoreIsLive()) return;
+    identityFailTimer = setTimeout(function () {
+      identityFailTimer = null;
+      if (!identityRestoreIsLive()) return;
+      abandonIdentityRestore("the conversation could not be restored.");
+    }, identityRestoreFailMs());
+  }
+
+  function finishIdentityRestore() {
+    clearTimeout(identityTimer);
+    identityTimer = null;
+    clearIdentityFailTimer();
+    identityTarget = null;
+    identityRepoConfirmed = false;
+    identitySessionConfirmed = false;
+    identityRestoreComplete = true;
+    document.body.classList.remove("identity-restoring");
+    setVoiceTransportReady(
+      !!ws && ws.readyState === WebSocket.OPEN && !deviceOffline && !offlineHold
+    );
+  }
+
+  function abandonIdentityRestore(outboxReason) {
+    reportOutboxFailure(outboxReason);
+    finishIdentityRestore();
+  }
+
+  function handlePersistentDeviceOffline() {
+    if (deviceOffline) return;
+    clearOfflineGrace();
+    deviceOffline = true;
+    // The offline notice paints into the transcript — the restore veil must
+    // not hide it. The flash the veil exists for only happens device-online;
+    // reconnect re-runs beginIdentityRestore and re-engages it if the
+    // transcript is still empty.
+    document.body.classList.remove("identity-restoring");
+    clearIdentityFailTimer();
+    setVoiceTransportReady(false);
+    var mic = document.getElementById("mic-btn");
+    var recording = !!mic && (
+      mic.classList.contains("connecting") ||
+      mic.classList.contains("listening") ||
+      mic.classList.contains("transcribing")
+    );
+    if (recording) {
+      interruptRemoteVoice(
+        "Voice recording stopped because the device stayed offline. Start again after VS Code reconnects."
+      );
+      return;
+    }
+    window.dispatchEvent(new MessageEvent("message", {
+      data: { type: "error", text: "Device offline — open VS Code on that machine and this page will connect by itself." },
+    }));
+  }
+
+  function beginDeviceOfflineGrace() {
+    if (deviceOffline || offlineHold) return;
+    clearIdentityFailTimer();
+    if (!resyncTimer) {
+      resyncTimer = setInterval(function () {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(readyMessage()));
+        }
+      }, 3000);
+    }
+    offlineHold = setTimeout(handlePersistentDeviceOffline, deviceOfflineGraceMs());
+  }
+
+  function flushRestoredOutbox() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    var pending = queue.slice();
+    queue = [];
+    saveQueue();
+    finishIdentityRestore();
+    pending.forEach(function (raw) { ws.send(raw); });
+  }
+
+  function resumeFailedId(data) {
+    return data &&
+      data.type === "error" &&
+      data.resumeFailed &&
+      typeof data.resumeFailed.id === "string"
+      ? data.resumeFailed.id
+      : "";
+  }
+
+  function isLegacyResumeRefusal(data) {
+    // Legacy-only path. Current hosts refuse with additive `resumeFailed: { id }`
+    // and that field is the primary correlation. Every shipped old-host resume
+    // refusal begins with "Could not restore" (already-being-opened, already
+    // open in another tab, repository no longer selected, deleted / unavailable)
+    // and nothing else in the host emits that prefix — so matching it here
+    // cannot confuse an ordinary provider/startup error with a resume refusal.
+    // The fail timer remains the bounded backstop for a silent old host.
+    return !!(data &&
+      data.type === "error" &&
+      typeof data.text === "string" &&
+      data.text.indexOf("Could not restore") === 0);
+  }
+
+  function maybeFinishIdentityRestore(data) {
+    if (!identityTarget) return;
+    var failedId = resumeFailedId(data);
+    if (failedId && failedId === identityTarget.id) {
+      abandonIdentityRestore("the conversation could not be restored.");
+      return;
+    }
+    if (!failedId && isLegacyResumeRefusal(data)) {
+      abandonIdentityRestore("the conversation could not be restored.");
+      return;
+    }
+    if (data && data.type === "initialState" && sameCwd(data.cwd, identityTarget.repoCwd)) {
+      // Compatibility path for an older host that has no `repos` capability.
+      identityRepoConfirmed = true;
+    } else if (data && data.type === "repos" && sameCwd(data.selectedCwd, identityTarget.repoCwd)) {
+      identityRepoConfirmed = true;
+    } else if (data && data.type === "sessions" && data.activeId === identityTarget.id) {
+      identitySessionConfirmed = true;
+    }
+    if (identityRepoConfirmed && identitySessionConfirmed) flushRestoredOutbox();
+  }
+
+  function beginIdentityRestore() {
+    clearTimeout(identityTimer);
+    clearIdentityFailTimer();
+    identityTarget = rememberedIdentity();
+    identityRepoConfirmed = false;
+    identitySessionConfirmed = false;
+    if (!identityTarget) {
+      reportOutboxFailure("this tab had no remembered conversation to restore.");
+      finishIdentityRestore();
+      return;
+    }
+    identityRestoreComplete = false;
+    setVoiceTransportReady(false);
+    // Veil the transcript while the restore is in flight — but ONLY over a
+    // fresh, empty one. Without this the intermediate snapshot (often a blank
+    // "New session") paints first and is then replaced by the restored
+    // conversation, which reads as the wrong session loading (owner,
+    // 2026-08-15). A mid-session socket blip re-runs this same handshake over
+    // an already-painted conversation; veiling that would flash the other
+    // way, hence the childElementCount gate. The composer stays usable — the
+    // outbox holds anything typed until identity confirms.
+    // "Empty" means no conversation content — the container always holds the
+    // (hidden) welcome node, so childElementCount would never be zero.
+    var messagesEl = document.getElementById("messages");
+    if (messagesEl && !messagesEl.querySelector(".msg")) {
+      if (!document.getElementById("identity-restoring-note")) {
+        var restoringNote = document.createElement("div");
+        restoringNote.id = "identity-restoring-note";
+        restoringNote.textContent = "Restoring conversation…";
+        document.body.appendChild(restoringNote);
+      }
+      document.body.classList.add("identity-restoring");
+    }
+    identityTimer = setTimeout(function () {
+      identityTimer = null;
+      // This is a progress watchdog, not proof of failure. Cold activation,
+      // CLI startup/update, and a large replay can legitimately take longer.
+      // Keep both the identity guard and persisted outbox intact so a later
+      // authoritative repo/session confirmation can safely flush the work.
+      reportOutboxDelay();
+    }, identityRestoreTimeoutMs());
+    // Bounded release for an old host that never confirms or refuses with
+    // resumeFailed. The timer only runs while the restore is LIVE (socket
+    // open and the device not in the offline/grace window) so an ordinary
+    // sleep or outage cannot burn the 60s and delete queued work. It is
+    // re-armed when the device returns and resume is sent again — it
+    // measures "the host had a fair chance to answer", never wall-clock.
+    armIdentityFailTimer();
+  }
+
+  function isIdentityRestoreMessage(message) {
+    if (!message) return false;
+    if (message.type === "ready") return true;
+    if (!identityTarget) return false;
+    var remembered = rememberedIdentity();
+    if (!remembered || remembered.id !== identityTarget.id) return false;
+    if (message.type === "selectRepo") {
+      return sameCwd(message.cwd, identityTarget.repoCwd);
+    }
+    if (message.type === "resumeSession") {
+      return message.id === identityTarget.id &&
+        (!message.cwd || !identityTarget.cwd || sameCwd(message.cwd, identityTarget.cwd));
+    }
+    return false;
+  }
+
+  function explicitlyChangesIdentity(message) {
+    return !!message && (
+      message.type === "selectRepo" ||
+      message.type === "resumeSession" ||
+      message.type === "newSession"
+    );
+  }
+
+  function connect() {
+    return finalRemoteTabToken().then(function () {
+    ws = new WebSocket(
+      (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/client?device=" + encodeURIComponent(device)
+    );
+    ws.addEventListener("open", function () {
+      if (!firstConnect) {
+        var m = document.getElementById("messages");
+        if (m && m.scrollHeight - m.scrollTop - m.clientHeight > 80) resyncScrollTop = m.scrollTop;
+      }
+      firstConnect = false;
+      clearOfflineGrace();
+      deviceOffline = false;
+      beginIdentityRestore();
+      ws.send(JSON.stringify(readyMessage())); // (re)sync on connect/reconnect
+    });
+    ws.addEventListener("message", function (e) {
+      var data;
+      try { data = JSON.parse(e.data); } catch (_) { return; }
+      if (hostBlocked) {
+        // The expected exit from the gate is the desk updating and restarting:
+        // the reconnected host pushes a fresh snapshot, and a version that now
+        // clears the floor reloads straight into the normal client.
+        if (
+          data && data.type === "initialState" && window.grokHostVersion &&
+          // A PARSEABLE version that clears the floor — absence is not
+          // evidence of an upgrade, and reloading on it could cycle the gate.
+          window.grokHostVersion.parseSemver(data.extVersion) &&
+          !window.grokHostVersion.hostTooOld(data.extVersion)
+        ) location.reload();
+        return;
+      }
+      if (
+        data && data.type === "initialState" &&
+        window.grokHostVersion && window.grokHostVersion.hostTooOld(data.extVersion)
+      ) {
+        showHostTooOld(data.extVersion);
+        return;
+      }
+      // "Device offline" right after (re)connect is usually a RACE, not a
+      // state: the extension's uplink reconnects on its own backoff (deploys,
+      // laptop wake) and pushes a snapshot the moment it's back. During a
+      // grace window the page keeps its "Connecting" welcome and quietly
+      // re-syncs; only a PERSISTENT offline surfaces, with calmer wording.
+      // (The text match is the relay's own fixed string — server.ts.)
+      if (data && data.type === "error" && /^Device offline/.test(data.text || "")) {
+        beginDeviceOfflineGrace();
+        return;
+      }
+      // Anything that isn't an error means the device is alive — cancel any
+      // pending offline notice from the race above.
+      if (data && data.type !== "error") {
+        clearOfflineGrace();
+        if (deviceOffline) {
+          deviceOffline = false;
+          if (identityRestoreComplete) setVoiceTransportReady(true);
+        }
+        // The device is live again: if a restore is still pending, the fail
+        // timer must tick once more - grace cleared it, and without this
+        // re-arm a host that surfaces one frame and stalls would hold the
+        // outbox forever (the exact deadlock this timer exists to bound).
+        if (identityTarget && !identityFailTimer) armIdentityFailTimer();
+      }
+      // Quota bounce: surface the wall above the composer alongside the
+      // in-chat error (the relay's fixed copy carries the reset countdown).
+      if (data && data.type === "error" && /^Free plan limit/.test(data.text || "")) {
+        var m1 = /Resets in ([0-9]+[dhm])/.exec(data.text);
+        showQuotaWall(m1 ? m1[1] : "");
+      }
+      inspectRepoOpenFrame(data);
+      settleReconnectVeil();
+      window.dispatchEvent(new MessageEvent("message", { data: data }));
+      // Run after dispatch: chat.js handles initialState synchronously and
+      // re-asserts its saved selectRepo/resumeSession through our shim first.
+      // We still wait for the resulting host confirmations before flushing.
+      maybeFinishIdentityRestore(data);
+      if (resyncScrollTop !== null) {
+        clearTimeout(restoreTimer);
+        restoreTimer = setTimeout(function () {
+          var m = document.getElementById("messages");
+          // The restore fires the scroll listener, so chat.js re-learns the
+          // reader is off the bottom and stops sticking new chunks there.
+          if (m) m.scrollTop = resyncScrollTop;
+          resyncScrollTop = null;
+        }, 250);
+      }
+    });
+    ws.addEventListener("close", function (e) {
+      clearTimeout(identityTimer);
+      identityTimer = null;
+      clearIdentityFailTimer();
+      interruptRemoteVoice("Voice recording stopped because the connection was interrupted. Start again after reconnecting.");
+      setVoiceTransportReady(false);
+      clearRepoOpen();
+      if (e.code === 4004) { gateSignIn().then(connect); return; } // session gone
+      // Terminal closes KEEP the persisted outbox — deliberately. Handing the
+      // text to the composer here would move it from sessionStorage (which
+      // survives the reload both notices instruct) into a memory-only
+      // textarea concealed by the overlay: recoverable state turned into
+      // loss (review find, 2026-08-15). The queue resumes its normal
+      // flush-or-fail life when the tab reconnects after the user acts; the
+      // notice just has to SAY the text is safe.
+      if (e.code === 4005) { notice('Remote Max required to use this device from the web. <a href="/" data-native-link>Upgrade</a>, then reload.' + (queue.length ? " Your unsent message is saved and will be handled when you return." : "")); return; }
+      if (e.code === 4003) { notice('Device not found — or it isn’t linked to your account. <a href="/" data-native-link>Pick another device</a>.' + (queue.length ? " Your unsent message is saved and will be handled when you return." : "")); return; }
+      showReconnecting();
+      setTimeout(connect, 1000);
+    });
+    ws.addEventListener("error", function () { try { ws.close(); } catch (_) {} });
+    });
+  }
+
+  function domReady() {
+    return new Promise(function (r) {
+      if (document.readyState !== "loading") r();
+      else document.addEventListener("DOMContentLoaded", function () { r(); });
+    });
+  }
+  // Remote onboarding — /link lands here with &linked=1, while the extension's
+  // "Continue remotely" entry point arrives via the picker with &remoteHint=1.
+  // Strip the trigger so reloads stay quiet. Skipped in an installed app.
+  // This is deliberately an in-chat banner rather than an overlay: linking
+  // already succeeded, so the newly-live composer should stay usable.
+  var installPrompt = null;
+  window.addEventListener("beforeinstallprompt", function (e) { e.preventDefault(); installPrompt = e; });
+  function maybeOnboard() {
+    var params = new URLSearchParams(location.search);
+    var linked = params.get("linked") === "1";
+    var remoteHint = params.get("remoteHint") === "1";
+    if (!linked && !remoteHint) return;
+    if (linked) params.delete("linked");
+    if (remoteHint) params.delete("remoteHint");
+    var remaining = params.toString();
+    history.replaceState(null, "", location.pathname + (remaining ? "?" + remaining : "") + location.hash);
+    if (matchMedia("(display-mode: standalone)").matches || navigator.standalone) return;
+    var ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    var mobile = ios || /Android/i.test(navigator.userAgent);
+    var banner = document.createElement("section");
+    banner.id = "link-onboarding";
+    banner.setAttribute("aria-labelledby", "link-onboarding-title");
+    banner.innerHTML =
+      '<button class="link-onboarding-close" type="button" aria-label="Dismiss device linked message" title="Dismiss">&times;</button>' +
+      '<div class="link-onboarding-copy">' +
+      '<p id="link-onboarding-title" class="link-onboarding-title">Device linked</p>' +
+      (mobile
+        ? '<p>Add AFK Pilot to your home screen and this chat stays one tap away — work 100% remotely, right from your phone.</p>'
+        : '<p>You can also open <b>afkpilot.com</b> on your phone to work 100% remotely.</p>') +
+      "</div>";
+    var actions = document.createElement("div");
+    actions.className = "link-onboarding-actions";
+    function dismissOnboarding() { banner.remove(); }
+    banner.querySelector(".link-onboarding-close").onclick = dismissOnboarding;
+    if (mobile && (installPrompt || ios)) {
+      var install = document.createElement("button");
+      install.type = "button";
+      install.textContent = "Install app";
+      install.onclick = function () {
+        if (installPrompt) {
+          var p = installPrompt;
+          installPrompt = null;
+          dismissOnboarding();
+          p.prompt();
+        } else {
+          // iOS has no install API — swap in the share-sheet steps.
+          banner.querySelector(".link-onboarding-copy p:last-child").innerHTML =
+            'Tap <b>Share</b>, then <b>"Add to Home Screen"</b> to work 100% remotely.';
+          install.remove();
+        }
+      };
+      actions.appendChild(install);
+    }
+    if (!mobile) {
+      var copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "link-onboarding-copy-btn";
+      copy.innerHTML =
+        '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 1.5h7v9h-2v2h-7v-9h2v-2Zm1 2h4v6h1v-7h-5v1Zm-2 1v7h5v-7h-5Z" fill="currentColor"/></svg>' +
+        '<span>Copy "afkpilot.com"</span>';
+      copy.onclick = function () {
+        navigator.clipboard.writeText("afkpilot.com").then(function () {
+          var label = copy.querySelector("span");
+          copy.classList.add("copied");
+          copy.querySelector("path").setAttribute("d", "M13.2 3.4 6.4 10.2 2.8 6.6l1-1 2.6 2.6 5.8-5.8 1 1Z");
+          label.textContent = "Copied";
+          setTimeout(function () {
+            if (!copy.isConnected) return;
+            copy.classList.remove("copied");
+            copy.querySelector("path").setAttribute("d", "M5.5 1.5h7v9h-2v2h-7v-9h2v-2Zm1 2h4v6h1v-7h-5v1Zm-2 1v7h5v-7h-5Z");
+            label.textContent = 'Copy "afkpilot.com"';
+          }, 2000);
+        });
+      };
+      actions.appendChild(copy);
+    }
+    if (actions.children.length) banner.appendChild(actions);
+    var transcript = document.getElementById("messages-wrap");
+    if (transcript) transcript.insertBefore(banner, transcript.firstChild);
+  }
+  domReady().then(function () {
+    var mic = document.getElementById("mic-btn");
+    if (!mic) return;
+    mic.addEventListener("click", function (e) {
+      if (voiceTransportReady) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      window.dispatchEvent(new MessageEvent("message", {
+        data: { type: "error", text: "Voice recording is unavailable while the conversation reconnects." },
+      }));
+    }, true);
+  });
+
+  // Ground-truth viewport telemetry for device debugging: /chat?debug=1
+  // paints a live numbers panel (layout vs visual viewport, safe-area env,
+  // composer geometry) — a screenshot from the phone beats guessing at
+  // browser viewport models. Harmless and inert without the flag.
+  if (new URLSearchParams(location.search).get("debug") === "1") {
+    var dbg = document.createElement("div");
+    dbg.style.cssText = "position:fixed;top:70px;left:8px;z-index:99999;background:rgba(0,0,0,.85);color:#4ec9b0;font:12px/1.5 monospace;padding:8px 10px;border-radius:8px;pointer-events:none;white-space:pre";
+    var probe = document.createElement("div");
+    probe.style.cssText = "position:fixed;visibility:hidden;padding-bottom:env(safe-area-inset-bottom,0px);padding-top:env(safe-area-max-inset-bottom,0px)";
+    domReady().then(function () {
+      document.body.appendChild(probe);
+      document.body.appendChild(dbg);
+      setInterval(function () {
+        var vv = window.visualViewport;
+        var comp = document.querySelector(".composer");
+        var cr = comp ? comp.getBoundingClientRect() : null;
+        var ps = getComputedStyle(probe);
+        dbg.textContent =
+          "innerH    " + window.innerHeight +
+          "\nclientH   " + document.documentElement.clientHeight +
+          "\nvv.h      " + (vv ? Math.round(vv.height) : "n/a") +
+          "\nvv.top    " + (vv ? Math.round(vv.offsetTop) : "n/a") +
+          "\nscreen.h  " + screen.height +
+          "\nsafeB     " + ps.paddingBottom +
+          "\nmaxSafeB  " + ps.paddingTop +
+          "\nbody.h    " + Math.round(document.body.getBoundingClientRect().height) +
+          "\ncomposer  " + (cr ? Math.round(cr.top) + ".." + Math.round(cr.bottom) : "n/a");
+      }, 500);
+    });
+  }
+
+  // External links: chat.js routes every anchor click to the HOST (openUrl),
+  // which the policy drops from remotes — https links were dead on a phone.
+  // Catch them in the capture phase (before chat.js's bubble handler) and
+  // open them right here. File-path links never get this far: CSS gives them
+  // pointer-events:none, so they read (and click) as plain text.
+  document.addEventListener("click", function (e) {
+    var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+    if (!a) return;
+    var href = a.getAttribute("href") || "";
+    if (/^https?:\/\//i.test(href)) {
+      e.preventDefault();
+      e.stopPropagation();
+      window.open(href, "_blank", "noopener");
+    }
+  }, true);
+
+  // The vendored chat.js intercepts EVERY anchor click document-wide
+  // (preventDefault + openUrl/openFile to the host, which the policy drops
+  // from remotes) — stop our remote-only brand links from reaching it so the
+  // browser just follows them.
+  domReady().then(function () {
+    var brands = document.querySelectorAll(".afk-brand, .site-brand");
+    brands.forEach(function (brand) {
+      brand.addEventListener("click", function (e) { e.stopPropagation(); });
+    });
+  });
+
+  // EXPERIMENT: edge scroll-fade. Ramp each overlay's opacity off #messages'
+  // distance from that edge — 0 when pinned to the edge (no fade), reaching full
+  // over the first FADE_RAMP px of scroll away. rAF-throttled; recomputed on
+  // scroll and on viewport resize.
+  var FADE_RAMP = 16;
+  domReady().then(function () {
+    var m = document.getElementById("messages");
+    var wrap = document.getElementById("messages-wrap");
+    if (!m || !wrap) return;
+    var raf = 0;
+    function ramp(px) { var v = px / FADE_RAMP; return v < 0 ? 0 : v > 1 ? 1 : v; }
+    function apply() {
+      raf = 0;
+      wrap.style.setProperty("--fade-top-op", ramp(m.scrollTop));
+      wrap.style.setProperty("--fade-bot-op", ramp(m.scrollHeight - m.clientHeight - m.scrollTop));
+    }
+    function schedule() { if (!raf) raf = requestAnimationFrame(apply); }
+    m.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    if (window.visualViewport) window.visualViewport.addEventListener("resize", schedule);
+    apply();
+  });
+
+  // Tap-to-reveal action icons on touch — MEDIA overlays only. The vendored UI
+  // pins image/mermaid/latex overlays permanently visible on touch; this trades
+  // that for less clutter: tapping the media toggles ITS actions, tapping a
+  // button still runs it, tapping anywhere else hides all. Pairs with the
+  // .show-actions CSS. Message footers (Copy + timestamp) are NOT part of this
+  // gesture anymore: the vendored CSS rests them dimmed and tappable on every
+  // surface (owner, 2026-08-13), so they need no reveal here.
+  domReady().then(function () {
+    var MEDIA_SEL = ".generated-image, .math-export, .mermaid-block[data-mermaid-state='done']";
+    var REVEAL_SEL = MEDIA_SEL;
+    // Anything that acts on its own tap. Bailing here leaves the current
+    // .show-actions alone, so tapping Copy inside a revealed footer copies
+    // without collapsing the footer out from under the finger.
+    var ACTION_BTN =
+      ".expr-btn, .generated-media-btn, .msg-action-btn, .msg-expand-btn, .msg-collapse-btn, .code-copy-btn";
+    document.addEventListener("click", function (e) {
+      if (!matchMedia("(hover: none)").matches) return;          // touch only
+      var t = e.target;
+      if (!t || !t.closest) return;
+      if (t.closest(ACTION_BTN)) return;                         // let the button act
+      var target = t.closest(REVEAL_SEL);
+      document.querySelectorAll(".show-actions").forEach(function (el) {
+        if (el !== target) el.classList.remove("show-actions");
+      });
+      // Drop focus off a previously-tapped action button, or the vendored
+      // :focus-within rules keep that overlay/footer lit after it's hidden.
+      var af = document.activeElement;
+      if (af && af.blur && af.closest && af.closest(ACTION_BTN)) af.blur();
+      if (target) target.classList.toggle("show-actions");
+    });
+  });
+
+  window.grokAuth.ready.then(function (auth) {
+    // This script runs in <head>; the overlay needs <body> to exist.
+    return domReady().then(function () {
+      var userBtnMounted = false;
+      function mountUserButton() {
+        if (auth.enabled && auth.isSignedIn() && !userBtnMounted) {
+          userBtnMounted = true;
+          auth.mountUserButton(document.getElementById("user-button"));
+        }
+      }
+      mountUserButton();
+      // Proactive wall: a page opened with the weekly window already spent
+      // shows the banner before the first bounced send.
+      function checkQuota() {
+        var tokenP = auth.enabled ? auth.getToken() : Promise.resolve(null);
+        tokenP.then(function (t) {
+          return fetch("/api/me", { headers: t ? { authorization: "Bearer " + t } : {} });
+        }).then(function (r) { return r.ok ? r.json() : null; }).then(function (me) {
+          if (me && me.limits && me.limits.used >= me.limits.weeklyMsgs) {
+            showQuotaWall(me.limits.resetsAt ? coarseReset(me.limits.resetsAt) : "");
+          }
+        }).catch(function () { /* the wall is best-effort; the relay enforces */ });
+      }
+      if (auth.enabled && !auth.isSignedIn()) {
+        return gateSignIn().then(mountUserButton).then(connect).then(maybeOnboard).then(checkQuota);
+      }
+      connect();
+      maybeOnboard();
+      checkQuota();
+    });
+  });
+
+  window.acquireVsCodeApi = function () {
+    return {
+      postMessage: function (m) {
+        // `ready` is connection metadata, not user work: retain its stable
+        // logical-tab token for reconnect/resync, but never persist the control
+        // frame in the outbox behind the identity guard.
+        if (m && m.type === "ready") {
+          // The readiness promise is authoritative when present. The assignment
+          // remains only for compatibility with an older chat.js that publishes
+          // its eventual token through this ready message.
+          if (!hasRemoteTabTokenContract && typeof m.tabToken === "string") {
+            remoteTabToken = m.tabToken;
+            if (resolveLegacyRemoteTabToken) {
+              resolveLegacyRemoteTabToken(m.tabToken);
+              resolveLegacyRemoteTabToken = null;
+            }
+          }
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(readyMessage()));
+          }
+          return;
+        }
+        if (m && m.type === "pickFile") {
+          pickRemoteImage();
+          return;
+        }
+        // Clipboard images already use pasteImage. They may send immediately,
+        // but unlike ordinary control messages must never be queued/persisted.
+        if (m && m.type === "pasteImage") {
+          if (!identityRestoreComplete) {
+            showRemoteAttachError("image", "the conversation is reconnecting. Paste it again when it is restored.");
+            return;
+          }
+          if (!ws || ws.readyState !== WebSocket.OPEN) {
+            showRemoteAttachError("image", "the device is reconnecting. Paste it again when it is online.");
+            return;
+          }
+          try {
+            ws.send(JSON.stringify(m));
+          } catch (_) {
+            showRemoteAttachError("image", "the connection dropped before the image could be sent. Paste it again.");
+          }
+          return;
+        }
+        // Documents carry the same ephemeral byte payload as images. They are
+        // capability-gated and sent immediately so neither their names nor
+        // base64 bytes can enter the tab-discard outbox.
+        if (m && m.type === "uploadFile") {
+          sendEphemeralFile(m);
+          return;
+        }
+        // Destructive turn controls are now-or-never: a Stop persisted while
+        // the page was disconnected or mid-restore would fire into whatever
+        // turn is running AFTER reconnect — and with the VS Code view
+        // co-attached to the same conversation, that can cancel a newer turn
+        // this page never saw. Send live, or drop with a visible notice.
+        if (m && (m.type === "cancel" || m.type === "clearQueuedSends")) {
+          if (identityRestoreComplete && ws && ws.readyState === WebSocket.OPEN) {
+            try { ws.send(JSON.stringify(m)); } catch (_) { /* dropped with the connection */ }
+          } else if (m.type === "cancel") {
+            window.dispatchEvent(new MessageEvent("message", {
+              data: { type: "error", text: "Stop was not sent because this page is reconnecting. Stop again once the conversation is restored." },
+            }));
+          }
+          return;
+        }
+        if (m && (
+          m.type === "remoteVoiceStart" ||
+          m.type === "remoteVoiceChunk" ||
+          m.type === "remoteVoiceStop"
+        )) {
+          if (!voiceTransportReady || !ws || ws.readyState !== WebSocket.OPEN) {
+            interruptRemoteVoice("Voice recording stopped because the connection was interrupted. Start again after reconnecting.");
+            return;
+          }
+          try {
+            ws.send(JSON.stringify(m));
+          } catch (_) {
+            interruptRemoteVoice("Voice recording stopped because the connection was interrupted. Start again after reconnecting.");
+          }
+          return;
+        }
+        if (m && m.type === "selectRepo") {
+          // chat.js replays selectRepo + resumeSession while restoring a tab.
+          // That selection is not a repo-row gesture and must not arm the
+          // "open newest session" bridge. A real repo-row click clears the
+          // remembered identity before posting selectRepo, so it still arms.
+          var remembered = rememberedIdentity();
+          var restoringRememberedRepo = !!identityTarget &&
+            !!remembered &&
+            remembered.id === identityTarget.id &&
+            sameCwd(m.cwd, identityTarget.repoCwd);
+          if (restoringRememberedRepo) {
+            clearRepoOpen();
+          } else {
+            pendingRepoOpen = m.cwd;
+            pendingRepoOpenAt = Date.now();
+            // Consumed here and nowhere else: the flag is single-shot, so a
+            // later ordinary repo click can never inherit a stale "and start a
+            // new one" from a "+" pressed minutes ago.
+            pendingRepoNew = !!window.__grokRailNewIntent && sameCwd(window.__grokRailNewIntent, m.cwd);
+            window.__grokRailNewIntent = null;
+            armedForSessions = false;
+          }
+        }
+        var s = JSON.stringify(m);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          if (identityRestoreComplete || isIdentityRestoreMessage(m)) {
+            ws.send(s);
+            if (m && m.type === "resumeSession" && isIdentityRestoreMessage(m)) {
+              armIdentityFailTimer();
+            }
+          } else if (explicitlyChangesIdentity(m)) {
+            abandonIdentityRestore("you chose a different repository or conversation.");
+            ws.send(s);
+          } else {
+            persistOutboxMessage(s, m);
+          }
+        } else {
+          persistOutboxMessage(s, m);
+        }
+      },
+      getState: function () { return saved; },
+      setState: function (s) { saved = s; return s; },
+    };
+  };
+})();
+</script>
+<link rel="stylesheet" href="/vendor/media/chat.css" />
+<link rel="stylesheet" href="/vendor/media/settings.css" />
+<!-- After chat.css, matching the order getHtml() uses, so the panel's rules sit
+     at the same point in the cascade on both surfaces. The <style> block below
+     still comes last: the touch affordances in it deliberately ride on
+     chat.css's specificity and npm run e2e:touch is what guards that. -->
+<link rel="stylesheet" href="/vendor/media/file-panel.css" />
+<style>
+/* AFTER the vendored stylesheet ON PURPOSE (source order beats it): chat.css
+   sets body{height:calc(100vh/--chat-zoom)} for the webview, and 100vh on
+   mobile is the LARGEST viewport (URL bar hidden) — that explicit height
+   overrode the fixed-inset shell and pushed the composer's bottom row one
+   URL-bar height below the visible fold on phones, no matter what the shell
+   did. With body pinned by inset:0, auto height = fill the real viewport at
+   any --chat-zoom (the inset constraint is geometric; 100vh is not). */
+body { height: auto; }
+/* Bar-icon primitive is owned by the vendored sheet (.icon-btn / .rail-icon-btn
+   / file-panel members). This page must not reintroduce a painted box on
+   #rail-open, #rail-toggle, the rail theme toggle, or the header set. The
+   pencil stays glyph 16 (inline title adornment) via the rules above. */
+.remote-upload-item {
+  min-height: 44px;
+  box-sizing: border-box;
+}
+/* Reading rhythm: the vendored UI inherits VS Code's tight panel leading;
+   chat prose in a browser reads like an app at ~1.55 (what Codex/Claude/
+   ChatGPT run). Code blocks keep their own line-height rules. */
+.msg { line-height: 1.55; }
+.small,
+kbd { font-size: 12px; }
+.welcome-byline { font-size: 12px; }
+/* Typed text = message text. The vendored input pins a 13px webview fallback
+   while prose rides the 16px root — the mismatch reads wrong next to every
+   chat app (and sub-16px inputs make iOS zoom on focus). Both selectors
+   together: the highlight mirror must stay layout-identical to the textarea. */
+textarea#input, .input-highlight { font-size: 16px; }
+/* Cards are app content here, not editor chrome: prose titles use the UI face,
+   descriptions get a readable rhythm, while paths and command output keep
+   their content treatment without shrinking back to webview-label sizes. */
+/* Font-family + weight now come from the vendored css (card titles are UI-font
+   in the extension itself); the remote only bumps the SIZE for readability. */
+.card .card-title { font-size: 15px; }
+.card.question .card-title {
+  font-family: var(--vscode-font-family);
+  font-size: 15px;
+}
+.card .card-subtitle,
+.card .plan-body,
+.card .question-answer,
+.card .question-option-desc {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.card .question-text {
+  font-size: 15px;
+  line-height: 1.4;
+}
+.card-actions button,
+.card button.question-option,
+.card button.question-skip { font-size: 14px; }
+.card .plan-toggle,
+.card .preview-link { font-size: 14px; }
+.card textarea.plan-feedback {
+  font-size: 13px;
+  line-height: 1.5;
+}
+.plan-file-link {
+  padding: 7px 10px;
+  line-height: 1.4;
+}
+.perm-resolved-line,
+.plan-verdict-label { font-size: 13px; }
+/* Tool summaries already inherit the 16px browser root through the vendor's
+   undefined no-fallback token; only hardcoded inner labels need lifting. */
+.tool-error { font-size: 14px; }
+.cmd-io-tag,
+.cmd-out-marker,
+.tool-kind,
+.tool-detail { font-size: 13px; }
+/* Notices and menus should scan like browser UI, with only metadata retaining
+   the quieter small-label hierarchy. */
+.plan-notice,
+.session-context-banner {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.plan-processing { font-size: 12px; }
+.msg-timestamp { font-size: 12px; }
+.queued-tag,
+body.turn-busy .queued-steer,
+.msg-actions { font-size: 12px; }
+.msg-expand-btn,
+.msg-collapse-btn { font-size: 13px; }
+.msg-chip,
+.chip,
+.attachment { font-size: 12px; }
+.toolbar-btn,
+.scroll-bottom-btn { font-size: 13px; }
+.toolbar-popover-item { font-size: 14px; }
+.popover-section { font-size: 12px; }
+.popover-info {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.popover-value,
+.popover-external,
+.popover-info-sub { font-size: 13px; }
+.popover-fineprint { font-size: 12px; }
+.model-name-btn { font-size: 14px; }
+.mode-item-label { font-size: 15px; line-height: 1.4; }
+.mode-item-desc { font-size: 13px; line-height: 1.45; }
+.mode-item-disabled-note { font-size: 12px; line-height: 1.4; }
+.onb {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.onb-heading { font-size: 15px; }
+.onb-or { font-size: 12px; }
+.onb-cmd,
+.onb-cmd code { font-size: 13px; }
+.onb-action { font-size: 14px; }
+.onb-action code { font-size: 13px; }
+.slash-name,
+.mention-name { font-size: 15px; }
+.slash-desc {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.mention-dir { font-size: 13px; }
+.history-row-name { font-size: 15px; }
+.history-row-meta { font-size: 12px; }
+.history-empty { font-size: 13px; }
+.history-more { font-size: 12px; }
+.history-clear-all { font-size: 14px; }
+.confirm-panel {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.confirm-title { font-size: 16px; }
+.confirm-btn { font-size: 14px; }
+/* File references are host-side paths — the policy gate drops openFile/
+   openDiff from remotes, so they never did anything here. Render them as
+   plain text instead of dead links. External links keep working (opened
+   locally by the shim's capture handler). */
+#messages a:not([href^="http"]) {
+  color: inherit;
+  text-decoration: none;
+  cursor: text;
+  pointer-events: none;
+}
+/* Phones: mode names carry the choice; the explanation sentences are desktop
+   reading. (Agent/Plan/Auto accept labels + icons + the active check stay.) */
+@media (max-width: 899px) {
+  .mode-item-desc { display: none; }
+  textarea#input,
+  .input-highlight,
+  .card textarea.plan-feedback,
+  .history-search,
+  .history-rename { font-size: 16px; }
+  textarea#input,
+  .input-highlight { padding-right: 46px; }
+  .card .card-title,
+  .card.question .card-title { font-size: 16px; }
+  .history-row-name,
+  .mode-item-label { font-size: 16px; }
+  /* Autocomplete is a dense command list — 16px read as oversized; keep it a
+     comfortable list size, not prose. */
+  .slash-name,
+  .mention-name { font-size: 14px; }
+  .slash-desc { font-size: 13px; }
+  .history-row-meta { font-size: 13px; }
+  .history-row,
+  .toolbar-popover-item,
+  .popover-section-toggle,
+  .mode-popover-item,
+  .slash-item,
+  .mention-item,
+  .history-clear-all,
+  .card-actions button,
+  .card button.question-option,
+  .card button.question-skip,
+  .card .plan-toggle,
+  .onb-action,
+  .confirm-btn,
+  .run-progress-card .run-progress-btn,
+  .msg-expand-btn,
+  .msg-collapse-btn,
+  .scroll-bottom-btn {
+    min-height: 44px;
+  }
+  .history-action-btn {
+    width: 36px;
+    height: 36px;
+  }
+  /* Row-action glyphs (pin/unpin, rename, delete) and the clear-all glyph
+     render at their intrinsic 12px — too small beside 20px header icons, but
+     the earlier 18px bump overshot: it left the pin visibly bigger than the
+     13px folder/branch icon leading the SAME row (desktop has no such
+     mismatch — 12 vs 13 — which is why this only read as wrong on a phone).
+     16px is the app's standard glyph size; the row's leading icon joins it so
+     a row is one scale. The 36px tap target is the button, not the glyph. */
+  .history-action-btn svg,
+  .history-clear-all svg,
+  .repo-row-icon svg { width: 16px; height: 16px; }
+  /* The context/donut popover's billing explanation ("Context is how full…")
+     is desktop detail — hide it on phones. */
+  #context-popover .popover-fineprint { display: none; }
+  .model-name-btn { min-height: 44px; }
+  .effort-dot {
+    width: 36px;
+    height: 36px;
+  }
+  .mic-btn,
+  .attachment-remove,
+  .onb-copy {
+    width: 36px;
+    height: 36px;
+  }
+  .onb-cmd { min-height: 44px; }
+  .context-donut { height: 36px; }
+  .msg-action-btn,
+  .queued-action,
+  .code-copy-btn,
+  .generated-media-btn,
+  .expr-btn {
+    min-width: 36px;
+    min-height: 36px;
+  }
+  code,
+  .cmd-block,
+  .tool-diff-region { font-size: max(13px, 0.92em); }
+}
+/* ---- Remote client: breathing room ----------------------------------------
+   The vendored UI was drawn for a narrow VS Code side panel where an 8px
+   (--pad) gutter was plenty. In a full browser tab — phone or desktop — the
+   reading column and composer want real side margins, closer to Codex/Claude
+   than to a sidebar. The header rows (#site-bar / .top-bar) keep their own
+   padding; only the chat body and footer widen. */
+/* Body + footer: +5px of horizontal gutter over --pad on phones. */
+.messages,
+.composer {
+  padding-left: calc(var(--pad) + 5px);
+  padding-right: calc(var(--pad) + 5px);
+}
+/* Desktop: widen the gutter to the header's own inline padding, so the message
+   column, composer, and brand all sit on one shared left edge — the roomier
+   feel Codex/Claude give a full-width window. */
+@media (min-width: 900px) {
+  .messages,
+  .composer {
+    padding-left: clamp(1.25rem, 4vw, 2.5rem);
+    padding-right: clamp(1.25rem, 4vw, 2.5rem);
+  }
+}
+/* A little air under the last line of typed text before the toolbar row. The
+   highlight mirror must track the textarea's box exactly, so bump both. */
+textarea#input,
+.input-highlight {
+  padding-bottom: 11px;
+}
+/* User bubble = the composer input, verbatim: the same lighter fill and border,
+   so a sent message reads as the box it was typed into. The vendored default is
+   a 5% foreground tint that all but vanishes against the sidebar. Redefining
+   BOTH surface tokens (not just the bubble background) keeps the collapsed
+   long-message fade — which ends on --chat-surface-user-opaque — in sync. */
+:root {
+  --chat-surface-user: var(--vscode-input-background);
+  --chat-surface-user-opaque: var(--vscode-input-background);
+}
+.msg.user .msg-bubble {
+  border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border));
+}
+/* Over-quota wall: a slim shim-owned banner above the composer. The relay
+   enforces the limit — this explains it where the user is typing. */
+#quota-wall {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: color-mix(in srgb, var(--vscode-errorForeground) 14%, var(--vscode-editorWidget-background));
+  border-top: 1px solid var(--vscode-editorWidget-border);
+  font-size: 16px;
+  line-height: 1.4;
+}
+#quota-wall a { color: var(--vscode-textLink-foreground); font-weight: 600; }
+/* Over quota: the composer's send path is disabled + dimmed (input, send, mic).
+   The gear/add/mode/history controls stay live. */
+body.quota-exceeded #input { pointer-events: none; opacity: 0.5; }
+body.quota-exceeded #send-btn,
+body.quota-exceeded #mic-btn { pointer-events: none; opacity: 0.4; }
+/* The scroll-to-bottom pill stays centered (the common case). Only when the
+   rare quota banner is present does it lift above it — the banner is a sibling
+   immediately before .composer, so this selector fires exactly then. */
+#quota-wall + .composer .scroll-bottom-btn { bottom: calc(100% + var(--pad) + 42px); }
+/* Successful post-link welcome: attached to the TOP of the transcript, with
+   positive accenting and no veil, disabled controls, or composer coupling. */
+#link-onboarding {
+  position: relative;
+  z-index: 5;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 12px clamp(1.25rem, 4vw, 2.5rem) 0;
+  padding: 14px 48px 14px 16px;
+  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--vscode-charts-green) 12%, var(--vscode-editorWidget-background));
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-green) 50%, var(--vscode-editorWidget-border));
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.link-onboarding-copy { flex: 1; min-width: 0; }
+#link-onboarding p { margin: 0; }
+#link-onboarding p + p { margin-top: 3px; color: var(--vscode-descriptionForeground); }
+.link-onboarding-title { font-size: 15px; font-weight: 700; }
+.link-onboarding-actions { display: flex; flex: none; align-items: center; }
+#link-onboarding button {
+  min-height: 36px;
+  padding: 7px 12px;
+  font: 600 13px/1.2 var(--vscode-font-family);
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+}
+#link-onboarding button:hover { background: var(--vscode-button-hoverBackground); }
+#link-onboarding button:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 2px; }
+#link-onboarding .link-onboarding-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 36px;
+  min-height: 36px;
+  padding: 0;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  border: 0;
+  font-size: 24px;
+  font-weight: 400;
+}
+#link-onboarding .link-onboarding-close:hover {
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-hoverBackground);
+}
+.link-onboarding-copy-btn { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.link-onboarding-copy-btn svg { width: 16px; height: 16px; flex: none; }
+#link-onboarding .link-onboarding-copy-btn.copied {
+  background: var(--vscode-charts-green);
+  color: var(--vscode-editor-background);
+}
+@media (max-width: 899px) {
+  #link-onboarding {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+    margin: 10px calc(var(--pad) + 5px) 0;
+    padding: 13px 48px 13px 14px;
+  }
+  #link-onboarding button { min-height: 44px; }
+  #link-onboarding .link-onboarding-close {
+    top: 3px;
+    right: 3px;
+    width: 44px;
+    min-height: 44px;
+  }
+}
+/* Reconnect: a light veil over the old content while the snapshot replays
+   under it — no visible clear/rebuild, no jump. Non-blocking on purpose. */
+.auth-overlay.reconnecting {
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+/* ---- EXPERIMENT: edge scroll-fade (remote only) ---------------------------
+   The oldest/newest visible lines dissolve into the header / composer instead
+   of hard-clipping. Done with two overlay gradients that are SIBLINGS of the
+   scroller (not a mask on it) — a mask fades or clips the scrollbar; these
+   don't touch it. Each overlay's opacity is driven by scroll position (set in
+   the shim): 0 at its own extreme (pinned to the top → no top fade; pinned to
+   the bottom → no bottom fade), ramping in as you scroll away. The fade handles
+   the scroll dissolve; a small resting gap (padding on #messages) keeps the
+   first/last message off the header/composer — it scrolls with the content, so
+   it doesn't shrink the mid-scroll reading area. Remove the wrap/overlays +
+   these rules to revert. */
+#messages-wrap {
+  position: relative;
+  /* The fades are decorative layers over transcript content, never app chrome.
+     Contain their internal z-indexes so even a high fade layer cannot escape
+     above header/composer popovers or other interactive UI. */
+  z-index: 0;
+  isolation: isolate;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+#messages { padding-top: 14px; padding-bottom: 14px; }
+/* The bottom fade completes at the messages' bottom, which sat 8px (the
+   composer's top padding) above the input box — a dead strip between the
+   gradient and the input. Drop that padding so the gradient reaches the input,
+   the way the top fade reaches the header. */
+.composer { padding-top: 0; }
+.msg-fade {
+  position: absolute;
+  left: 0;
+  right: 8px;            /* clear the 8px ::-webkit-scrollbar so it stays crisp */
+  height: 18px;
+  z-index: 4;
+  pointer-events: none;
+}
+.msg-fade-top {
+  top: 0;
+  background: linear-gradient(to bottom, var(--vscode-sideBar-background), transparent);
+  opacity: var(--fade-top-op, 0);
+}
+.msg-fade-bot {
+  bottom: 0;
+  background: linear-gradient(to top, var(--vscode-sideBar-background), transparent);
+  opacity: var(--fade-bot-op, 0);
+}
+/* ---- Remote UI tweaks -----------------------------------------------------
+   After the mobile media block on purpose so these win source order. */
+.mic-btn[hidden] { display: none; }
+textarea#input,
+.input-highlight { padding-right: 8px; }
+/* Effort dots read small beside the enlarged remote gear icons — grow the inner
+   dot (the 36px hit-area from the mobile block is unchanged). */
+.effort-dot::before { width: 13px; height: 13px; border-width: 2px; }
+/* The context popover (under the donut) grew as wide as its content — cap it. */
+#context-popover { max-width: 300px; }
+/* Media action icons on TOUCH: reveal on tap, not permanently. The vendored
+   @media(hover:none) pins them visible (no hover to reveal them); here we hide
+   by default and show only the tapped media's overlay — .show-actions is
+   toggled by the shim. Hover-capable remotes keep the vendored hover behavior. */
+@media (hover: none) {
+  /* Hide by default. The :hover / :focus-within variants are here because the
+     vendored rules that reveal on hover/focus are (0,3,0) and a tap leaves a
+     STICKY :hover on the tapped media — without matching that specificity the
+     overlay never hides again. Only .show-actions (toggled by the shim) reveals. */
+  .generated-image .generated-media-actions,
+  .generated-image:hover .generated-media-actions,
+  .math-export .expr-actions,
+  .math-export:hover .expr-actions,
+  .math-export .expr-actions:focus-within,
+  .mermaid-block[data-mermaid-state="done"] .expr-actions,
+  .mermaid-block[data-mermaid-state="done"]:hover .expr-actions,
+  .mermaid-block[data-mermaid-state="done"] .expr-actions:focus-within { opacity: 0; pointer-events: none; }
+  .generated-image.show-actions .generated-media-actions,
+  .math-export.show-actions .expr-actions,
+  .mermaid-block.show-actions .expr-actions { opacity: 1; pointer-events: auto; }
+}
+/* The identity-restore veil: while a remembered conversation is being
+   restored on a fresh page, the transcript stays hidden and a quiet note
+   shows, so the intermediate "New session" snapshot never flashes before
+   being replaced. Applied by beginIdentityRestore only over an EMPTY
+   transcript; lifted by finish/abandon. pointer-events none — the composer
+   underneath stays usable. */
+body.identity-restoring #messages { visibility: hidden; }
+/* Errors punch through the veil (visibility, unlike display, lets a
+   descendant reassert itself): the delay notice, a refusal, offline text —
+   the user must see those mid-restore. Only ordinary transcript paint hides. */
+body.identity-restoring #messages .msg.error { visibility: visible; }
+/* The top bar's session name is the same intermediate paint — it read
+   "New session" for the restore window after the transcript was already
+   veiled (owner, 2026-08-15). Same veil, same lift. */
+body.identity-restoring #session-head-title { visibility: hidden; }
+#identity-restoring-note {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: var(--vscode-descriptionForeground);
+  font-size: 13px;
+}
+body.identity-restoring #identity-restoring-note { display: flex; }
+
+/* Message actions (Copy + timestamp) need NO touch rule here anymore: the
+   vendored chat.css rests them dimmed (0.4) and tappable on every surface —
+   including under (hover: none) — since the 2026-08-13 dimmed-actions change.
+   A footer the extension hid mid-turn still carries [hidden] -> display:none
+   (chat.css), which beats every opacity rule involved. The tap-to-reveal
+   gesture above stays for MEDIA overlays only. */
+</style>
+</head>
+<body class="thinking-hidden">
+
+  <div id="host-too-old" class="auth-overlay" hidden>
+    <div class="panel">
+      <p id="host-too-old-copy"></p>
+      <p class="muted">Install Grok Build 3.1.0 or newer on that computer, then reload this page.</p>
+      <a href="/" data-native-link>Back to your devices</a>
+    </div>
+  </div>
+
+  <header id="site-bar">
+    <div class="site-bar-inner">
+      <a class="site-brand" href="/" data-native-link title="AFK Pilot — your devices">
+        <span class="mark" aria-hidden="true"></span>
+        <span class="wordmark"><b>AFK</b> <span class="dim">Pilot</span></span>
+      </a>
+      <div class="site-actions">
+        <button class="icon-toggle" type="button" onclick="__toggleTheme()" aria-label="Toggle light and dark theme" title="Toggle theme">
+          <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.5M12 19v2.5M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2.5 12H5M19 12h2.5M4.2 19.8L6 18M18 6l1.8-1.8"/></svg>
+          <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.2 6.2 0 0 0 10.5 10.5z"/></svg>
+        </button>
+        <div id="user-button"></div>
+      </div>
+    </div>
+  </header>
+
+  <div id="app">
+  <!-- The top bar spans the whole app, ABOVE the rail — the rail is a second
+       band under the header, not a column beside it. Nesting it in #chat-column
+       put it level with the rail's first sticky section label, and its
+       full-bleed background pseudo-element (painted in an isolated stacking
+       context above the rail) covered part of that label — which is why
+       PINNED read as "PIN", and why how much survived depended on zoom. -->
+  <header class="top-bar">
+    <a class="afk-brand" href="/" data-native-link title="AFK Pilot — your devices">
+      <span class="mark" aria-hidden="true"></span>
+      <span class="afk-brand-word">AFK Pilot</span>
+    </a>
+    <!-- Mirrors getHtml()'s #repo-btn / #repo-popover. chat.js wires both
+         unconditionally at boot, so omitting either throws on `.onclick` of
+         null and the whole client dies — not a graceful degradation. -->
+    <button id="repo-btn" class="repo-chip" type="button" title="Choose repository"></button>
+    <button id="theme-btn" class="icon-btn" type="button" title="Toggle theme" aria-label="Toggle light and dark theme" onclick="__toggleTheme()">
+      <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.5M12 19v2.5M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2.5 12H5M19 12h2.5M4.2 19.8L6 18M18 6l1.8-1.8"/></svg>
+      <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.2 6.2 0 0 0 10.5 10.5z"/></svg>
+    </button>
+    <!-- Mirrors getHtml()'s skeleton. chat.js keeps it hidden in the browser
+         client (a remote is already remote) — present so the two stay in sync. -->
+    <button id="remote-btn" class="icon-btn remote-btn" title="Continue remotely" hidden></button>
+    <button id="history-btn" class="icon-btn" title="Session history"></button>
+    <button id="new-btn" class="icon-btn" title="New session"></button>
+    <div id="repo-popover" class="toolbar-popover repo-popover" hidden></div>
+    <div id="history-popover" class="toolbar-popover history-popover" hidden></div>
+  </header>
+
+  <div id="app-body">
+  <!-- Tapping outside the drawer closes it. Present at every width but only
+       painted while the drawer is open on a phone. -->
+  <div id="rail-scrim" hidden></div>
+  <!-- The rail owns its own chrome: brand, search and account are FIXED bands,
+       and only the middle scrolls, so the section labels can never scroll a
+       header out of reach. chat.js renders into #rail-scroll and nothing else —
+       it clears that element on every repaint. -->
+  <aside id="projects-rail" aria-label="Projects" hidden>
+    <div class="rail-top">
+      <a class="rail-brand" href="/" data-native-link title="AFK Pilot — your devices">
+        <span class="mark" aria-hidden="true"></span>
+        <span class="wordmark"><b>AFK</b> <span class="dim">Pilot</span></span>
+      </a>
+      <button id="rail-toggle" class="rail-icon-btn" type="button" title="Hide projects" aria-label="Hide projects" aria-expanded="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
+      </button>
+    </div>
+    <div class="rail-search-wrap">
+      <span class="rail-search-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      </span>
+      <input id="rail-search" type="text" autocomplete="off" spellcheck="false" placeholder="Search projects and sessions" aria-label="Search projects and sessions" />
+    </div>
+    <div id="rail-scroll" class="rail-scroll"></div>
+    <div class="rail-foot">
+      <div id="rail-user" class="rail-user"></div>
+      <button class="rail-icon-btn" type="button" onclick="__toggleTheme()" aria-label="Toggle light and dark theme" title="Toggle theme">
+        <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.5M12 19v2.5M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2.5 12H5M19 12h2.5M4.2 19.8L6 18M18 6l1.8-1.8"/></svg>
+        <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.2 6.2 0 0 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </aside>
+  <div id="chat-column">
+
+  <!-- The conversation's own header — it exists only where the rail does, and
+       replaces the app-wide .top-bar there. Same element on both breakpoints:
+       a phone additionally gets the drawer handle and New, because its rail is
+       closed most of the time. -->
+  <header id="session-head">
+    <button id="rail-open" class="icon-btn" type="button" title="Show projects" aria-label="Show projects">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
+    </button>
+    <div id="session-head-main">
+      <!-- The title needs a row of its own: chat.js hangs the rename pencil off
+           the title's parent, and #session-head-main is a column — without this
+           the pencil would land under the project line instead of beside the
+           name it edits. -->
+      <span id="session-head-titlerow">
+        <span id="session-head-title"></span>
+      </span>
+      <span id="session-head-sub"></span>
+    </div>
+    <button id="session-history" class="icon-btn" type="button" title="Session history"></button>
+    <button id="session-new" class="icon-btn" type="button" title="New session"></button>
+    <div id="session-head-actions"></div>
+  </header>
+
+  <!-- Everything BELOW the conversation header: the transcript and composer on
+       the left, the file panel docked on the right. The header has to sit above
+       both, the way the desktop's top bar does — with the dock as a sibling of
+       #chat-column it started level with the header instead, and the panel ran
+       up alongside the title. Both wrappers are display:contents below 900px,
+       so the phone's single-column flow is untouched. -->
+  <div id="chat-main-row">
+  <div id="chat-stack">
+
+  <div id="messages-wrap">
+  <main id="messages" class="messages">
+    <div class="welcome" id="welcome">
+      <span class="welcome-mark" role="img" aria-label="Grok" style="--welcome-mark:url('/vendor/resources/grok-icon.svg')"></span>
+      <h2>Grok Build (Community)</h2>
+      <p class="welcome-byline muted">Remote client</p>
+      <p id="welcome-version" class="muted welcome-status-busy"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg><span>Connecting</span></p>
+      <div id="welcome-onboarding"></div>
+    </div>
+  </main>
+  <!-- EXPERIMENT: edge scroll-fade overlays. Siblings of the scroller (not a
+       mask on it), so the scrollbar is never faded or clipped; opacity is driven
+       by the shim off scroll position. -->
+  <div class="msg-fade msg-fade-top" aria-hidden="true"></div>
+  <div class="msg-fade msg-fade-bot" aria-hidden="true"></div>
+  </div>
+
+  <footer class="composer">
+    <button id="scroll-bottom-btn" class="scroll-bottom-btn" type="button" title="Scroll to bottom"></button>
+    <div class="composer-card">
+      <div id="attachments" class="attachments"></div>
+      <div class="composer-input-wrap">
+        <div id="input-highlight" class="input-highlight" aria-hidden="true" dir="auto"></div>
+        <textarea id="input" placeholder="Ask Grok..." rows="2" dir="auto"></textarea>
+        <button id="mic-btn" class="mic-btn" title="Voice control" hidden></button>
+      </div>
+      <div class="composer-toolbar">
+        <div class="toolbar-left">
+          <button id="add-btn" class="icon-btn" title="Add context"></button>
+          <button id="gear-btn" class="icon-btn" title="Settings"></button>
+          <div class="context-donut" id="donut" title="Context usage">
+            <svg width="16" height="16" viewBox="0 0 16 16">
+              <circle cx="8" cy="8" r="6" fill="none" stroke="var(--vscode-editorWidget-border,#444)" stroke-width="3"/>
+              <circle id="donut-arc" cx="8" cy="8" r="6" fill="none" stroke="var(--vscode-charts-green,#4ec9b0)" stroke-width="3" stroke-dasharray="0 999" transform="rotate(-90 8 8)"/>
+            </svg>
+            <span id="donut-label" class="small muted">0%</span>
+          </div>
+          <div id="chips"></div>
+        </div>
+        <div class="toolbar-right">
+          <button id="mode-btn" class="toolbar-btn" title="Pick mode"></button>
+          <button id="send-btn" class="send"></button>
+        </div>
+      </div>
+    </div>
+    <div id="mode-popover" class="toolbar-popover" hidden></div>
+    <div id="gear-popover" class="toolbar-popover gear-popover" hidden></div>
+    <div id="add-popover" class="toolbar-popover" hidden></div>
+    <div id="context-popover" class="toolbar-popover" hidden></div>
+    <div id="slash-popover" class="slash-popover" hidden></div>
+    <div id="mention-popover" class="slash-popover mention-popover" hidden></div>
+  </footer>
+  </div>
+  <!-- Where the shared file panel docks on a wide browser. Empty until the
+       panel mounts into it, so it costs no width; below 900px it is display:none
+       and the panel presents itself as an overlay instead, the same rule the
+       rail follows. The extension's own document has no equivalent because the
+       desktop app docks into `.app-main` — the id is the contract between
+       media/file-panel.js and whichever page is hosting it. -->
+  <aside id="file-panel-dock" aria-label="Project files"></aside>
+  </div>
+  </div>
+  </div>
+  </div>
+
+  <script>
+    window.MathJax = {
+      tex: { processEnvironments: true, processRefs: true },
+      svg: { fontCache: "local" },
+      options: { enableMenu: false, enableAssistiveMml: false },
+      startup: { typeset: false }
+    };
+  </script>
+  <script src="/vendor/media/mathjax/tex-svg-full.js"></script>
+  <script src="/vendor/media/mermaid/mermaid.min.js"></script>
+  <script src="/vendor/media/webview-helpers.js"></script>
+  <!-- Before file-panel.js on purpose: the panel reads GrokSyntaxHighlight at
+       render time and degrades to plain text if it is not there yet. -->
+  <script src="/vendor/media/syntax-highlight.js"></script>
+  <script src="/vendor/media/file-panel.js"></script>
+  <!-- Before chat.js on purpose: the gear's "All settings" reads the settings
+       component's global at click time — absent, the entry would no-op. -->
+  <script src="/vendor/media/settings.js"></script>
+  <script src="/vendor/media/chat.js"></script>
+</body>
+</html>

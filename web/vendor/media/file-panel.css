@@ -1,0 +1,978 @@
+/* Shared project-file panel. Keep selectors component-scoped and low-specificity:
+   the relay intentionally loads touch affordances after the vendored media. */
+body.desk-with-ft:not(.has-rail) { display: flex; flex-direction: column; }
+body.desk-with-ft.has-rail { display: flex; flex-direction: row; align-items: stretch; }
+body.desk-with-ft .top-bar {
+  z-index: 30;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--vscode-editorWidget-border, #454545);
+}
+body.desk-with-ft.has-rail > .app-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+.desk-ft-shell {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.desk-ft-chat {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--vscode-sideBar-background, #252526);
+}
+.desk-ft-top-sep {
+  flex: none;
+  align-self: center;
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.35));
+}
+.files-browse-sep {
+  flex: none;
+  align-self: center;
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.35));
+}
+.desk-ft-top-toggle {
+  color: var(--vscode-descriptionForeground, #999);
+  border: 0;
+  border-radius: 8px;
+}
+body.desk-rail-collapsed #projects-rail,
+body.desk-rail-collapsed #rail-resizer { display: none !important; }
+body.desk-rail-collapsed.has-rail { flex-direction: column; }
+body.desk-rail-collapsed.has-rail > .app-main { width: 100%; }
+/* Show/hide only — box, glyph, and hover come from .icon-btn (bar-icon primitive). */
+.desk-rail-open-btn {
+  display: none;
+  margin-right: 4px;
+}
+body.desk-rail-collapsed .desk-rail-open-btn { display: inline-flex; }
+
+.gfp-panel {
+  --gfp-width: 280px;
+  --gfp-border: var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.35));
+  --gfp-hover: var(--rail-hover-bg, var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.14)));
+  box-sizing: border-box;
+  display: flex;
+  flex: 0 0 var(--gfp-width);
+  flex-direction: column;
+  width: var(--gfp-width);
+  min-width: 200px;
+  min-height: 0;
+  overflow: hidden;
+  container: desk-ft / inline-size;
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background, #1e1e1e));
+  color: var(--vscode-foreground, #ccc);
+  border-left: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.35));
+  font-family: var(--vscode-font-family, system-ui, sans-serif);
+  font-size: 13px;
+}
+
+.gfp-panel[hidden] { display: none !important; }
+
+/* An overlay stops BELOW the host's own chrome rather than covering it, so the
+   panel occupies the same band the docked version does. `--gfp-overlay-top` is
+   set by whichever page has a bar above the app; it defaults to 0, which is the
+   desktop's behaviour, where the panel docks and this rule never applies.
+   Without it the phone's panel painted over the top bar — including the button
+   that had just opened it. */
+.gfp-panel.gfp-overlay {
+  position: fixed;
+  inset: var(--gfp-overlay-top, 0) 0 0 auto;
+  z-index: 40;
+  width: min(var(--gfp-width), 100vw);
+  max-width: 100vw;
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+}
+
+.gfp-resizer {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 5px;
+  width: 5px;
+  margin: 0 -2px;
+  border-left: 1px solid var(--gfp-border);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.gfp-resizer[hidden] { display: none !important; }
+.gfp-resizer::after {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  background: var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.35));
+}
+.gfp-resizer:hover::after,
+.gfp-resizing + .gfp-resizer::after { background: var(--vscode-focusBorder, #007acc); }
+
+.gfp-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  min-width: 0;
+  /* 44px everywhere - small tap targets hurt, not only on phones. The
+     overlay bumps this to match the central header's scale (asserted). */
+  min-height: 44px;
+  overflow: hidden;
+  /* The strip is its own surface so the ACTIVE tab can read as attached to
+     the content below by wearing the content's background (see .gfp-tab-active).
+     editorWidget-background is the header tone in both stock palettes; the
+     color-mix fallback tints toward foreground for pages defining neither. */
+  background: var(--vscode-editorGroupHeader-tabsBackground,
+    var(--vscode-editorWidget-background,
+      color-mix(in oklab, var(--vscode-foreground) 4%, var(--vscode-sideBar-background, #1e1e1e))));
+  /* The divider is an INSET line, not a border: children stretch over it, so
+     the opaque active tab covers its own segment and joins the content below
+     seamlessly — a border (or an escaping shadow) would be clipped by this
+     element's overflow:hidden and always show through. */
+  box-shadow: inset 0 -1px 0 var(--gfp-border);
+}
+
+/* Project root: a folder glyph + the repo name at the same weight the rail
+   uses for project rows. Not a heading — no uppercase, no 700, no letter-
+   spacing shout. Idle tabs mix toward descriptionForeground; the title and
+   the active tab keep the inherited foreground token. Theme tokens only. */
+.gfp-title {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 24px;
+  overflow: hidden;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: var(--rail-repo-font-weight, 600);
+  text-align: start;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.gfp-title-icon,
+.gfp-tab-icon {
+  display: inline-flex;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+.gfp-title-icon img,
+.gfp-title-icon svg,
+.gfp-title-icon .gfp-file-icon-mono,
+.gfp-tab-icon img,
+.gfp-tab-icon svg,
+.gfp-tab-icon .gfp-file-icon-mono {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+.gfp-title-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Only share the strip when there is something to share it WITH. The cap was
+   unconditional, so a project name was truncated to 42% of the panel even with
+   no tabs open and the whole width free — `grok-build-vsc…` beside an empty
+   strip. Compact/extreme (stamped by stripShrinkState) then yield the TITLE
+   further; tab demotion is planStrip's job, not a min-width floor. */
+.gfp-header:has(.gfp-tabs > *) .gfp-title { max-width: 46%; }
+.gfp-panel.gfp-strip-compact .gfp-title { max-width: 36%; }
+.gfp-panel.gfp-strip-extreme .gfp-title { max-width: 28%; min-width: 24px; }
+.gfp-title.gfp-title-icon-only {
+  flex: 0 0 auto;
+  max-width: none;
+  min-width: 24px;
+  padding-inline: 12px;
+}
+.gfp-title.gfp-title-icon-only .gfp-title-label { display: none; }
+/* Tree showing: the folder is the selected "tab" — content background, no
+   blue top accent. A file tab takes that treatment (with the accent) instead. */
+.gfp-title.gfp-title-selected {
+  background: var(--vscode-tab-activeBackground,
+    var(--vscode-sideBar-background, var(--vscode-editor-background, #1e1e1e)));
+}
+
+.gfp-tabs {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Never scrolls. Overflowed files live in the … chip menu, not past a fold.
+     padding-right is the gap floor so a full row cannot sit flush against
+     the maximize control; collectStripMeasurements reads it as trailing. */
+  padding-right: 6px;
+  overflow: hidden;
+}
+.gfp-tabs:empty { display: none; }
+/* Class `display:flex` beats the UA `[hidden] { display:none }` (same
+   specificity, later wins) — without this, overflowed tabs stay in the row
+   and State C paints icons AND the chip. */
+.gfp-tab[hidden],
+.gfp-overflow-chip[hidden] { display: none !important; }
+/* Close the run: tabs draw a left edge, so the last item also needs a right
+   one or the last tab dissolves into the empty strip. */
+.gfp-tabs > :last-child { border-right: 1px solid var(--gfp-border); }
+/* No files open: the folder "tab" closes its own right edge — with tabs
+   present the first tab's left border draws that line instead (owner:
+   a borderless folder-only strip read as inconsistent). */
+.gfp-header:not(:has(.gfp-tabs > *)) .gfp-title { border-right: 1px solid var(--gfp-border); }
+
+.gfp-tab {
+  position: relative;
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 5px;
+  /* max-content, NOT auto: Chromium computes a nested-flex tab's intrinsic
+     width using the name's breakable min-content ("CLAUDE." for "CLAUDE.md"),
+     which shaved names beside free space — the owner's CLAUDE…/TESTS… report.
+     max-content sizes the tab to the FULL name; flex-shrink still yields
+     under real pressure, and planStrip decides when that pressure exists. */
+  width: max-content;
+  /* min-width stays `auto` (min-content = icon + X/dot + padding). A numeric
+     floor was the old scroll model's way to stop shrinking — it forced the
+     strip to overflow. Icon and close are flex-none so they survive first. */
+  max-width: 170px;
+  padding: 0 6px 0 10px;
+  border-left: 1px solid var(--gfp-border);
+  color: var(--vscode-descriptionForeground, #999);
+  cursor: pointer;
+}
+.gfp-tab:hover { background: var(--gfp-hover); color: inherit; }
+.gfp-tab-active {
+  flex: 0 1 auto;
+  /* Icon + X + padding/gaps. The name may ellipsize to nothing; these two
+     must survive. Not the old 96px scroll-model floor. */
+  min-width: calc(16px + 22px + 16px);
+  /* No fixed ceiling: with space free the FULL name (extension included)
+     shows — the planner and the strip's real width are the only bounds, and
+     ellipsis appears only when flex genuinely has nothing left to give.
+     Icon and X survive regardless (min-width floor + flex-none children). */
+  max-width: none;
+  color: inherit;
+  /* Selection reads as CONTINUITY with the content, not as a fill: the active
+     tab wears the panel content's own background (owner, 2026-08-14 — the old
+     foreground-mix fallback painted it DARKER than the strip in light themes,
+     which reads as unselected; raised elements are the lighter ones). The
+     accent moved to the TOP edge, and the 1px drop-shadow below covers the
+     header's border so tab and content join seamlessly — the editor-tab
+     pattern, polarity-correct in both themes by construction. */
+  background: var(--vscode-tab-activeBackground,
+    var(--vscode-sideBar-background, var(--vscode-editor-background, #1e1e1e)));
+  box-shadow: inset 0 1px 0 var(--vscode-focusBorder, #007acc);
+}
+/* No name cap in B/C: ~10ch is the planner's MINIMUM guarantee, never a
+   ceiling — planStrip budgets the active tab at its full width, and capping
+   here truncated CLAUDE.md beside free space (uppercase runs wider than ch).
+   The active max-width above is the only bound; ellipsis is the last resort. */
+.gfp-tab-icon,
+.gfp-tab-close { flex-shrink: 0; }
+.gfp-tab-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gfp-tab-dirty { flex: 0 0 10px; text-align: center; }
+.gfp-tab-icon-only {
+  flex: 0 0 auto;
+  max-width: none;
+  padding: 0 8px;
+}
+.gfp-tab-icon-only .gfp-tab-name { display: none; }
+.gfp-tab-icon-only .gfp-tab-dirty:empty { display: none; }
+/* Fingers need a wider target than a 16px glyph + padding gives (the relay's
+   touch gate floors tappables at 36px). The planner measures the DOM, so the
+   wider tabs feed straight back into the A/B/C decision on touch. */
+@media (pointer: coarse) {
+  .gfp-tab-icon-only { justify-content: center; min-width: 40px; }
+  .gfp-overflow-chip { min-width: 40px; }
+}
+
+/* The chip IS a tab (owner): same cell chrome as an idle tab — full height,
+   both edges, idle-tab tone, hover — holding "…" where a name would sit. */
+.gfp-overflow-chip {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  min-width: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-left: 1px solid var(--gfp-border);
+  border-right: 1px solid var(--gfp-border);
+  background: transparent;
+  color: var(--vscode-descriptionForeground, #999);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+.gfp-overflow-chip:hover { background: var(--gfp-hover); color: inherit; }
+.gfp-overflow-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.gfp-overflow-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gfp-overflow-dirty { flex: 0 0 auto; }
+.gfp-tab-close,
+.gfp-close,
+.gfp-icon-button,
+.gfp-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--vscode-descriptionForeground, #999);
+  cursor: pointer;
+}
+/* Exception: in-tab close is a tab-cell affordance one step under bar scale.
+   Glyph 14 (15 on coarse); not the 20px bar-icon primitive. */
+.gfp-tab-close { width: 22px; height: 22px; border-radius: 5px; }
+.gfp-tab-close svg { width: 14px; height: 14px; }
+.gfp-tab-close:hover { background: var(--gfp-hover); color: inherit; }
+/* Bar-icon primitive (same recipe as chat.css .icon-btn): 20×20 glyph,
+   invisible 28×28 hit box, hover is color only. The box never paints. */
+.gfp-close,
+.gfp-icon-button,
+.gfp-toggle {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  border-radius: 8px;
+}
+.gfp-close svg,
+.gfp-icon-button svg,
+.gfp-toggle svg { width: 20px; height: 20px; }
+.gfp-close:hover,
+.gfp-icon-button:hover,
+.gfp-toggle:hover {
+  color: var(--vscode-foreground, inherit);
+  background: transparent;
+}
+.gfp-close:active,
+.gfp-icon-button:active,
+.gfp-toggle:active { opacity: 0.82; }
+.gfp-close:focus-visible,
+.gfp-icon-button:focus-visible,
+.gfp-toggle:focus-visible {
+  color: var(--vscode-foreground, inherit);
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: -2px;
+}
+
+.gfp-close { align-self: center; margin: 0 8px 0 auto; }
+.gfp-close[hidden] { display: none !important; }
+
+/* Bar-icon primitive via .gfp-icon-button. Desktop mount opts in via
+   mount.maximize; the control is absent on remote/phone. */
+.gfp-maximize {
+  align-self: center;
+  /* Pinned to the strip's RIGHT edge (owner): margin-left auto keeps it there
+     even when the tabs container is empty/display:none and nothing grows. */
+  margin: 0 4px 0 auto;
+}
+.gfp-maximize[hidden] { display: none !important; }
+
+/* Maximized is a layout class, never a persisted width. --gfp-width stays the
+   restore size; this just lets the panel eat the content row. */
+.gfp-panel.gfp-maximized {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+body.desk-ft-maximized .desk-ft-chat { display: none !important; }
+body.desk-ft-maximized .gfp-resizer,
+body.desk-ft-maximized #desk-ft-resizer { display: none !important; }
+body.desk-ft-maximized .gfp-panel {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.gfp-filter {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: auto;
+  height: 28px;
+  margin: 7px 8px 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--vscode-input-border, var(--gfp-border));
+  border-radius: 5px;
+  outline: none;
+  background: var(--vscode-input-background, rgba(0, 0, 0, 0.12));
+  color: var(--vscode-input-foreground, inherit);
+  font: inherit;
+}
+.gfp-filter:focus { border-color: var(--vscode-focusBorder, #007acc); }
+
+.gfp-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 6px 12px;
+}
+.gfp-tree[hidden] { display: none !important; }
+
+.gfp-node[hidden] { display: none !important; }
+.gfp-children { display: none; }
+.gfp-expanded > .gfp-children { display: block; }
+
+.gfp-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--rail-row-min-height, 24px);
+  padding: 3px 6px 3px calc(6px + var(--gfp-depth, 0) * 12px);
+  border-radius: var(--rail-row-radius, 5px);
+  cursor: pointer;
+  outline: none;
+}
+.gfp-row:hover,
+.gfp-row:focus-visible { background: var(--gfp-hover); }
+.gfp-row:focus-visible { box-shadow: inset 0 0 0 1px var(--vscode-focusBorder, #007acc); }
+.gfp-lead {
+  display: inline-flex;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--vscode-descriptionForeground, #999);
+}
+.gfp-lead svg,
+.gfp-lead img { display: block; width: 16px; height: 16px; }
+.gfp-file-icon-mono {
+  display: block;
+  width: 16px;
+  height: 16px;
+  background: var(--vscode-descriptionForeground, #999);
+  -webkit-mask: var(--gfp-icon-url) center / contain no-repeat;
+  mask: var(--gfp-icon-url) center / contain no-repeat;
+}
+.gfp-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The fade that masks row text under the action buttons. It has to end in the
+   colour the row is ACTUALLY painted, and the row it appears on is a hovered
+   one — so it fades to the hover background, not the side bar's. Fading to
+   `--vscode-sideBar-background` left a visibly wrong patch at the right end of
+   every hovered row. The rail solved this the same way, via `--rail-hover-bg`. */
+.gfp-row-actions {
+  position: absolute;
+  inset: 1px 2px 1px auto;
+  display: none;
+  align-items: center;
+  padding-left: 14px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--rail-hover-bg, var(--vscode-list-hoverBackground, var(--vscode-sideBar-background, #1e1e1e))) 12px
+  );
+}
+.gfp-row:hover .gfp-row-actions,
+.gfp-row:focus-within .gfp-row-actions { display: flex; }
+/* No actions, no fade. A host that supplies none — the browser client, where
+   Open-in-app and Reveal are host-local and cannot travel — still hovered up a
+   gradient with nothing in it, which reads as a shadow smeared over the row. */
+.gfp-row-actions:empty { display: none !important; }
+
+.gfp-status { padding: 16px 12px; color: var(--vscode-descriptionForeground, #999); text-align: center; }
+.gfp-error { color: var(--vscode-errorForeground, #f44); }
+
+.gfp-viewer {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.gfp-viewer[hidden] { display: none !important; }
+.gfp-viewer-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  min-height: 36px;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--gfp-border);
+}
+/* Parks Cancel / Save / ⋯ at the trailing edge. Modes stay on the left. */
+.gfp-viewer-end {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.gfp-back svg { transform: rotate(180deg); }
+.gfp-viewer-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gfp-viewer-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+}
+.gfp-viewer-body:has(.gfp-editor) { padding: 0; }
+.gfp-viewer-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* ---- editable syntax highlighting -------------------------------------
+   A transparent-text <textarea> sitting exactly on top of a <pre> holding the
+   highlighted copy. The textarea still owns the text, the caret and the
+   selection; the <pre> is decoration and never feeds a save, so the worst this
+   can go wrong is misaligned colour.
+
+   Alignment IS the feature. Every metric below has to be identical on both
+   layers — font, size, line-height, padding, box-sizing, tab-size and, the one
+   that is easy to forget, the WRAP MODE: a textarea left on its default soft
+   wrap breaks lines in places a `pre-wrap` block does not, and the caret then
+   drifts further from the glyphs the further down the file you go. Both are
+   pinned to the same rules the read-only <pre> above already uses, so toggling
+   Edit does not reflow the file either. */
+.gfp-code-edit {
+  position: relative;
+  display: block;
+  flex: 1 1 auto;
+  min-height: 100%;
+}
+/* Both selectors are deliberately MORE SPECIFIC than the rules they have to
+   beat — `.gfp-editor` (which sets colour, background, padding and the font on
+   the same element) and `.gfp-viewer-body pre` (which sets the font and wrap
+   mode on the underlay). Written first as plain `.gfp-editor-overlaid`, it lost
+   to `.gfp-editor` purely on source order: the textarea kept its own opaque
+   background and foreground, painting its text over the highlighted copy and
+   hiding the underlay entirely — a browser-only failure that no DOM test can
+   see, caught by `npm run e2e:screens`. Specificity, not order, so moving these
+   rules cannot silently break it again. */
+/* Touch exception: stay 12px (code columns over point size). The two layers
+   must always change together — alignment is the feature. */
+.gfp-viewer-body pre.gfp-code-underlay,
+.gfp-editor.gfp-editor-overlaid {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 10px 12px;
+  border: 0;
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  tab-size: 2;
+  /* The metric that got away from the list above. A classic (space-taking)
+     scrollbar shrinks the TEXTAREA's content box only, so once the file is long
+     enough to scroll the two layers wrap at different widths — measured at the
+     default 280px panel, 52 of 372 real lines laid out differently, which puts
+     the caret beside the wrong glyph on every one of them. Reserving the gutter
+     on BOTH layers keeps them identical whether or not a scrollbar is present.
+     Desk-only in practice (mobile uses overlay scrollbars) and invisible to the
+     screens gate, because headless Chromium reports a 0px gutter where headed
+     reports 8px. */
+  scrollbar-gutter: stable;
+}
+.gfp-viewer-body pre.gfp-code-underlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--vscode-editor-foreground, inherit);
+  background: var(--vscode-editor-background, transparent);
+}
+.gfp-editor.gfp-editor-overlaid {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  resize: none;
+  outline: none;
+  overflow: auto;
+  background: transparent;
+  /* The text is carried by the layer below; only the caret and the selection
+     are the textarea's to draw. */
+  color: transparent;
+  caret-color: var(--vscode-editor-foreground, #d4d4d4);
+}
+.gfp-editor.gfp-editor-overlaid::selection {
+  background: var(--vscode-editor-selectionBackground, rgba(120, 150, 200, 0.4));
+  color: transparent;
+}
+
+/* Token palette — VS Code's own Dark+/Light+ token colours, so a file looks the
+   way the same file looks in the editor next to it. Dark is the default and
+   light overrides on the VS Code body class, matching the inline-diff palette
+   in chat.css. A remote browser without that class gets the dark set, which is
+   also what the relay client's own chrome uses. */
+:root {
+  --hl-com: #6a9955;
+  --hl-str: #ce9178;
+  --hl-num: #b5cea8;
+  --hl-kw: #569cd6;
+  --hl-typ: #4ec9b0;
+  --hl-fn: #dcdcaa;
+  --hl-prop: #9cdcfe;
+  --hl-tag: #808080;
+  --hl-tagname: #569cd6;
+  --hl-atr: #9cdcfe;
+  --hl-add: #40c977;
+  --hl-del: #fa423e;
+}
+body.vscode-light {
+  --hl-com: #008000;
+  --hl-str: #a31515;
+  --hl-num: #098658;
+  --hl-kw: #0000ff;
+  --hl-typ: #267f99;
+  --hl-fn: #795e26;
+  --hl-prop: #0451a5;
+  --hl-tag: #800000;
+  --hl-tagname: #800000;
+  --hl-atr: #e50000;
+  --hl-add: #00a240;
+  --hl-del: #ba2623;
+}
+.hl-com { color: var(--hl-com); font-style: italic; }
+.hl-str { color: var(--hl-str); }
+.hl-num { color: var(--hl-num); }
+.hl-kw { color: var(--hl-kw); }
+.hl-typ { color: var(--hl-typ); }
+.hl-fn { color: var(--hl-fn); }
+.hl-prop { color: var(--hl-prop); }
+.hl-tag { color: var(--hl-tag); }
+.hl-tagname { color: var(--hl-tagname); }
+.hl-atr { color: var(--hl-atr); }
+.hl-add { color: var(--hl-add); }
+.hl-del { color: var(--hl-del); }
+
+.gfp-viewer-body img { display: block; max-width: 100%; height: auto; }
+.gfp-markdown .md-table-wrap { max-width: 100%; overflow: auto; }
+.gfp-editor {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 100%;
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 10px 12px;
+  border: 0;
+  resize: none;
+  outline: none;
+  background: var(--vscode-editor-background, transparent);
+  color: var(--vscode-editor-foreground, inherit);
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.gfp-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 26px;
+  padding: 3px 9px;
+  border: 1px solid var(--vscode-button-border, var(--gfp-border));
+  border-radius: 4px;
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, inherit);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+/* Textual .gfp-action icons (if any) keep a compact glyph. Icon-only viewer
+   actions override to the 20px bar-icon primitive below. SVGs carry only a
+   viewBox, so a size here is load-bearing — without it the button is empty. */
+.gfp-action svg { width: 15px; height: 15px; flex: 0 0 auto; }
+.gfp-action:disabled { opacity: 0.5; cursor: default; }
+.gfp-action-primary { border-color: transparent; background: var(--vscode-button-background, #0e639c); color: var(--vscode-button-foreground, #fff); }
+.gfp-action-danger { border-color: var(--vscode-errorForeground, #f44); color: var(--vscode-errorForeground, #f44); }
+
+.gfp-notice {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--gfp-border);
+  color: var(--vscode-descriptionForeground, #999);
+  font-size: 12px;
+}
+.gfp-notice-warning { color: var(--vscode-inputValidation-warningForeground, var(--vscode-editorWarning-foreground, #cca700)); }
+.gfp-conflict-actions { display: flex; flex: 0 0 auto; gap: 8px; padding: 6px 12px 8px; border-bottom: 1px solid var(--gfp-border); }
+
+.gfp-menu {
+  position: fixed;
+  /* Above the phone's full-screen panel overlay (1200) and the rail (1100):
+     these menus mount on document.body, and at 1000 the chip's dropdown and
+     the viewer's More-actions opened UNDERNEATH the overlay — tapping "…"
+     on mobile presented nothing (owner-caught, 2026-08-15). */
+  z-index: 1300;
+  display: flex;
+  min-width: 190px;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--gfp-border);
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background, #252526));
+  color: var(--vscode-menu-foreground, inherit);
+}
+.gfp-menu-item {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+/* The rail's highlight, deliberately: `--vscode-list-hoverBackground` is what
+   every other row menu in this UI uses, while `--vscode-menu-selectionBackground`
+   is a different and usually much stronger, often accent-coloured token — so the
+   file panel's ⋯ menu lit up differently from the project rail's on the same
+   screen. Focus and danger styling follow `.rail-menu-item` for the same
+   reason. */
+.gfp-menu-item:hover:not(:disabled) { background: var(--vscode-list-hoverBackground); }
+.gfp-menu-item:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; }
+.gfp-menu-item:disabled { opacity: .4; cursor: default; }
+.gfp-menu-item.danger { color: var(--vscode-errorForeground); }
+
+/* Viewer toolbar — three primitives, not one:
+   1. .gfp-seg / .gfp-seg-on  — mode segments (Preview / Source). Grouped,
+      1px border, selected fill. Never a bar-icon.
+   2. .gfp-viewer .gfp-action.gfp-icon-only — bare bar-icon actions
+      (Edit file, More). Invisible box, color-only hover.
+   3. .gfp-action — text buttons (Cancel, Save, conflict).
+   Modes are never bar-icons; actions are never segments. */
+.gfp-seg {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--gfp-border);
+  border-radius: 6px;
+}
+.gfp-seg-btn {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  min-width: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--vscode-descriptionForeground, #999);
+  cursor: pointer;
+}
+.gfp-seg-btn svg { width: 16px; height: 16px; flex: 0 0 auto; }
+.gfp-seg-btn:hover:not(:disabled):not(.gfp-seg-on) {
+  color: var(--vscode-foreground, inherit);
+  background: transparent;
+}
+.gfp-seg-btn:focus-visible {
+  color: var(--vscode-foreground, inherit);
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: -2px;
+}
+.gfp-seg-on {
+  background: var(--vscode-list-activeSelectionBackground, rgba(0, 122, 204, 0.28));
+  color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground, #fff));
+}
+.gfp-seg-on:hover:not(:disabled) {
+  background: var(--vscode-list-activeSelectionBackground, rgba(0, 122, 204, 0.28));
+  color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground, #fff));
+}
+
+.gfp-viewer .gfp-action.gfp-icon-only {
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--vscode-descriptionForeground, #999);
+}
+.gfp-viewer .gfp-action.gfp-icon-only svg { width: 20px; height: 20px; }
+.gfp-viewer .gfp-action.gfp-icon-only:hover:not(:disabled) {
+  color: var(--vscode-foreground, inherit);
+  background: transparent;
+}
+.gfp-viewer .gfp-action.gfp-icon-only:active:not(:disabled) { opacity: 0.82; }
+.gfp-viewer .gfp-action.gfp-icon-only:focus-visible {
+  color: var(--vscode-foreground, inherit);
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: -2px;
+}
+
+/* The filter searches the TREE. With a file open there is no tree to filter, so
+   the box is not merely useless there — it invites typing that does nothing. */
+.gfp-panel.gfp-viewing .gfp-filter { display: none; }
+
+/* 899, not 640, and the number is not arbitrary: it is the width at which the
+   browser client stops giving the panel a third column to dock into
+   (`#file-panel-dock` in web/chat.html flips at 900). Below that the panel is an
+   overlay, and an overlay that is neither docked nor full-screen is the worst of
+   both — it floated over the middle of the chat with the rail visible behind it.
+   Tying this to the SAME breakpoint means there is no width where the panel is
+   in between. */
+@media (max-width: 899px) {
+  /* The panel takes the WHOLE screen, host chrome included — the same thing the
+     projects rail does. A file browser squeezed under a session header is the
+     desktop layout wearing a narrow width: the header is the one row you are
+     not reading while you are looking for a file.
+
+     This deliberately reverses the earlier rule that stopped the overlay below
+     the host's bar (`--gfp-overlay-top`). That rule existed because covering the
+     bar also covered the button that had just opened the panel — a real problem,
+     and the reason the way out has to live INSIDE the panel. It does: the
+     header's own close button. Which is also why the per-tab X goes below —
+     one close control for the panel beats one per file. */
+  .gfp-panel.gfp-overlay {
+    inset: 0;
+    width: 100vw;
+    max-width: 100vw;
+    border-left: 0;
+    box-shadow: none;
+    /* Above the rail (1100), so whichever was opened last is the one you see. */
+    z-index: 1200;
+  }
+  .gfp-panel.gfp-overlay .gfp-header { min-height: 51px; }
+  /* The per-tab X used to be hidden here ("you leave the panel, you don't
+     close files") — that rationale died with the overflow strip: only the
+     ACTIVE tab carries an X now, so there is exactly one, and the owner's
+     invariant is that the active tab's X is always visible, phone included.
+     The header's own ✕ still closes the PANEL. */
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .gfp-panel { font-size: 15px; }
+  .gfp-viewer-name { font-size: 14px; }
+  /* Reader prose — 12px on a phone was the worst text in the app. 1.55 matches .desk-ft-md. */
+  .gfp-markdown { font-size: 15px; line-height: 1.55; }
+  /* Mirrors --rail-row-min-height for any mount that loads this file without chat.css. */
+  .gfp-row { min-height: 36px; }
+  /* iOS Safari force-zooms the page when a focused input is under 16px. */
+  .gfp-filter { font-size: 16px; }
+  /* The 36px segments fill the toolbar's 36px min-height edge to edge on
+     touch; give the row air. Desktop keeps 2px — its 28px controls already
+     breathe inside the same min-height. */
+  .gfp-viewer-head { padding-block: 6px; }
+  .gfp-close,
+  .gfp-icon-button,
+  .gfp-toggle,
+  .gfp-viewer .gfp-action.gfp-icon-only,
+  .gfp-seg-btn {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+  }
+  /* Finger-sized close on the active tab (the relay's tap floor is 36px).
+     Glyph stays 15 — in-tab affordance, not the 20px bar scale. */
+  .gfp-tab-close { width: 36px; height: 36px; }
+  .gfp-tab-close svg { width: 15px; height: 15px; }
+  .gfp-row-actions { display: flex; }
+  /* 36px buttons + 1px inset overflow a 36px row; cap to the inset box. */
+  .gfp-row-actions .gfp-icon-button {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    min-height: 34px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gfp-panel, .gfp-resizer { scroll-behavior: auto; }
+}
+
+/* The action offered inside a "could not open this" tab — the OS route, which
+   the desktop used to take on your behalf before you could see which file it
+   was. Centred under the message it belongs to. */
+.gfp-status-actions {
+  display: flex;
+  justify-content: center;
+  padding: 4px 12px 12px;
+}
+
+/* The panel's own text buttons (Save / Cancel / mode toggles) were 26px tall,
+   which is thin for the two controls that commit or discard an edit. Same 36px
+   floor and the same coarse-pointer gate as the chat's icon buttons — see the
+   note at the end of chat.css for why the number is 36. */
+@media (hover: none) and (pointer: coarse) {
+  .gfp-action,
+  .gfp-tab {
+    min-height: 36px;
+  }
+  .gfp-action { min-width: 36px; }
+}

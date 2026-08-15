@@ -1,0 +1,1653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script>
+  // Set the theme before first paint (no flash), and expose the toggle.
+  (function () {
+    var root = document.documentElement;
+    var saved;
+    try { saved = localStorage.getItem("grok-remote-theme"); } catch (e) {}
+    var initial = saved || ((window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark");
+    root.setAttribute("data-theme", initial);
+    window.__toggleTheme = function () {
+      var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem("grok-remote-theme", next); } catch (e) {}
+    };
+  })();
+</script>
+<title>AFK Pilot — your Grok agent from any browser</title>
+<meta name="description" content="AFK Pilot connects the Grok Build for VS Code (Community) agent to any browser. Pair once with a one-time code, then chat and steer your agent from your phone, tablet, or another laptop." />
+<meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#fbfbfc" media="(prefers-color-scheme: light)" />
+<meta property="og:type" content="website" />
+<link rel="canonical" href="https://afkpilot.com/" />
+<meta property="og:url" content="https://afkpilot.com/" />
+<meta property="og:title" content="AFK Pilot — your Grok agent from any browser" />
+<meta property="og:description" content="Pair your Grok agent with a one-time code and chat with it from any browser. Messages are relayed in memory — never stored on our servers." />
+<meta property="og:image" content="https://afkpilot.com/og-home.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="AFK Pilot connecting a Grok Build agent to a phone browser" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:image" content="https://afkpilot.com/og-home.png" />
+<meta name="twitter:image:alt" content="AFK Pilot connecting a Grok Build agent to a phone browser" />
+<link rel="icon" href="/favicon.svg" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="stylesheet" href="/theme.css" />
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://afkpilot.com/#organization",
+      "name": "AFK Pilot",
+      "url": "https://afkpilot.com/",
+      "logo": "https://afkpilot.com/logo.svg"
+    },
+    {
+      "@type": "WebSite",
+      "name": "AFK Pilot",
+      "url": "https://afkpilot.com/",
+      "description": "Remote access to a Grok Build coding agent from any browser.",
+      "publisher": { "@id": "https://afkpilot.com/#organization" }
+    }
+  ]
+}
+</script>
+<style>
+  .main { flex: 1; }
+
+  /* forwarding waypoint (?remoteHint=1 / ?linked=1 → straight to the chat) */
+  .forwarding-note {
+    color: var(--muted);
+    text-align: center;
+    padding-block: clamp(3rem, 12vw, 6rem);
+    font-size: 1.05rem;
+  }
+  .loading-dots::after {
+    content: "…";
+    display: inline-block;
+    animation: dots 1.4s steps(4, end) infinite;
+    width: 1.2em;
+    text-align: left;
+    overflow: hidden;
+    vertical-align: bottom;
+  }
+  @keyframes dots { 0% { width: 0; } 100% { width: 1.2em; } }
+  @media (prefers-reduced-motion: reduce) { .loading-dots::after { animation: none; } }
+
+  /* ---------------- hero ---------------- */
+  .hero { padding-block: clamp(3rem, 8vw, 6rem); }
+  .hero-grid {
+    display: grid;
+    grid-template-columns: 1.05fr 0.95fr;
+    gap: clamp(2rem, 5vw, 4.5rem);
+    align-items: center;
+  }
+  .hero h1 {
+    font-size: var(--step-hero);
+    line-height: 1.04;
+    letter-spacing: -0.025em;
+    margin: 1.1rem 0 0;
+    max-width: 15ch;
+  }
+  .hero-sub {
+    margin: 1.4rem 0 0;
+    font-size: var(--step-1);
+    line-height: 1.55;
+    color: var(--muted);
+    max-width: 40ch;
+  }
+  .hero-cta { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 2rem; }
+  .hero-note {
+    margin: 1.4rem 0 0;
+    font-family: var(--font-mono);
+    font-size: var(--step--1);
+    color: var(--faint);
+  }
+  /* The honest exit. Someone who only wants the agent on one machine does not
+     need this product, and telling them so here costs one line and buys the
+     trust of not having been funnelled. Deliberately quieter than .hero-note
+     and NOT a button: a third call to action beside "Start free" and
+     "See pricing" competed with the page's actual job. */
+  .hero-alt {
+    margin: 0.5rem 0 0;
+    font-size: var(--step--1);
+    color: var(--faint);
+  }
+  .hero-alt a { color: inherit; text-underline-offset: 3px; }
+  .hero-alt a:hover { color: var(--text); }
+
+  /* ---------------- signature: the remote panel + pairing code ---------------- */
+  .showcase { position: relative; padding: 0 clamp(0.5rem, 2vw, 1.5rem); }
+  .hero-shot {
+    display: block;
+    width: 100%;
+    max-width: 300px;
+    height: auto;
+    margin-inline: auto;
+    filter: drop-shadow(0 20px 45px rgba(0, 0, 0, 0.45));
+  }
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+  }
+  .panel-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.7rem 0.9rem;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .panel-mark {
+    width: 15px; height: 15px; flex: none;
+    background-color: var(--muted);
+    -webkit-mask: url(/logo.svg) center / contain no-repeat;
+    mask: url(/logo.svg) center / contain no-repeat;
+  }
+  .panel-title {
+    font-family: var(--font-mono);
+    font-size: var(--step--1);
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .live {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--green);
+  }
+  .live-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 0 var(--green);
+    animation: pulse 2.4s ease-out infinite;
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(78, 201, 176, 0.45); }
+    70% { box-shadow: 0 0 0 7px rgba(78, 201, 176, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(78, 201, 176, 0); }
+  }
+
+  .panel-body { padding: 1.25rem 1.1rem 1.1rem; display: flex; flex-direction: column; gap: 0.85rem; }
+  .msg { font-size: 0.95rem; line-height: 1.5; max-width: 85%; }
+  .msg-user {
+    align-self: flex-end;
+    background: var(--accent-soft);
+    border: 1px solid var(--border-soft);
+    color: var(--text);
+    padding: 0.55rem 0.8rem;
+    border-radius: 12px 12px 3px 12px;
+  }
+  .msg-agent { align-self: flex-start; color: var(--text); }
+  .msg-agent p { margin: 0; }
+  .msg-agent code {
+    font-size: 0.85em;
+    background: var(--code-bg);
+    border: 1px solid var(--border-soft);
+    padding: 0.05em 0.4em;
+    border-radius: 5px;
+  }
+  .agent-status {
+    margin-top: 0.55rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--muted);
+  }
+  .agent-status .ok { width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex: none; }
+
+  .panel-composer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.7rem 0.9rem;
+    border-top: 1px solid var(--border-soft);
+  }
+  .panel-composer .prompt { font-family: var(--font-mono); font-size: 0.85rem; color: var(--faint); }
+  .send-chip {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.05em;
+    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.22rem 0.55rem;
+  }
+
+  .code-ticket {
+    position: absolute;
+    left: clamp(0.5rem, 3vw, 2.3rem);
+    bottom: 0.7rem;
+    background: var(--ticket-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: var(--shadow-lg);
+    padding: 0.7rem 0.95rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .code-ticket .lbl {
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+  .code-ticket .code {
+    font-family: var(--font-mono);
+    font-size: 1.15rem;
+    letter-spacing: 0.22em;
+    color: var(--heading);
+  }
+
+  /* load reveal */
+  .reveal { opacity: 0; transform: translateY(10px); animation: rise 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+  .d1 { animation-delay: 0.05s; } .d2 { animation-delay: 0.12s; } .d3 { animation-delay: 0.19s; }
+  .d4 { animation-delay: 0.26s; } .d5 { animation-delay: 0.34s; }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+
+  /* ---------------- features ---------------- */
+  .features { border-top: 1px solid var(--border-soft); padding-block: clamp(2.5rem, 6vw, 4.5rem); }
+  .features-grid { display: grid; grid-template-columns: repeat(3, 1fr); }
+  .feature { padding: 0.2rem clamp(1rem, 3vw, 2.4rem); }
+  .feature:not(:first-child) { border-left: 1px solid var(--border-soft); }
+  .feature .kw {
+    font-family: var(--font-mono);
+    font-size: var(--step--1);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .feature h3 { font-size: var(--step-1); margin: 0.7rem 0 0.5rem; letter-spacing: -0.01em; }
+  .feature p { margin: 0; color: var(--muted); font-size: 0.95rem; line-height: 1.55; }
+
+  /* ---------------- get started: three steps ---------------- */
+  .steps-section { padding-block: clamp(2.5rem, 6vw, 4.5rem); }
+  .steps-head h2 { font-size: var(--step-2); letter-spacing: -0.02em; margin: 0.5rem 0 0; max-width: 22ch; }
+  .steps-grid {
+    list-style: none;
+    margin: clamp(1.5rem, 3vw, 2.4rem) 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: clamp(1rem, 2.5vw, 1.5rem);
+  }
+  .step-card {
+    padding: clamp(1.3rem, 2.5vw, 1.7rem);
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-lg);
+  }
+  .step-num {
+    display: grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 50%;
+  }
+  .step-card h3 { font-size: var(--step-1); margin: 0.85rem 0 0.4rem; letter-spacing: -0.01em; }
+  .step-card p { margin: 0; color: var(--muted); font-size: 0.95rem; line-height: 1.55; }
+  .step-card b { color: var(--heading); font-weight: 600; }
+
+  /* ---------------- pricing ---------------- */
+  .pricing { border-top: 1px solid var(--border-soft); padding-block: clamp(2.75rem, 7vw, 5rem); }
+  .pricing-head { text-align: center; max-width: 40ch; margin-inline: auto; }
+  .pricing-head h2 { font-size: var(--step-3); letter-spacing: -0.015em; margin: 0.7rem 0 0; }
+  .pricing-head p { color: var(--muted); margin: 0.75rem 0 0; }
+  .plans {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+    max-width: 780px;
+    margin: 2.75rem auto 0;
+  }
+  .plan {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1.75rem 1.6rem;
+    display: flex;
+    flex-direction: column;
+  }
+  .plan-max { border-color: var(--accent); background: linear-gradient(180deg, var(--accent-soft), transparent 55%), var(--surface); }
+  .plan-name { font-family: var(--font-mono); font-size: var(--step--1); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .plan-max .plan-name { color: var(--accent); }
+  .plan-price { display: flex; align-items: baseline; gap: 0.5rem; margin-top: 0.6rem; }
+  .plan-price .amt { font-size: var(--step-3); font-weight: 600; color: var(--heading); letter-spacing: -0.01em; }
+  .plan-price .per { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); }
+  .plan-lead { margin: 0.9rem 0 0; color: var(--muted); font-size: 0.9rem; min-height: 1.2em; }
+  .plan ul { list-style: none; margin: 1.25rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+  .plan li { position: relative; padding-left: 1.55rem; font-size: 0.93rem; color: var(--text); }
+  .plan li::before {
+    content: "";
+    position: absolute; left: 0; top: 0.35em;
+    width: 0.85rem; height: 0.45rem;
+    border-left: 2px solid var(--green);
+    border-bottom: 2px solid var(--green);
+    transform: rotate(-45deg);
+  }
+  .plan .btn { margin-top: 1.6rem; width: 100%; }
+  .plan-fine { margin: 0.85rem 0 0; font-family: var(--font-mono); font-size: 0.72rem; color: var(--faint); text-align: center; }
+  .pricing-note { margin: 1.5rem auto 0; max-width: 780px; text-align: center; font-family: var(--font-mono); font-size: 0.72rem; color: var(--faint); }
+
+  /* info tooltip — hover on desktop, tap-to-toggle on touch (no hover to rely on) */
+  .info-wrap { position: relative; display: inline-flex; vertical-align: middle; margin-left: 0.35rem; }
+  .info-btn {
+    width: 1.05rem; height: 1.05rem; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .info-btn:hover, .info-btn:focus-visible { color: var(--accent); border-color: var(--accent); }
+  .info-bubble {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 9px);
+    transform: translateX(-50%) translateY(4px);
+    width: max-content;
+    max-width: min(260px, 70vw);
+    background: var(--heading);
+    color: var(--bg);
+    font-family: var(--font-sans);
+    font-size: 0.78rem;
+    font-weight: 400;
+    line-height: 1.5;
+    text-align: left;
+    padding: 0.65rem 0.8rem;
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-lg);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    z-index: 5;
+  }
+  .info-bubble::after {
+    content: "";
+    position: absolute;
+    top: 100%; left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: var(--heading);
+  }
+  .info-wrap:hover .info-bubble,
+  .info-wrap.is-open .info-bubble {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+    pointer-events: auto;
+  }
+
+  /* ---------------- app view (signed in) ---------------- */
+  .app { padding-block: clamp(2rem, 5vw, 3.25rem); }
+  .app + .app { border-top: 1px solid var(--border-soft); }
+  .app h2 { font-size: var(--step-2); letter-spacing: -0.01em; margin: 0.45rem 0 0; }
+  .app-hint { color: var(--muted); margin: 0.6rem 0 0; font-size: 0.95rem; }
+
+  /* usage meter (free-tier, signed-in) — hidden for entitled / mock users */
+  #usage-meter {
+    margin: 1.4rem 0 0;
+    padding: 0.95rem 1.1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .usage-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem 0.6rem; }
+  .usage-label { font-family: var(--font-mono); font-size: var(--step--1); color: var(--muted); }
+  .usage-label b { color: var(--heading); font-weight: 600; }
+  .usage-devices { font-family: var(--font-mono); font-size: var(--step--1); color: var(--faint); }
+  .usage-upgrade { margin-left: auto; font-size: var(--step--1); }
+  .usage-bar { margin-top: 0.7rem; height: 5px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+  .usage-fill { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 0.4s ease; }
+  .usage-fill.is-high { background: var(--red); }
+  .usage-note { margin: 0.55rem 0 0; color: var(--faint); font-size: var(--step--1); }
+
+  /* device manager — icon + name + parenthetical, then a start action */
+  #list { list-style: none; margin: 1.5rem 0 0; padding: 0; display: grid; gap: 0.7rem; }
+  .device-row {
+    display: flex;
+    align-items: stretch;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    transition: border-color 0.15s ease, background 0.15s ease, opacity 0.15s ease;
+  }
+  .device-row:hover { border-color: var(--accent); background: var(--surface-2); }
+  .device-row[data-online="false"] { opacity: 0.6; }
+  .device-row[data-online="false"]:hover { opacity: 0.85; }
+  .device-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+    padding: 0.95rem 0.4rem 0.95rem 1.1rem;
+  }
+  .device-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.7rem;
+    min-width: 0;
+  }
+  .device-os-icon {
+    flex: none;
+    width: 1.35rem;
+    height: 1.35rem;
+    color: var(--muted);
+    margin-top: 0.12rem;
+  }
+  .device-os-icon svg { display: block; width: 100%; height: 100%; }
+  .device-text {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.15rem 0.45rem;
+  }
+  .device-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--heading);
+    font-weight: 500;
+  }
+  .device-meta {
+    margin: 0;
+    color: var(--muted);
+    font-weight: 400;
+    font-size: var(--step--1);
+  }
+  .device-badge {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: var(--step--1);
+    font-weight: 400;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .device-badge.is-offline { color: var(--faint); text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.7rem; }
+  .device-start {
+    align-self: flex-start;
+    margin-left: calc(1.35rem + 0.7rem);
+    font-size: 0.85rem;
+    padding: 0.52rem 0.95rem;
+  }
+  .device-start.is-disabled {
+    opacity: 0.5;
+    cursor: default;
+    pointer-events: none;
+  }
+  .device-remove {
+    flex: none;
+    align-self: stretch;
+    padding: 0 0.95rem;
+    background: transparent;
+    border: 0;
+    border-left: 1px solid var(--border-soft);
+    color: var(--faint);
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 0.15s ease, background 0.15s ease;
+  }
+  .device-remove:hover { color: var(--red); background: var(--surface-2); }
+
+  .dialog-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: grid;
+    place-items: center;
+    padding: 1.25rem;
+    background: rgba(0, 0, 0, 0.58);
+  }
+  .dialog-overlay[hidden] { display: none; }
+  .dialog-panel {
+    width: min(420px, 100%);
+    padding: 1.4rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
+  }
+  .dialog-panel h3 { margin: 0; color: var(--heading); font-size: var(--step-1); }
+  .dialog-panel p { margin: 0.75rem 0 0; color: var(--muted); line-height: 1.55; }
+  .dialog-actions { display: flex; justify-content: flex-end; gap: 0.7rem; margin-top: 1.35rem; }
+  .btn-danger { color: var(--on-btn); background: var(--red); border-color: var(--red); }
+  .btn-danger:hover { filter: brightness(1.08); }
+
+  .empty {
+    margin: 1.5rem 0 0;
+    padding: 1.4rem 1.5rem;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    color: var(--muted);
+    background: var(--surface);
+    font-size: 0.95rem;
+  }
+  /* Auth/server failures must not reuse .empty — a 401 used to look identical
+     to "no devices", which is how a session incident read as an empty account. */
+  .picker-status {
+    margin: 1.5rem 0 0;
+    padding: 1.4rem 1.5rem;
+    border-radius: var(--radius);
+    background: var(--surface);
+    font-size: 0.95rem;
+    line-height: 1.55;
+  }
+  .picker-status p { margin: 0; }
+  .picker-session { border: 1px solid var(--yellow); color: var(--heading); }
+  .picker-unreachable { border: 1px dashed var(--border); color: var(--muted); }
+  #picker-reauth { margin-top: 1rem; }
+
+  /* "get set up" — a quiet numbered sequence under the list, not a boxed card.
+     Numbers are earned here: link the editor FIRST, then take it mobile. */
+  #add-device { margin: 1.6rem 0 0; padding-top: 1.3rem; border-top: 1px solid var(--border-soft); }
+  #add-device .add-title {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: var(--step--1);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .setup-steps {
+    margin: 1rem 0 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: step;
+    display: grid;
+    gap: 0.9rem;
+    max-width: 62ch;
+  }
+  .setup-steps li {
+    counter-increment: step;
+    position: relative;
+    padding-left: 2.15rem;
+    color: var(--muted);
+    font-size: 0.92rem;
+    line-height: 1.6;
+    overflow-wrap: break-word;
+  }
+  .setup-steps li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 0.12em;
+    width: 1.45rem;
+    height: 1.45rem;
+    display: grid;
+    place-items: center;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--accent);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+  }
+  .setup-steps b { color: var(--heading); font-weight: 600; }
+  .setup-grid {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: clamp(1.5rem, 4vw, 3rem);
+    align-items: start;
+  }
+  .setup-shot {
+    display: block;
+    width: 100%;
+    max-width: 210px;
+    height: auto;
+    filter: drop-shadow(0 16px 36px rgba(0, 0, 0, 0.4));
+  }
+  @media (max-width: 620px) {
+    .setup-grid { grid-template-columns: 1fr; }
+    .setup-shot { max-width: 240px; margin-inline: auto; }
+  }
+  /* One install CTA, chosen by the device — a phone gets the web app, a
+     computer gets the real desktop app. They are never both shown: offering a
+     browser wrapper to someone who can run the native host is the wrong
+     recommendation, and offering an .exe to a phone is a dead end. */
+  .install-cta { display: inline-flex; align-items: center; gap: 0.45rem; white-space: nowrap; }
+  .install-cta svg { width: 1rem; height: 1rem; flex: none; }
+  @media (max-width: 560px) {
+    /* Phone: the header carries brand + install + theme + profile — tighten. */
+    .site-header { gap: 0.5rem; }
+    #install-btn { padding-inline: 0.7rem; }
+    .setup-steps li { padding-left: 1.9rem; }
+  }
+
+  .ok-badge {
+    display: inline-block;
+    color: var(--green);
+    border: 1px solid var(--green);
+    border-radius: 7px;
+    padding: 0.35rem 0.7rem;
+    font-family: var(--font-mono);
+    font-size: var(--step--1);
+    margin-top: 1.25rem;
+  }
+  #pricing { margin-top: 1.5rem; }
+  #manage-btn { margin-top: 1.25rem; }
+
+  /* ---------------- faq ----------------
+     Structure here is grouping, not sequence: these are five separate worries,
+     so the rail carries concern names in the page's mono label voice and the
+     questions sit in a hairline-divided column beside it. No numbers — nothing
+     about the order is information. Native <details>, so keyboard and
+     find-in-page work without a line of JS. */
+  .faq { border-top: 1px solid var(--border-soft); padding-block: clamp(2.75rem, 7vw, 5rem); }
+  .faq-head h2 { font-size: var(--step-3); letter-spacing: -0.015em; margin: 0.7rem 0 0; max-width: 24ch; }
+  .faq-groups { margin-top: clamp(1.75rem, 4vw, 2.75rem); }
+  .faq-group {
+    display: grid;
+    grid-template-columns: 10.5rem 1fr;
+    gap: clamp(1rem, 4vw, 3rem);
+    padding-block: 0.55rem;
+    border-top: 1px solid var(--border-soft);
+  }
+  .faq-group:last-child { border-bottom: 1px solid var(--border-soft); }
+  .faq-name {
+    margin: 1.15rem 0 0;
+    font-family: var(--font-mono);
+    font-size: var(--step--1);
+    font-weight: 400;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  /* Capped to a reading measure so the marker never drifts a screen away from
+     the question it opens — the rows are a text column, not a table. */
+  .faq-list { max-width: 50rem; }
+  .faq-item + .faq-item { border-top: 1px solid var(--border-soft); }
+  .faq-item > summary {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1.5rem;
+    padding: 1.05rem 0;
+    color: var(--heading);
+    font-size: 1.0625rem;
+    font-weight: 500;
+    line-height: 1.45;
+    letter-spacing: -0.01em;
+    cursor: pointer;
+    list-style: none;
+  }
+  .faq-item > summary::-webkit-details-marker { display: none; }
+  .faq-item > summary::after {
+    content: "+";
+    flex: none;
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 1.15rem;
+    line-height: 1;
+    color: var(--faint);
+    transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1), color 0.15s ease;
+  }
+  .faq-item > summary:hover::after { color: var(--muted); }
+  .faq-item[open] > summary::after { transform: rotate(45deg); color: var(--accent); }
+  .faq-body { padding-bottom: 1.4rem; animation: faq-open 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+  @keyframes faq-open { from { opacity: 0; transform: translateY(-5px); } }
+  .faq-body p { margin: 0; max-width: 62ch; color: var(--muted); font-size: 0.95rem; line-height: 1.65; }
+  .faq-body p + p { margin-top: 0.8rem; }
+  .faq-body b { color: var(--heading); font-weight: 600; }
+  .faq-body code {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    background: var(--code-bg);
+    border: 1px solid var(--border-soft);
+    padding: 0.05em 0.4em;
+    border-radius: 5px;
+  }
+
+  /* The signature: the capability line itself, drawn straight from the
+     extension's remote-policy table. The honest answer to "what do I lose on
+     the phone" is a boundary, so it's drawn as one. */
+  .cap-split { display: grid; grid-template-columns: 1fr 1fr; margin-top: 1.35rem; }
+  .cap { padding-right: clamp(1rem, 2.5vw, 2rem); }
+  .cap + .cap {
+    padding-right: 0;
+    padding-left: clamp(1rem, 2.5vw, 2rem);
+    border-left: 1px solid var(--border-soft);
+  }
+  .cap-head {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+  .cap ul { list-style: none; margin: 0.9rem 0 0; padding: 0; display: grid; gap: 0.55rem; }
+  .cap li { position: relative; padding-left: 1.5rem; font-size: 0.9rem; line-height: 1.5; }
+  .cap-yes li { color: var(--text); }
+  .cap-yes li::before {
+    content: "";
+    position: absolute; left: 0; top: 0.3em;
+    width: 0.8rem; height: 0.42rem;
+    border-left: 2px solid var(--green);
+    border-bottom: 2px solid var(--green);
+    transform: rotate(-45deg);
+  }
+  .cap-no li { color: var(--muted); }
+  .cap-no li::before {
+    content: "";
+    position: absolute; left: 0; top: 0.72em;
+    width: 0.8rem; height: 0;
+    border-top: 2px solid var(--faint);
+  }
+
+  @media (max-width: 900px) {
+    .hero-grid { grid-template-columns: 1fr; }
+    .hero-copy { order: 1; }
+    .showcase { order: 2; padding-bottom: 4rem; max-width: 460px; margin-inline: auto; width: 100%; }
+  }
+  @media (max-width: 720px) {
+    .features-grid { grid-template-columns: 1fr; gap: 2rem; }
+    .steps-grid { grid-template-columns: 1fr; }
+    .feature { padding-inline: 0; }
+    .feature:not(:first-child) { border-left: 0; border-top: 1px solid var(--border-soft); padding-top: 2rem; }
+    .plans { grid-template-columns: 1fr; }
+    .code-ticket { position: static; margin-top: 1rem; align-self: flex-start; }
+    .showcase { display: flex; flex-direction: column; padding-bottom: 0; }
+    /* The rail becomes a header above its questions; the capability boundary
+       turns from a vertical rule into a horizontal one. */
+    .faq-group { grid-template-columns: 1fr; gap: 0; padding-block: 0.35rem 0.75rem; }
+    .faq-name { margin-top: 1.35rem; }
+    .cap-split { grid-template-columns: 1fr; }
+    .cap { padding-right: 0; }
+    .cap + .cap {
+      padding-left: 0;
+      padding-top: 1.15rem;
+      margin-top: 1.15rem;
+      border-left: 0;
+      border-top: 1px solid var(--border-soft);
+    }
+  }
+</style>
+</head>
+<body>
+  <header class="site-header wrap">
+    <a class="brand" href="/">
+      <span class="logo-mark" aria-hidden="true"></span>
+      <span class="wordmark"><b>AFK</b> <span class="dim">Pilot</span></span>
+    </a>
+    <div class="header-actions">
+      <!-- Signed-in only. Someone who met AFK Pilot through the VS Code
+           extension has no reason to guess a standalone app exists, and once
+           signed in the marketing page they arrived on is hidden — so without
+           this the desktop app is reachable only from a clause inside step 1
+           of the setup list, or the footer. Hidden while signed out because the
+           hero already leads with it. -->
+      <a id="desktop-link" class="btn btn-secondary install-cta" href="/desktop" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="12.5" rx="1.6"/><path d="M8.5 20.5h7M12 16.5v4"/></svg>
+        Install Desktop App
+      </a>
+      <button id="install-btn" class="btn btn-secondary install-cta" type="button" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="2.2"/><path d="M10.8 5.4h2.4"/><path d="M12 18.4h.01"/></svg>
+        Install app
+      </button>
+      <button class="icon-toggle" type="button" onclick="__toggleTheme()" aria-label="Toggle light and dark theme" title="Toggle theme">
+        <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.5M12 19v2.5M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2.5 12H5M19 12h2.5M4.2 19.8L6 18M18 6l1.8-1.8"/></svg>
+        <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.2 6.2 0 0 0 10.5 10.5z"/></svg>
+      </button>
+      <button id="signin-btn" class="btn btn-primary js-signin" type="button" hidden>Sign in</button>
+      <span id="signed-in-as" class="signed-in-as" hidden></span>
+      <div id="user-button"></div>
+    </div>
+  </header>
+
+  <main class="main">
+    <!-- ===================== marketing (signed out) ===================== -->
+    <div id="hero" hidden>
+      <section class="hero">
+        <div class="wrap hero-grid">
+          <div class="hero-copy">
+            <p class="eyebrow reveal d1">Grok Build (Community) — remote control</p>
+            <h1 class="reveal d2">Your Grok agent from any browser.</h1>
+            <p class="hero-sub reveal d3">AFK Pilot links your Grok Build agent to a browser on any device — running in <b>VS Code</b> or in the standalone <b>Grok Build Desktop</b>. Pair once with a one-time code, then chat, review, and steer it from your phone, tablet, or the next room.</p>
+            <div class="hero-cta reveal d4">
+              <button class="btn btn-primary js-signin" type="button">Start free</button>
+              <a class="btn btn-secondary" href="#pricing-section">See pricing</a>
+            </div>
+            <p class="hero-note reveal d5">No card to start · runs in any modern browser</p>
+            <p class="hero-alt reveal d5">Just want the agent on one machine? <a href="/desktop">Grok Build Desktop</a> is free and needs no account.</p>
+          </div>
+
+          <div class="showcase">
+            <img class="hero-shot reveal d3" src="/hero-phone.png" width="758" height="1500"
+                 alt="The AFK Pilot chat client running on a phone" />
+          </div>
+        </div>
+      </section>
+
+      <section class="features">
+        <div class="wrap features-grid">
+          <div class="feature">
+            <span class="kw">pairing</span>
+            <h3>Link once, chat anywhere</h3>
+            <p>Devices pair with a one-time code shown by your host — VS Code or Grok Build Desktop. Approve it in the browser and you are connected — no tunnels, no config.</p>
+          </div>
+          <div class="feature">
+            <span class="kw">privacy</span>
+            <h3>Private by design</h3>
+            <p>Messages are relayed in memory and never stored on our servers. Images only; videos never leave your machine.</p>
+          </div>
+          <div class="feature">
+            <span class="kw">ownership</span>
+            <h3>Your account is the key</h3>
+            <p>Every device binds to your account and stays revocable from the server, any time.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="steps-section">
+        <div class="wrap">
+          <div class="steps-head">
+            <p class="eyebrow">Get started</p>
+            <h2>Up and running in three steps.</h2>
+          </div>
+          <ol class="steps-grid">
+            <li class="step-card">
+              <span class="step-num">1</span>
+              <h3>Install a host</h3>
+              <p>Already in an editor? <b>Grok Build for VS Code (Community)</b> from the <a href="https://marketplace.visualstudio.com/items?itemName=PawelHuryn.grok-vscode-phuryn" target="_blank" rel="noopener">VS Code Marketplace</a> or <a href="https://open-vsx.org/extension/PawelHuryn/grok-vscode-phuryn" target="_blank" rel="noopener">Open VSX</a> (Cursor, Windsurf, …).<br>Rather not install one? <b><a href="/desktop">Grok Build Desktop</a></b>, for Windows and macOS.</p>
+            </li>
+            <li class="step-card">
+              <span class="step-num">2</span>
+              <h3>Link this device</h3>
+              <p>In your host, open <b>Sign in (link this device)</b> from the gear menu. It opens the approval page for you.</p>
+            </li>
+            <li class="step-card">
+              <span class="step-num">3</span>
+              <h3>Open on your phone</h3>
+              <p>Visit this site on your phone, sign in, and <b>install it as an app</b> — your agent, one tap away.</p>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="pricing" id="pricing-section">
+        <div class="wrap">
+          <div class="pricing-head">
+            <p class="eyebrow">Pricing</p>
+            <h2>Start free. Upgrade when you outgrow it.</h2>
+            <p>One plan to try it, one to remove the limits.</p>
+          </div>
+          <div class="plans">
+            <div class="plan plan-free">
+              <span class="plan-name">Free</span>
+              <div class="plan-price"><span class="amt">$0</span><span class="per">/ forever</span></div>
+              <p class="plan-lead">For a single workspace.</p>
+              <ul>
+                <li>1 linked device</li>
+                <li>100 remote messages a week</li>
+                <li>The full chat UI</li>
+                <li>
+                  Unlimited local messages
+                  <span class="info-wrap">
+                    <button type="button" class="info-btn" aria-label="What counts as a local message?" aria-expanded="false" aria-describedby="free-local-tip">i</button>
+                    <span class="info-bubble" id="free-local-tip" role="tooltip">Messages in the <b>Grok Build for VS Code (Community)</b> extension are never limited. You can use it inside VS Code, Cursor, Antigravity, and so on.</span>
+                  </span>
+                </li>
+              </ul>
+              <button class="btn btn-secondary js-signin" type="button">Start free</button>
+            </div>
+            <div class="plan plan-max">
+              <span class="plan-name">Remote Max</span>
+              <div class="plan-price"><span class="amt">$5</span><span class="per">/ month</span></div>
+              <p class="plan-lead">Everything in Free, without the limits.</p>
+              <ul>
+                <li>Unlimited linked devices</li>
+                <li>Unlimited remote messages</li>
+                <li>Everything in Free</li>
+              </ul>
+              <button class="btn btn-primary js-signin" type="button">Sign in to upgrade</button>
+              <p class="plan-fine">Monthly or annual billing · secure checkout after you sign in.</p>
+            </div>
+          </div>
+          <p class="pricing-note">Fair-use burst cap of 20 messages/minute applies to all plans.</p>
+        </div>
+      </section>
+    </div>
+
+    <!-- "Continue remotely" / post-link: this page is a WAYPOINT, not a
+         destination. Show a quiet forwarding state instead of flashing the
+         device picker for the ~1 frame before the redirect fires. -->
+    <section id="forwarding" class="app wrap" hidden aria-live="polite">
+      <p class="forwarding-note loading-dots">Opening your chat</p>
+    </section>
+
+    <!-- ===================== app (signed in / mock) ===================== -->
+    <section id="picker" class="app wrap" hidden>
+      <p class="eyebrow">Connected</p>
+      <h2>Your devices</h2>
+      <p class="app-hint" id="picker-hint">Pick a workspace to open its chat.</p>
+      <div id="usage-meter" hidden></div>
+      <ul id="list"></ul>
+      <p class="empty" id="empty" hidden>No devices linked yet. Add one below to get started.</p>
+      <div id="picker-session" class="picker-status picker-session" hidden>
+        <p>Your session couldn’t be verified. Sign out and sign back in, then try again.</p>
+        <button id="picker-reauth" class="btn btn-primary" type="button">Sign out and sign back in</button>
+      </div>
+      <p id="picker-unreachable" class="picker-status picker-unreachable" hidden>Can’t reach the server. Retrying…</p>
+      <div id="add-device">
+        <p class="add-title">Get set up</p>
+        <div class="setup-grid">
+          <ol class="setup-steps">
+            <!-- Two hosts, named and parallel. The desktop app used to be a
+                 trailing "or…" clause here, which reads as a footnote to the
+                 extension rather than the other way to do this. -->
+            <li><b>Install a host</b> — either one works.<br>
+              <b>Grok Build for VS Code (Community)</b>, if you already work in an editor — from the <a href="https://marketplace.visualstudio.com/items?itemName=PawelHuryn.grok-vscode-phuryn" target="_blank" rel="noopener">VS Code Marketplace</a> or <a href="https://open-vsx.org/extension/PawelHuryn/grok-vscode-phuryn" target="_blank" rel="noopener">Open VSX</a> (Cursor, Windsurf, …).<br>
+              <b><a href="/desktop">Grok Build Desktop</a></b>, if you would rather not install an editor at all.</li>
+            <li><b>Link this device.</b> In the extension, open the <b>gear icon → Sign in (link this device)</b> — your browser opens the approval page automatically. If the code shows on another machine, open <a href="/link">/link</a> here and type it in.</li>
+            <li><b>Open on your phone.</b> Visit <b class="js-origin">this site</b> on your phone, sign in, and tap <b>Install app</b> to keep your agent one tap away.</li>
+          </ol>
+          <img class="setup-shot" src="/hero-phone.png" width="758" height="1500" alt="AFK Pilot chat running on a phone" />
+        </div>
+      </div>
+    </section>
+
+    <section id="billing" class="app wrap" hidden>
+      <p class="eyebrow">Plan</p>
+      <h2>Billing</h2>
+      <span id="entitled-badge" class="ok-badge" hidden>Remote Max active</span>
+      <div id="pricing"></div>
+      <button id="manage-btn" class="btn btn-secondary" type="button" hidden>Manage subscription</button>
+    </section>
+
+    <!-- ===================== faq (both states) =====================
+         Hidden until grokAuth.ready settles, like every other section here.
+         Without it the FAQ is the only unhidden block on the page and paints
+         alone at the top for as long as ClerkJS takes to load, then jumps. -->
+    <section class="faq" id="faq" hidden>
+      <div class="wrap">
+        <div class="faq-head">
+          <p class="eyebrow">Questions</p>
+          <h2>The things people ask first.</h2>
+        </div>
+
+        <div class="faq-groups">
+          <div class="faq-group">
+            <h3 class="faq-name">Using it</h3>
+            <div class="faq-list">
+              <details class="faq-item" name="faq">
+                <summary>What can I do from the browser?</summary>
+                <div class="faq-body">
+                  <p>Nearly everything the sidebar does. The browser client <b>is</b> the host's chat UI — same layout, same controls — pointed at your machine instead of a local panel. What stays behind is whatever needs the host's local UI, whether that host is VS Code or Grok Build Desktop.</p>
+                  <div class="cap-split">
+                    <div class="cap cap-yes">
+                      <p class="cap-head">From any browser</p>
+                      <ul>
+                        <li>Send prompts and steer a run mid-turn</li>
+                        <li>Dictate with your voice, then say “grok send”</li>
+                        <li>Approve file writes, commands and plans</li>
+                        <li>Stop, queue and fork a turn</li>
+                        <li>Switch model, mode and thinking effort</li>
+                        <li>Choose which repository each tab works in</li>
+                        <li>See every project and its recent conversations side by side, and start one in any of them without switching first</li>
+                        <li>Pick up the conversation open in VS Code or Desktop — both stay live</li>
+                        <li>Browse the project's files in the same panel the desktop app has — several open at once; on a wide screen it sits beside the chat, on a phone it takes the whole screen</li>
+                        <li>Open, edit and save a text file, syntax-highlighted while you read it and while you type</li>
+                        <li>Follow a link in a README straight to the file it points at</li>
+                        <li>Attach workspace files with @, add photos and documents</li>
+                        <li>Export the conversation as a Markdown file</li>
+                        <li>See what was attached — photos preview as thumbnails, and tapping one opens it full size</li>
+                        <li>Have replies read aloud, shortened for listening if you want</li>
+                        <li>Browse, resume, rename and delete past conversations — including the one you have open</li>
+                        <li>Archive projects you are done with; anything quiet for a month files itself, and working in one brings it back</li>
+                      </ul>
+                    </div>
+                    <div class="cap cap-no">
+                      <p class="cap-head">Only at the desk</p>
+                      <ul>
+                        <li>Dragging a file onto the composer</li>
+                        <li>Adding a project folder — that opens a file picker on the machine itself</li>
+                        <li>Linking a new machine — that starts in the extension or Desktop app</li>
+                        <li>Video — images cross the wire, video never does</li>
+                        <li>Photos attached before you installed this version — their previews were not kept</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </details>
+
+              <details class="faq-item" name="faq">
+                <summary>Does it work with OpenAI models?</summary>
+                <div class="faq-body">
+                  <p>Yes. Grok Build — the VS Code extension and the desktop app — can connect <b>OpenAI Codex</b> alongside Grok: models from both providers appear in one picker, and every conversation keeps the provider it started with. Connect or sign out inside the app (the gear in VS Code, Settings on the desktop); if the Codex CLI isn't installed, the app offers to install it for you.</p>
+                  <p>From the browser, AFK Pilot shows which providers are connected and drives conversations on either one. Signing in and out stays at the desk.</p>
+                </div>
+              </details>
+
+              <details class="faq-item" name="faq">
+                <summary>Do I need to leave my computer on?</summary>
+                <div class="faq-body">
+                  <p>Yes. The agent runs on your machine, in either Grok Build for VS Code (Community) or Grok Build Desktop (Community), with your own model access — AFK Pilot is only the wire between it and your browser. Leave the host running and the workspace linked.</p>
+                  <p>In VS Code, you do not have to leave the Grok panel open, but you do have to <b>open it once after you start VS Code</b>: that is what dials the connection. In Desktop, open the app and link it from its AFK Pilot controls. After that, the local panel can be out of the way while the link stays up.</p>
+                  <p>While a device is linked, the extension holds your operating system's own wake lock so the machine will not idle-sleep and drop the connection while you are away. Your screen still goes dark, and <code>grok.remote.keepAwake</code> turns the whole thing off. If the machine does go down, the device simply shows as offline and reconnects by itself when it comes back.</p>
+                </div>
+              </details>
+
+              <details class="faq-item" name="faq">
+                <summary>Is my phone one of my linked devices?</summary>
+                <div class="faq-body">
+                  <p>No. A linked device is a <b>machine running a host</b> — VS Code or Grok Build Desktop — and that is what the Free plan's one-device limit counts. Running <i>both</i> hosts on the same computer still counts as one device. Open the browser client on as many phones, tablets and laptops as you like; they all reach the same workspace, and two of them can watch the same run at once.</p>
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <div class="faq-group">
+            <h3 class="faq-name">Your data</h3>
+            <div class="faq-list">
+              <details class="faq-item" name="faq">
+                <summary>Do you store my prompts or my code?</summary>
+                <div class="faq-body">
+                  <p>No. Prompts, replies, file contents and images pass through the relay in memory and are dropped. There is no chat history on our servers because there is no chat log on our servers — your sessions live on your own machine, the same as they did before.</p>
+                  <p>What we do keep is the minimum to run an account: your sign-in identity, a device name and key identifier, and, on the Free plan, a single number — how many messages you have sent this week. The <a href="/privacy">privacy policy</a> lists all of it.</p>
+                </div>
+              </details>
+
+              <details class="faq-item" name="faq">
+                <summary>Is it end-to-end encrypted?</summary>
+                <div class="faq-body">
+                  <p>Both hops are encrypted: browser to relay, and relay to your machine, each over TLS. Nothing crosses the network in the clear.</p>
+                  <p>It is still not end-to-end, and we would rather say so than imply otherwise: the relay terminates both hops to route between them, so a message is briefly in plaintext in its memory as it passes through. Nothing is written down — prompts and code are never stored, on the relay or in its database.</p>
+                  <p>What the relay cannot do is act on your editor. It is policy-free by design: the gate deciding which messages may touch your machine lives in the extension, on your machine. Even a compromised relay cannot make your host open a file, run a picker, or change your settings.</p>
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <div class="faq-group">
+            <h3 class="faq-name">Apps</h3>
+            <div class="faq-list">
+              <details class="faq-item" name="faq">
+                <summary>Is there an iOS or Android app?</summary>
+                <div class="faq-body">
+                  <p>Not yet. Install this site instead — it is built to work as one. On Android, Chrome or Edge, sign in and use the <b>Install app</b> button in the header; on an iPhone or iPad, tap <b>Share</b>, then <b>Add to Home Screen</b>.</p>
+                  <p>You get an icon on your home screen, a full-screen window with no browser chrome, and a session that stays signed in. It also updates itself, so a fix reaches your phone the moment we ship it, with no store review in between.</p>
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <div class="faq-group">
+            <h3 class="faq-name">Plans</h3>
+            <div class="faq-list">
+              <details class="faq-item" name="faq">
+                <summary>Do I have to pay to use the extension or the desktop app?</summary>
+                <div class="faq-body">
+                  <p>No. Both hosts are free and their messages are never limited — the <b>Grok Build for VS Code (Community)</b> extension in VS Code, Cursor, Antigravity or any other editor it supports, and <b>Grok Build Desktop (Community)</b> on Windows and macOS. Stay at your keyboard and there is nothing to pay and nothing to count.</p>
+                  <p>What AFK Pilot's Free plan meters is <b>remote</b> messages: the ones you send from your phone or another browser to steer that same agent while you're away from the desk. That's 100 a week on 1 linked device — Remote Max removes the limit.</p>
+                </div>
+              </details>
+
+              <details class="faq-item" name="faq">
+                <summary>What happens when I hit the free limit?</summary>
+                <div class="faq-body">
+                  <p>Sending from the browser pauses until your weekly window resets, and the usage meter shows the countdown once you pass 80%. Nothing is lost — the agent, your sessions and VS Code carry on exactly as normal at the desk. The one-device limit works the same way: link a second machine and you will be asked to upgrade rather than cut off.</p>
+                </div>
+              </details>
+
+              <details class="faq-item" name="faq">
+                <summary>How does payment work, and can I get an invoice?</summary>
+                <div class="faq-body">
+                  <p>Checkout runs through Stripe. We never see or store your card details, and starting on Free never asks for a card at all.</p>
+                  <p>Every payment gets a receipt by email. If you need a proper VAT invoice, write to <a href="mailto:support@productcompass.pm">support@productcompass.pm</a> and we will issue one.</p>
+                </div>
+              </details>
+
+              <details class="faq-item" name="faq">
+                <summary>How do I cancel?</summary>
+                <div class="faq-body">
+                  <p>From your account page, any time, in one click. Access runs to the end of the period you have paid for and then drops back to Free — your linked devices and your sessions stay where they are.</p>
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <div class="faq-group">
+            <h3 class="faq-name">Help</h3>
+            <div class="faq-list">
+              <details class="faq-item" name="faq">
+                <summary>Something is broken. Where do I report it?</summary>
+                <div class="faq-body">
+                  <p><a href="https://github.com/phuryn/grok-build-vscode/issues/new?labels=bug" target="_blank" rel="noopener">Report a bug</a> or <a href="https://github.com/phuryn/grok-build-vscode/issues/new?labels=enhancement" target="_blank" rel="noopener">request a feature</a> on the extension's GitHub repo. Bugs and feature requests for both the extension and this remote client go there, in the open, where other people can find the answer too.</p>
+                  <p>For anything about your account, billing or privacy, email <a href="mailto:support@productcompass.pm">support@productcompass.pm</a>.</p>
+                </div>
+              </details>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="confirm-dialog" class="dialog-overlay" role="dialog" aria-modal="true" aria-labelledby="dialog-title" aria-describedby="dialog-body" hidden>
+    <div class="dialog-panel">
+      <h3 id="dialog-title"></h3>
+      <p id="dialog-body"></p>
+      <div class="dialog-actions">
+        <button id="dialog-cancel" class="btn btn-secondary" type="button">Cancel</button>
+        <button id="dialog-confirm" class="btn btn-danger" type="button">Unlink</button>
+      </div>
+    </div>
+  </div>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <span class="copy">© The Product Compass</span>
+      <nav>
+        <a href="/desktop">Desktop app</a>
+        <a href="#faq">FAQ</a>
+        <a href="https://github.com/phuryn/grok-build-vscode/issues" target="_blank" rel="noopener">Support</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/terms">Terms</a>
+      </nav>
+      <p class="fine">AFK Pilot is an independent product, not affiliated with or endorsed by SpaceXAI (formerly xAI). Grok and Grok Build are trademarks of xAI, used only to describe what this service works with.</p>
+    </div>
+  </footer>
+
+<script src="/auth.js"></script>
+<script src="/device-display.js"></script>
+<script>
+  const hero = document.getElementById("hero");
+  const picker = document.getElementById("picker");
+  const billing = document.getElementById("billing");
+  const signinBtn = document.getElementById("signin-btn");
+  const installBtn = document.getElementById("install-btn");
+  const dialog = document.getElementById("confirm-dialog");
+  const dialogTitle = document.getElementById("dialog-title");
+  const dialogBody = document.getElementById("dialog-body");
+  const dialogCancel = document.getElementById("dialog-cancel");
+  const dialogConfirm = document.getElementById("dialog-confirm");
+  let timer = null;
+  let dialogDeviceId = null;
+  let installPrompt = null;
+  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+
+  /**
+   * Which install call-to-action this visitor gets. At most one, ever: offering
+   * a browser wrapper to someone who can run the native host is the wrong
+   * recommendation, and offering an .exe to a phone is a dead end.
+   *
+   * The question is "can this device run the native host?", NOT "is it touch".
+   * A Windows tablet reports a coarse pointer and can still run the installer.
+   *
+   * iPadOS is why this is one function instead of two inline expressions. Its
+   * Safari reports a *Macintosh* user agent — by default, since iPadOS 13 — so
+   * a /iPad/ test and a maxTouchPoints test disagree about the same device, and
+   * two expressions that each got it half right showed an iPad no call to
+   * action at all.
+   *
+   * Returns: "desktop" | "web" (a prompt is available) | "web-ios" (Safari,
+   * Share → Add to Home Screen) | "none".
+   */
+  function chooseInstallCta(env) {
+    const ua = String(env.userAgent || "");
+    const iosLike =
+      /iPhone|iPad|iPod/i.test(ua) ||
+      (env.platform === "MacIntel" && Number(env.maxTouchPoints) > 1);
+    // The three that cannot run a .dmg or an .exe.
+    if (!(iosLike || /Android/i.test(ua) || /CrOS/i.test(ua))) return "desktop";
+    if (env.standalone) return "none"; // already installed — nothing to offer
+    if (env.hasPrompt) return "web"; // Chrome / Edge: beforeinstallprompt fired
+    if (iosLike) return "web-ios"; // Safari never fires it; we explain instead
+    return "none";
+  }
+
+  function installCta() {
+    return chooseInstallCta({
+      userAgent: navigator.userAgent,
+      platform: navigator.platform,
+      maxTouchPoints: navigator.maxTouchPoints,
+      standalone: standalone,
+      hasPrompt: !!installPrompt,
+    });
+  }
+  const offersWebApp = (kind) => kind === "web" || kind === "web-ios";
+  // Set once we learn the caller has no usage meter (entitled user or mock) —
+  // stops the extra /api/me poll. Free users keep limits, so it keeps polling.
+  let meterOff = false;
+
+  // Info tooltips (".info-wrap"): hover covers desktop via CSS alone; this
+  // adds tap-to-toggle for touch, where :hover either doesn't fire or sticks.
+  document.querySelectorAll(".info-btn").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const wrap = btn.closest(".info-wrap");
+      const open = wrap.classList.toggle("is-open");
+      btn.setAttribute("aria-expanded", String(open));
+      document.querySelectorAll(".info-wrap.is-open").forEach((w) => {
+        if (w !== wrap) { w.classList.remove("is-open"); w.querySelector(".info-btn").setAttribute("aria-expanded", "false"); }
+      });
+    });
+  });
+  document.addEventListener("click", () => {
+    document.querySelectorAll(".info-wrap.is-open").forEach((w) => {
+      w.classList.remove("is-open");
+      w.querySelector(".info-btn").setAttribute("aria-expanded", "false");
+    });
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") {
+      document.querySelectorAll(".info-wrap.is-open").forEach((w) => {
+        w.classList.remove("is-open");
+        w.querySelector(".info-btn").setAttribute("aria-expanded", "false");
+      });
+    }
+  });
+
+  async function authHeaders() {
+    const headers = {};
+    if (window.grokAuth.enabled) {
+      const t = await window.grokAuth.getToken();
+      if (t) headers.authorization = "Bearer " + t;
+    }
+    return headers;
+  }
+
+  function closeDialog() {
+    dialog.hidden = true;
+    dialogDeviceId = null;
+  }
+
+  function openUnlinkDialog(ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const btn = ev.currentTarget;
+    dialogDeviceId = btn.dataset.deviceId;
+    dialogTitle.textContent = 'Unlink "' + btn.dataset.deviceName + '"?';
+    dialogBody.textContent = "This permanently unlinks the device. To use it again, you'll have to link it from VS Code again.";
+    dialogCancel.textContent = "Cancel";
+    dialogConfirm.hidden = false;
+    dialog.hidden = false;
+    dialogCancel.focus();
+  }
+
+  function openIosInstallDialog() {
+    dialogDeviceId = null;
+    dialogTitle.textContent = "Install AFK Pilot";
+    dialogBody.textContent = 'Install AFK Pilot: tap Share, then "Add to Home Screen".';
+    dialogCancel.textContent = "Got it";
+    dialogConfirm.hidden = true;
+    dialog.hidden = false;
+    dialogCancel.focus();
+  }
+
+  async function removeDevice(id) {
+    const headers = await authHeaders();
+    try { await fetch("/api/devices/" + encodeURIComponent(id), { method: "DELETE", headers }); }
+    catch (e) { /* offline; the next refresh reconciles */ }
+    refresh();
+  }
+
+  function chatTarget(deviceId) {
+    const incoming = new URLSearchParams(location.search);
+    const target = new URLSearchParams();
+    target.set("device", deviceId);
+    for (const key of ["remoteHint", "linked"]) {
+      if (incoming.get(key) === "1") target.set(key, "1");
+    }
+    return "/chat?" + target.toString();
+  }
+
+  function devicesFetchKind(status) {
+    if (status === 401 || status === 403) return "session";
+    return "unreachable";
+  }
+
+  function setPickerSurface(kind) {
+    document.getElementById("empty").hidden = kind !== "empty";
+    document.getElementById("picker-session").hidden = kind !== "session";
+    document.getElementById("picker-unreachable").hidden = kind !== "unreachable";
+    document.getElementById("add-device").hidden = kind === "session" || kind === "unreachable";
+    if (kind !== "devices") document.getElementById("list").innerHTML = "";
+  }
+
+  function renderDevices(devices) {
+    const list = document.getElementById("list");
+    list.innerHTML = "";
+    setPickerSurface(devices.length > 0 ? "devices" : "empty");
+    for (const d of devices) {
+      const display = window.deviceDisplay.resolveDeviceDisplay(d);
+      const li = document.createElement("li");
+      li.className = "device-row";
+      li.dataset.online = d.online ? "true" : "false";
+
+      const body = document.createElement("div");
+      body.className = "device-body";
+
+      const head = document.createElement("div");
+      head.className = "device-head";
+
+      const icon = document.createElement("span");
+      icon.className = "device-os-icon";
+      icon.setAttribute("aria-hidden", "true");
+      icon.innerHTML = window.deviceDisplay.osIconSvg(display.platform);
+      head.appendChild(icon);
+
+      const text = document.createElement("div");
+      text.className = "device-text";
+      const name = document.createElement("span");
+      name.className = "device-name";
+      name.textContent = display.displayName;
+      text.appendChild(name);
+      if (display.parenthetical) {
+        const meta = document.createElement("p");
+        meta.className = "device-meta";
+        meta.textContent = "(" + display.parenthetical + ")";
+        text.appendChild(meta);
+      }
+      head.appendChild(text);
+
+      const badge = document.createElement("span");
+      badge.className = "device-badge";
+      if (d.online) {
+        badge.textContent = d.clients + " viewer" + (d.clients === 1 ? "" : "s");
+      } else {
+        badge.classList.add("is-offline");
+        badge.textContent = "offline";
+      }
+      head.appendChild(badge);
+      body.appendChild(head);
+
+      if (d.online) {
+        const start = document.createElement("a");
+        start.className = "btn btn-primary device-start";
+        start.href = chatTarget(d.deviceId);
+        start.target = "_blank";
+        start.rel = "noopener";
+        start.textContent = "Start remote session";
+        body.appendChild(start);
+      } else {
+        const start = document.createElement("span");
+        start.className = "btn btn-primary device-start is-disabled";
+        start.setAttribute("aria-disabled", "true");
+        start.title = "Offline — open VS Code on that machine to reconnect";
+        start.textContent = "Start remote session";
+        body.appendChild(start);
+      }
+
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "device-remove";
+      rm.dataset.deviceId = d.deviceId;
+      rm.dataset.deviceName = display.displayName;
+      rm.setAttribute("aria-label", "Remove " + display.displayName);
+      rm.title = "Unlink this device";
+      rm.textContent = "✕";
+      rm.addEventListener("click", openUnlinkDialog);
+
+      li.appendChild(body);
+      li.appendChild(rm);
+      list.appendChild(li);
+    }
+  }
+
+  function renderUsage(limits) {
+    const meter = document.getElementById("usage-meter");
+    const total = limits.weeklyMsgs || 0;
+    const used = limits.used || 0;
+    const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
+    const devices = limits.devices;
+    // Reset countdown appears with the upgrade nudge (>=80%) — coarse, one
+    // unit ("4d" / "5h" / "15m"), from the server's resetsAt (Tuesday 17:00
+    // Europe/Warsaw window; the client never computes the window itself).
+    let resetNote = "";
+    if (pct >= 80 && limits.resetsAt) {
+      const ms = new Date(limits.resetsAt).getTime() - Date.now();
+      if (ms > 0) {
+        const txt = ms >= 172800000 ? Math.round(ms / 86400000) + "d"
+          : ms >= 3600000 ? Math.round(ms / 3600000) + "h"
+          : Math.max(1, Math.round(ms / 60000)) + "m";
+        resetNote = '<span class="usage-devices">· resets in ' + txt + "</span>";
+      }
+    }
+    let html =
+      '<div class="usage-head">' +
+        '<span class="usage-label">This week · <b>' + used + " / " + total + "</b> remote messages</span>" +
+        resetNote;
+    if (pct >= 80) html += '<a class="usage-upgrade" href="#billing">Upgrade for unlimited →</a>';
+    html += "</div>";
+    html += '<div class="usage-bar"><span class="usage-fill' + (pct >= 90 ? " is-high" : "") +
+      '" style="width:' + pct + '%"></span></div>';
+    html += '<p class="usage-note">Only messages you send count; agent replies and approvals are free. Your local extension and desktop app are not counted.</p>';
+    meter.innerHTML = html;
+    meter.hidden = false;
+  }
+
+  // "Continue remotely" and the post-link hop both land here only to be sent
+  // on. While that verdict is pending the picker stays hidden behind the
+  // forwarding note — revealing it first is the flash the owner reported.
+  const forwardHinted = (function () {
+    const p = new URLSearchParams(location.search);
+    return p.get("remoteHint") === "1" || p.get("linked") === "1";
+  })();
+  let forwarding = forwardHinted;
+
+  function stopForwarding() {
+    if (!forwarding) return;
+    forwarding = false;
+    document.getElementById("forwarding").hidden = true;
+    document.getElementById("faq").hidden = false; // held back for the hop
+    if (billingPending) {
+      billingPending = false;
+      // showSignedIn deferred the upsell for the hop that isn't happening.
+      window.grokAuth.ready.then((auth) => {
+        if (auth.requiredFeature) void revealBilling(auth, auth.requiredFeature);
+      });
+    }
+  }
+
+  /** Reveal the picker unless we're still deciding whether to forward. */
+  function revealPicker() {
+    if (forwarding) return;
+    picker.hidden = false;
+  }
+
+  function forwardOnlyDevice(devices) {
+    if (!forwardHinted) return false;
+    // Exactly one device: that IS the answer — go, without ever painting the
+    // picker. Any other count needs a human choice, so drop the waypoint.
+    if (devices.length !== 1) { stopForwarding(); return false; }
+    location.replace(chatTarget(devices[0].deviceId));
+    return true;
+  }
+
+  async function refresh() {
+    let headers;
+    try {
+      // Inside the try: a rejected Clerk token refresh is a reachability
+      // failure like any other and must land on the same surface, not leave
+      // the picker hidden.
+      headers = await authHeaders();
+      const res = await fetch("/api/devices", { headers });
+      if (res.ok) {
+        const data = await res.json();
+        if (dialog.hidden) {
+          if (forwardOnlyDevice(data.devices)) return;
+          renderDevices(data.devices); // don't rebuild a row under an open dialog
+          revealPicker();
+        }
+      } else {
+        stopForwarding();
+        setPickerSurface(devicesFetchKind(res.status));
+        picker.hidden = false;
+      }
+    } catch (e) {
+      // Network-level failure. A populated list stays visible (those devices
+      // are still real; a transient blip should not blank them), but an empty
+      // or error surface flips to "can't reach the server" so an outage never
+      // reads as "no devices linked" — the same masking the 401 fix removed.
+      // A forwarding visit gives up on the hop rather than waiting forever.
+      stopForwarding();
+      if (!document.querySelector("#list .device-row")) setPickerSurface("unreachable");
+      picker.hidden = false;
+      // Skip /api/me this tick: with no headers its 401 would latch meterOff
+      // and the usage meter would never recover. The next poll retries both.
+      return;
+    }
+    if (meterOff) return;
+    try {
+      const res = await fetch("/api/me", { headers });
+      const meter = document.getElementById("usage-meter");
+      if (!res.ok) { meterOff = true; meter.hidden = true; return; }
+      const me = await res.json();
+      if (!me.limits) { meterOff = true; meter.hidden = true; } // entitled / mock — no meter
+      else renderUsage(me.limits);
+    } catch (e) { /* next tick */ }
+  }
+
+  function startPicker() {
+    // Here rather than in showSignedIn(): mock mode reaches the picker without
+    // ever signing in, and the link is just as useful there. Computers only —
+    // on a phone this slot belongs to Install app, and the two never share it.
+    if (installCta() === "desktop") document.getElementById("desktop-link").hidden = false;
+    // Step 2's address is this deployment, not a hardcoded domain.
+    document.querySelectorAll(".js-origin").forEach((el) => { el.textContent = location.host; });
+    if (forwarding) document.getElementById("forwarding").hidden = false;
+    refresh();
+    if (!timer) timer = setInterval(refresh, 3000);
+  }
+
+  function showIdentity(auth) {
+    const el = document.getElementById("signed-in-as");
+    const id = auth.signedInIdentity && auth.signedInIdentity();
+    if (!id) { el.hidden = true; el.textContent = ""; return; }
+    el.hidden = false;
+    el.textContent = id;
+  }
+
+  async function showSignedIn(auth) {
+    hero.hidden = true;
+    signinBtn.hidden = true;
+    showIdentity(auth);
+    auth.mountUserButton(document.getElementById("user-button"));
+    if (offersWebApp(installCta())) installBtn.hidden = false;
+    startPicker();
+    const feature = auth.requiredFeature;
+    if (!feature) return; // gate open — nothing to upsell
+    // A forwarding visit is passing through to the chat — it shows its note
+    // and nothing else. stopForwarding() reveals this if the hop falls
+    // through to the normal page.
+    if (forwarding) { billingPending = true; return; }
+    await revealBilling(auth, feature);
+  }
+
+  let billingPending = false;
+
+  async function revealBilling(auth, feature) {
+    billing.hidden = false;
+    if (await auth.hasFeature(feature)) {
+      document.getElementById("entitled-badge").hidden = false;
+    } else if (typeof auth.clerk.mountPricingTable === "function") {
+      auth.clerk.mountPricingTable(document.getElementById("pricing"));
+    } else {
+      const btn = document.getElementById("manage-btn");
+      btn.hidden = false;
+      btn.addEventListener("click", () => auth.clerk.openUserProfile());
+    }
+  }
+
+  document.getElementById("picker-reauth").addEventListener("click", () => {
+    // Clerk mode: signOut navigates. Mock mode (Clerk failed to load): signOut
+    // is a no-op promise — reload instead, which re-attempts the Clerk boot.
+    // finally(): a REJECTED sign-out must also land on a reload, so the button
+    // always visibly does something.
+    window.grokAuth.signOut().finally(() => location.reload());
+  });
+  dialogCancel.addEventListener("click", closeDialog);
+  dialogConfirm.addEventListener("click", function () {
+    const id = dialogDeviceId;
+    closeDialog();
+    if (id) removeDevice(id);
+  });
+  dialog.addEventListener("click", function (e) {
+    if (e.target === dialog) closeDialog();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !dialog.hidden) closeDialog();
+  });
+  window.addEventListener("beforeinstallprompt", function (e) {
+    e.preventDefault();
+    installPrompt = e;
+    if (offersWebApp(installCta()) && window.grokAuth.enabled && window.grokAuth.isSignedIn()) installBtn.hidden = false;
+  });
+  installBtn.addEventListener("click", async function () {
+    if (installPrompt) {
+      const prompt = installPrompt;
+      installPrompt = null;
+      installBtn.hidden = true;
+      await prompt.prompt();
+    } else if (installCta() === "web-ios") {
+      openIosInstallDialog();
+    }
+  });
+
+  window.grokAuth.ready.then((auth) => {
+    // Reveal the FAQ with whichever view we're about to show — it belongs to
+    // both, so it waits for the same gate instead of painting on its own. A
+    // forwarding visit is passing through and shows nothing but its note;
+    // stopForwarding() reveals this if the hop turns out not to happen.
+    if (!forwarding) document.getElementById("faq").hidden = false;
+    if (!auth.enabled) { // mock mode: exactly the old picker page
+      document.getElementById("picker-hint").textContent = "Mock auth — no sign-in. Pick a connected VS Code workspace.";
+      startPicker();
+      return;
+    }
+    document.querySelectorAll(".js-signin").forEach((b) => b.addEventListener("click", () => auth.openSignIn()));
+    let shown = auth.isSignedIn();
+    if (shown) {
+      showSignedIn(auth);
+    } else {
+      hero.hidden = false;
+      signinBtn.hidden = false;
+    }
+    auth.clerk.addListener(() => {
+      if (auth.clerk.user && !shown) { shown = true; showSignedIn(auth); }
+      else if (auth.clerk.user && shown) showIdentity(auth);
+      else if (!auth.clerk.user && shown) location.reload(); // signed out — reset
+    });
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+{
+  "name": "grok-remote",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Relay server + web client for grok-build-vscode remote control (topology B). Clerk auth + Supabase persistence.",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "npm run check:vendor && tsc -p .",
+    "start": "npm run build && node dist/main.js",
+    "sync-ui": "node scripts/sync-ui.mjs",
+    "test": "npm run check:vendor && vitest run",
+    "check:vendor": "node scripts/check-ui-vendor.mjs",
+    "e2e:browser": "npm run build && node scripts/browser-e2e.mjs",
+    "e2e:touch": "npm run build && node scripts/touch-ui-check.mjs",
+    "e2e:downloads": "npm run build && node scripts/desktop-downloads-check.mjs && node scripts/update-feed-check.mjs",
+    "e2e:screens": "npm run build && node scripts/ui-screens-check.mjs",
+    "e2e:legacy": "npm run build && node scripts/legacy-host-check.mjs && node scripts/tab-identity-check.mjs",
+    "gate": "npm run typecheck && npm test && npm run e2e:touch && npm run e2e:legacy && npm run e2e:browser && npm run e2e:downloads && npm run e2e:screens",
+    "smoke": "node scripts/prod-smoke.mjs",
+    "smoke:auth": "node scripts/auth-canary.mjs",
+    "typecheck": "tsc -p . --noEmit"
+  },
+  "dependencies": {
+    "@clerk/backend": "^3.11.7",
+    "@supabase/supabase-js": "^2.109.0",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.0",
+    "playwright": "^1.61.1",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

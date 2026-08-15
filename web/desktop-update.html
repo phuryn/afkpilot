@@ -1,0 +1,156 @@
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script>
+  // Set the theme before first paint (no flash), and expose the toggle.
+  (function () {
+    var root = document.documentElement;
+    var saved;
+    try { saved = localStorage.getItem("grok-remote-theme"); } catch (e) {}
+    var initial = saved || ((window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark");
+    root.setAttribute("data-theme", initial);
+    window.__toggleTheme = function () {
+      var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem("grok-remote-theme", next); } catch (e) {}
+    };
+  })();
+</script>
+<title>Update Grok Build Desktop (Community)</title>
+<meta name="description" content="Download the current version of Grok Build Desktop (Community) for macOS or Windows." />
+<!-- Reached from inside the app, never from search. Indexing it would put a
+     page that assumes you already have the app in front of people who do not,
+     competing with /desktop for the same query. -->
+<meta name="robots" content="noindex, follow" />
+<meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#fbfbfc" media="(prefers-color-scheme: light)" />
+<link rel="icon" href="/favicon.svg" />
+<link rel="stylesheet" href="/theme.css" />
+<style>
+  .update-main { flex: 1; display: grid; place-items: center; padding-block: clamp(2.5rem, 8vw, 5rem); }
+  .update-card { width: 100%; max-width: 34rem; }
+  .update-versions {
+    display: flex; align-items: center; gap: 0.75rem;
+    margin: 1.25rem 0 0; color: var(--muted);
+    font-family: var(--font-mono); font-size: var(--step--1);
+  }
+  .update-versions b { color: var(--heading); font-weight: 600; }
+  .update-arrow { color: var(--accent); }
+  .update-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.75rem; }
+  .update-primary { min-width: 15rem; }
+  .update-alt { margin: 1.1rem 0 0; color: var(--faint); font-size: 0.86rem; }
+  .update-alt a { color: inherit; }
+  .update-steps {
+    margin: 2rem 0 0; padding: 1.15rem 1.25rem;
+    background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius-lg);
+  }
+  .update-steps h2 { font-size: var(--step-0); }
+  .update-steps p, .update-steps li { color: var(--muted); font-size: 0.88rem; line-height: 1.6; }
+  .update-steps p { margin: 0.5rem 0 0; }
+  .update-steps ol { margin: 0.5rem 0 0; padding-left: 1.15rem; }
+  .update-steps li { margin-top: 0.3rem; }
+  .update-steps em { color: var(--heading); font-style: normal; font-weight: 600; }
+  .inline-cmd {
+    display: inline-block; margin-top: 0.45rem; padding: 0.35rem 0.6rem; max-width: 100%;
+    overflow-x: auto; background: var(--code-bg); border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm); color: var(--text);
+    font-family: var(--font-mono); font-size: 0.78rem; white-space: pre;
+  }
+</style>
+
+<header class="site-header wrap">
+  <a class="brand" href="/">
+    <span class="logo-mark" aria-hidden="true"></span>
+    <span class="wordmark"><b>AFK</b> <span class="dim">Pilot</span></span>
+  </a>
+  <div class="header-actions">
+    <button class="icon-toggle" type="button" onclick="__toggleTheme()" aria-label="Toggle light and dark theme" title="Toggle theme">
+      <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.5M12 19v2.5M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2.5 12H5M19 12h2.5M4.2 19.8L6 18M18 6l1.8-1.8"/></svg>
+      <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.2 6.2 0 0 0 10.5 10.5z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="update-main">
+  <div class="wrap update-card">
+    <p class="eyebrow">Grok Build Desktop (Community)</p>
+    <h1 id="update-title">Update your app</h1>
+    <p class="update-versions" id="update-versions" hidden>
+      <span>You have <b id="from-version"></b></span>
+      <span class="update-arrow">&rarr;</span>
+      <span>latest is <b id="to-version"></b></span>
+    </p>
+    <div class="update-actions">
+      <a class="btn btn-primary update-primary" id="update-download" href="/desktop">Choose your download</a>
+    </div>
+    <p class="update-alt" id="update-alt">
+      Another platform? <a href="/desktop#downloads">See all downloads</a>.
+    </p>
+
+    <section class="update-steps">
+      <h2>Installing over your current version</h2>
+      <p>Quit Grok Build Desktop first, then run the installer. Your projects and conversations live in <code>~/.grok</code> and are untouched by an update.</p>
+      <div id="macos-steps" hidden>
+        <!-- Until 3.2.7 this walked through Privacy & Security to allow an
+             unsigned app past Gatekeeper. Builds are now signed with a Developer
+             ID and notarised, so that block no longer happens and describing it
+             would send people looking for a dialog that never appears. -->
+        <p>The download is signed and notarised by Apple, so it opens straight after you replace the old copy &mdash; no warning, and nothing to allow through in Settings.</p>
+      </div>
+      <p id="windows-steps" hidden>SmartScreen will show &ldquo;Windows protected your PC&rdquo; the first time: click <em>More info</em>, then <em>Run anyway</em>.</p>
+    </section>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <span>&copy; <span id="year"></span> AFK Pilot</span>
+    <a href="/desktop">Desktop app</a>
+    <a href="/privacy">Privacy</a>
+    <a href="/terms">Terms</a>
+  </div>
+</footer>
+
+<script>
+  document.getElementById("year").textContent = String(new Date().getFullYear());
+
+  // The app passes the version it is running as ?from=. Everything else is
+  // derived here, so the page can be rewritten freely without shipping a new
+  // build — the URL is baked into every installed copy, the content is not.
+  var params = new URLSearchParams(location.search);
+  var from = (params.get("from") || "").replace(/[^0-9.]/g, "").slice(0, 16);
+
+  function detectPlatform() {
+    var hints = navigator.userAgentData;
+    var evidence = ((hints && hints.platform) || "") + " " + (navigator.userAgent || navigator.platform || "");
+    evidence = evidence.toLowerCase();
+    if (evidence.indexOf("win") !== -1) return { key: "win-x64", label: "Windows", steps: "windows-steps" };
+    if (evidence.indexOf("mac") !== -1) {
+      // Browsers hide the Mac CPU. Apple silicon is the current default and the
+      // Intel build is one click away on /desktop, which the alt line offers.
+      return { key: "mac-arm64", label: "macOS (Apple silicon)", steps: "macos-steps" };
+    }
+    return null;
+  }
+
+  var platform = detectPlatform();
+  var link = document.getElementById("update-download");
+  if (platform) {
+    // Stable, server-resolved URL — no GitHub API call from this page, so it
+    // cannot fail on a shared IP's rate limit, and it always points at the
+    // current build without the page knowing which one that is.
+    link.href = "/download/" + platform.key;
+    link.textContent = "Download for " + platform.label;
+    var steps = document.getElementById(platform.steps);
+    if (steps) steps.hidden = false;
+  }
+
+  if (from) {
+    document.getElementById("from-version").textContent = from;
+    // The version we are sending them to is whatever /download resolves; asking
+    // for it here would mean a second round trip to say something they can read
+    // on the release itself. Shown only when the app told us where it is.
+    document.getElementById("to-version").textContent = "the current release";
+    document.getElementById("update-versions").hidden = false;
+    document.getElementById("update-title").textContent = "A newer version is ready";
+  }
+</script>

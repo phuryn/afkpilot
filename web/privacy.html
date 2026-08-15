@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<!-- Draft — have a lawyer review before public launch. -->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script>
+  (function () {
+    var root = document.documentElement;
+    var saved;
+    try { saved = localStorage.getItem("grok-remote-theme"); } catch (e) {}
+    var initial = saved || ((window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark");
+    root.setAttribute("data-theme", initial);
+    window.__toggleTheme = function () {
+      var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem("grok-remote-theme", next); } catch (e) {}
+    };
+  })();
+</script>
+<title>Privacy — AFK Pilot</title>
+<meta name="description" content="What AFK Pilot stores and, more importantly, what it never does: your prompts, code, files, and images are relayed in memory and never persisted." />
+<meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#fbfbfc" media="(prefers-color-scheme: light)" />
+<link rel="icon" href="/favicon.svg" />
+<link rel="stylesheet" href="/theme.css" />
+</head>
+<body>
+  <header class="site-header wrap">
+    <a class="brand" href="/">
+      <span class="logo-mark" aria-hidden="true"></span>
+      <span class="wordmark"><b>AFK</b> <span class="dim">Pilot</span></span>
+    </a>
+    <div class="header-actions">
+      <button class="icon-toggle" type="button" onclick="__toggleTheme()" aria-label="Toggle light and dark theme" title="Toggle theme">
+        <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.5M12 19v2.5M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2.5 12H5M19 12h2.5M4.2 19.8L6 18M18 6l1.8-1.8"/></svg>
+        <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.2 6.2 0 0 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="legal-main">
+    <article class="legal wrap">
+      <p class="eyebrow">Privacy</p>
+      <h1>Privacy Policy</h1>
+      <p class="lede">AFK Pilot passes messages between your VS Code agent and your browser. The design goal is that the content of those messages never touches our storage.</p>
+      <p class="effective">Effective 2026-07-18</p>
+
+      <h2>What we store</h2>
+      <p>We keep the minimum needed to run your account and your device links:</p>
+      <ul>
+        <li><strong>Your account</strong> — your email and authentication identity, held by Clerk, our sign-in provider.</li>
+        <li><strong>Device records</strong> — a device name you choose, a key identifier, and an HMAC used to verify a device on connect. We never store the device token secret itself.</li>
+        <li><strong>Billing state</strong> — your plan and subscription status live with Clerk and Stripe. We do not see or store your card details.</li>
+        <li><strong>A usage counter</strong> — on the free plan, one number per account: how many messages you have sent in the current weekly window. Not the messages, not their times, not their sizes — a single count, replaced each week.</li>
+      </ul>
+
+      <h2>What we do not store</h2>
+      <p>We do not persist the content you send or receive. Prompts, code, files, and images are relayed in memory between your VS Code workspace and your browser, then dropped. There is no chat history on our servers, because there is no chat log on our servers. Videos are never transferred at all — images only.</p>
+
+      <p>One thing worth being precise about, since it happens on your own device rather than ours: if you send a message while the connection is down, your browser holds that unsent message in its own tab storage until it can be delivered, so a dropped signal or a reload doesn't lose what you typed. It never leaves your device until it is sent, it is cleared once delivered, and it is gone when you close the tab. Attachments and voice audio are never held this way. Nothing about this queue reaches our servers.</p>
+
+      <h2>Transport and encryption</h2>
+      <p>All traffic runs over TLS. AFK Pilot does not use end-to-end encryption: the relay is a trusted component that reads message envelopes to route them, so a message is briefly in plaintext in the relay's memory as it passes through. We state this plainly rather than imply a guarantee we do not provide. The relay is deliberately policy-free — it cannot drive host-local actions in your editor; capability gating stays on your machine.</p>
+
+      <h2>Subprocessors</h2>
+      <p>We rely on a small set of providers to operate the service:</p>
+      <ul>
+        <li><strong>Clerk</strong> — authentication and billing management.</li>
+        <li><strong>Stripe</strong> — payment processing.</li>
+        <li><strong>Supabase</strong> — the device registry (device names and key identifiers).</li>
+        <li><strong>Hosting provider</strong> — to be confirmed before public launch; it runs the relay and never receives persisted message content.</li>
+      </ul>
+
+      <h2>Data deletion</h2>
+      <p>You can unlink a device at any time, which revokes it server-side. To delete your account and its device records, email us and we will remove them. Because we never store message content, there is nothing further for us to purge.</p>
+
+      <h2>Who we are</h2>
+      <p>AFK Pilot is operated by, and the data controller for the account data described above is:</p>
+      <p>
+        HURYN Sp. z o.o.<br />
+        Hoża 29, 00-521 Warsaw, Poland<br />
+        Tax ID (NIP): PL7011027727<br />
+        National Court Register (KRS): 0000893173
+      </p>
+
+      <h2>Contact</h2>
+      <p>Questions about privacy? Reach us at <a href="mailto:support@productcompass.pm">support@productcompass.pm</a>.</p>
+
+      <hr class="divider" />
+      <p class="effective">The Product Compass · HURYN Sp. z o.o.</p>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <span class="copy">© The Product Compass</span>
+      <nav>
+        <a href="/#faq">FAQ</a>
+        <a href="https://github.com/phuryn/grok-build-vscode/issues" target="_blank" rel="noopener">Support</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/terms">Terms</a>
+      </nav>
+      <p class="fine">AFK Pilot is an independent product, not affiliated with or endorsed by SpaceXAI (formerly xAI). Grok and Grok Build are trademarks of xAI, used only to describe what this service works with.</p>
+    </div>
+  </footer>
+</body>
+</html>

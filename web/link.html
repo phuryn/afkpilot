@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script>
+  (function () {
+    var root = document.documentElement;
+    var saved;
+    try { saved = localStorage.getItem("grok-remote-theme"); } catch (e) {}
+    var initial = saved || ((window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark");
+    root.setAttribute("data-theme", initial);
+    window.__toggleTheme = function () {
+      var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem("grok-remote-theme", next); } catch (e) {}
+    };
+  })();
+</script>
+<title>AFK Pilot — link device</title>
+<meta name="description" content="Approve a device to link it to your AFK Pilot account. Check the one-time code matches the one shown in VS Code." />
+<meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#fbfbfc" media="(prefers-color-scheme: light)" />
+<meta name="robots" content="noindex" />
+<link rel="icon" href="/favicon.svg" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="stylesheet" href="/theme.css" />
+<style>
+  .link-main { flex: 1; display: grid; place-items: center; padding: clamp(1.5rem, 6vw, 4rem) 1.25rem; }
+  .card {
+    width: min(440px, 100%);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    padding: clamp(1.75rem, 5vw, 2.4rem);
+    text-align: center;
+  }
+  .card h1 { font-size: var(--step-2); letter-spacing: -0.01em; }
+  .card > .muted { font-size: 0.95rem; margin: 0.6rem 0 0; }
+
+  /* The device pass: what you're linking + the proof it's yours, one unit. */
+  .device-pass {
+    margin-top: 1.5rem;
+    background: var(--code-bg);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    padding: 1rem 0.9rem 1.1rem;
+  }
+  .pass-device {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.55rem;
+    color: var(--heading);
+    font-weight: 600;
+  }
+  .pass-device svg { color: var(--muted); flex: none; }
+  .pass-sep {
+    border: 0;
+    border-top: 1px solid var(--border-soft);
+    margin: 0.9rem auto;
+    width: 72%;
+  }
+  .code {
+    font-family: var(--font-mono);
+    font-size: 1.9rem;
+    letter-spacing: 0.32em;
+    color: var(--heading);
+    padding-left: 0.32em; /* re-center: the trailing letter-space skews it */
+  }
+  .check-hint { color: var(--muted); font-size: 0.9rem; margin: 1rem 0 0; }
+
+  #signin-btn, #approve { margin-top: 1.5rem; width: 100%; }
+
+  .ok { color: var(--green); font-size: 0.95rem; margin-top: 1.25rem; }
+  .err { color: var(--red); font-size: 0.95rem; margin-top: 1.25rem; line-height: 1.5; }
+  .err a { color: var(--accent); }
+  .devnote { color: var(--faint); font-size: 0.8rem; line-height: 1.5; margin: 1.25rem 0 0; }
+
+  /* manual code entry (no ?code=) — mirrors the .code display's mono ticket */
+  #link-code-form { display: block; }
+  .code-input {
+    width: 100%;
+    margin: 1.5rem 0 0;
+    font-family: var(--font-mono);
+    font-size: 1.5rem;
+    letter-spacing: 0.3em;
+    text-align: center;
+    text-transform: uppercase;
+    color: var(--heading);
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.7rem 0.4rem 0.7rem 0.7rem; /* nudge for the trailing letter-spacing */
+  }
+  .code-input::placeholder { color: var(--faint); }
+  .code-input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-color: var(--accent); }
+  #link-code-form .btn { width: 100%; margin-top: 1.25rem; }
+  .form-hint { color: var(--muted); font-size: 0.85rem; line-height: 1.5; margin: 1rem 0 0; }
+</style>
+</head>
+<body>
+  <header class="site-header wrap">
+    <a class="brand" href="/">
+      <span class="logo-mark" aria-hidden="true"></span>
+      <span class="wordmark"><b>AFK</b> <span class="dim">Pilot</span></span>
+    </a>
+    <div class="header-actions">
+      <button class="icon-toggle" type="button" onclick="__toggleTheme()" aria-label="Toggle light and dark theme" title="Toggle theme">
+        <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.5M12 19v2.5M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2.5 12H5M19 12h2.5M4.2 19.8L6 18M18 6l1.8-1.8"/></svg>
+        <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.2 6.2 0 0 0 10.5 10.5z"/></svg>
+      </button>
+      <span id="signed-in-as" class="signed-in-as" hidden></span>
+      <div id="user-button"></div>
+    </div>
+  </header>
+
+  <main class="link-main">
+    <div class="card">
+      <!-- with ?code=… : confirm + approve the pending link -->
+      <div id="approve-view" hidden>
+        <h1>Link this device?</h1>
+        <p class="muted">This lets you control your Grok Build (Community) extension
+          from your browser or any mobile device. You can unlink it anytime.</p>
+        <div id="device-pass" class="device-pass" hidden>
+          <div class="pass-device">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="12" x="3" y="4" rx="2" ry="2"/><line x1="2" x2="22" y1="20" y2="20"/></svg>
+            <span id="device">Loading…</span>
+          </div>
+          <hr class="pass-sep" />
+          <div id="code" class="code"></div>
+        </div>
+        <p class="check-hint" id="check-hint" hidden>Make sure the code matches the one shown in VS Code.</p>
+        <button id="signin-btn" class="btn btn-primary" hidden>Sign in to approve</button>
+        <button id="approve" class="btn btn-primary" hidden>Approve device</button>
+        <div id="result"></div>
+        <p class="devnote" id="devnote"></p>
+      </div>
+
+      <!-- no ?code=… : type the code shown in VS Code -->
+      <form id="link-code-form" hidden>
+        <h1>Enter your link code</h1>
+        <p class="muted">Type the code shown in VS Code to link this device.</p>
+        <input id="link-code-input" class="code-input" type="text" inputmode="text"
+               maxlength="8" autocomplete="off" autocapitalize="characters"
+               spellcheck="false" placeholder="A7K2-9QX4" aria-label="Link code" />
+        <button type="submit" class="btn btn-primary">Continue</button>
+        <p class="form-hint">The code is shown in VS Code under gear icon → Sign in (link this device).</p>
+      </form>
+    </div>
+  </main>
+<script src="/auth.js"></script>
+<script>
+  const code = new URLSearchParams(location.search).get("code") || "";
+
+  // No code in the URL: show the manual entry form and stop — the approval flow
+  // below only runs once a code is present (arrived by ?code= from here or the
+  // extension's auto-opened tab).
+  if (!code) {
+    const form = document.getElementById("link-code-form");
+    const input = document.getElementById("link-code-input");
+    const clean = function (v) { return v.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 8); };
+    form.hidden = false;
+    input.addEventListener("input", function () {
+      const s = clean(input.value); // live-strip dashes/spaces, force uppercase
+      if (s !== input.value) input.value = s;
+    });
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      const v = clean(input.value);
+      if (!v) { input.focus(); return; }
+      location.href = "/link?code=" + encodeURIComponent(v);
+    });
+    input.focus();
+  } else runApproval();
+
+  function runApproval() {
+  document.getElementById("approve-view").hidden = false;
+  document.getElementById("code").textContent = code;
+  const pass = document.getElementById("device-pass");
+  const hint = document.getElementById("check-hint");
+  const signinBtn = document.getElementById("signin-btn");
+  const btn = document.getElementById("approve");
+  const result = document.getElementById("result");
+  const devnote = document.getElementById("devnote");
+
+  let auth = null;        // grokAuth, once ready
+  let pending = false;    // the link code is approvable
+  let done = false;       // approved — actions stay hidden
+
+  function say(cls, text) { result.className = cls; result.textContent = text; }
+
+  // One action at a time: "Sign in to approve" (Clerk, signed out) or
+  // "Approve device". Both hidden until the code is pending AND auth resolved.
+  function render() {
+    const usable = pending && !done && !!auth;
+    btn.hidden = !(usable && (!auth.enabled || auth.isSignedIn()));
+    signinBtn.hidden = !(usable && auth.enabled && !auth.isSignedIn());
+  }
+
+  async function load() {
+    const res = await fetch("/api/link/info?code=" + encodeURIComponent(code));
+    const info = await res.json();
+    const dev = document.getElementById("device");
+    if (info.status === "pending") {
+      pass.hidden = false;
+      hint.hidden = false;
+      dev.textContent = info.deviceName || "Unnamed device";
+      pending = true;
+    } else if (info.status === "approved") {
+      pass.hidden = false;
+      dev.textContent = info.deviceName || "";
+      say("ok", "Already approved — you can close this tab.");
+    } else {
+      say("err", "This link code is " + info.status + ". Run the link command in VS Code again.");
+    }
+    render();
+  }
+
+  signinBtn.addEventListener("click", () => { if (auth) auth.openSignIn(); });
+
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    say("", "");
+    const headers = { "content-type": "application/json" };
+    if (auth && auth.enabled) {
+      const t = await auth.getToken();
+      if (t) headers.authorization = "Bearer " + t;
+    }
+    const res = await fetch("/api/link/approve", { method: "POST", headers, body: JSON.stringify({ code }) });
+    const body = await res.json();
+    btn.disabled = false;
+    if (body.ok) {
+      done = true;
+      say("ok", "Device linked — opening your chat…");
+      render();
+      // Straight into the chat, no interstitial button (owner, 2026-07-30).
+      // linked=1 shows the take-it-mobile onboarding banner there; replace()
+      // keeps the spent code URL out of history. The chat's offline-grace
+      // window absorbs the race while VS Code's uplink connects.
+      location.replace("/chat?device=" + encodeURIComponent(body.deviceId) + "&linked=1");
+    } else if (res.status === 401) {
+      if (auth && auth.enabled && !headers.authorization) {
+        // We had no token to send — the browser session is gone. Ask again.
+        say("err", "Sign in to approve this device.");
+        auth.openSignIn();
+      } else {
+        // A fresh token was sent and still rejected: that is not a stale
+        // session, it's the relay refusing this origin/session (e.g. the
+        // server's authorized-parties list is missing this site). Signing
+        // out or retrying sign-in cannot fix it — say so and stay put.
+        console.error("link approve: 401 with a fresh session token", body);
+        say("err", "You're signed in, but the server rejected the session. Try again in a moment — if it keeps happening, the relay's sign-in configuration needs attention.");
+      }
+    } else if (res.status === 403) {
+      result.className = "err";
+      result.innerHTML = body.reason === "device-limit"
+        ? "Free plan limit: " + body.limit + " linked device" + (body.limit === 1 ? "" : "s") + '. <a href="/">Remove the old device</a> or upgrade to Remote Max.'
+        : 'Remote Max required to link devices. <a href="/">Upgrade</a>, then approve again.';
+    } else {
+      say("err", "Approval failed (" + (body.status || res.status) + ").");
+    }
+  });
+
+  // The device + code show immediately (open endpoint); the action area waits
+  // for the auth state. Signed-out visitors get the sign-in modal right away —
+  // the account comes first, approving comes after.
+  load();
+  window.grokAuth.ready.then((a) => {
+    auth = a;
+    if (a.enabled) {
+      // Mount the profile chip once — Clerk's listener fires on every state
+      // change and mountUserButton must not run twice on the same node.
+      let userBtnMounted = false;
+      const showIdentity = () => {
+        const el = document.getElementById("signed-in-as");
+        const id = a.signedInIdentity && a.signedInIdentity();
+        if (!id) { el.hidden = true; el.textContent = ""; return; }
+        el.hidden = false;
+        el.textContent = "Approving as " + id + " — this device will belong to that account.";
+      };
+      const mountUser = () => {
+        if (!userBtnMounted && a.isSignedIn()) {
+          userBtnMounted = true;
+          a.mountUserButton(document.getElementById("user-button"));
+        }
+        showIdentity();
+      };
+      a.onAuthChange(() => { render(); mountUser(); });
+      mountUser();
+      if (!a.isSignedIn()) a.openSignIn();
+    } else {
+      devnote.textContent = "Development mode: no sign-in required to approve.";
+    }
+    render();
+  });
+  }
+</script>
+</body>
+</html>

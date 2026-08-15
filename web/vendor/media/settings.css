@@ -1,0 +1,542 @@
+/* Settings surface — chat overlay and the VS Code settings tab.
+   Tokens only: VS Code variables + color-mix against --vscode-foreground. */
+
+html.settings-page,
+body.settings-page {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background, var(--vscode-sideBar-background));
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  overflow: hidden;
+  background: var(--vscode-editor-background, var(--vscode-sideBar-background));
+}
+
+.settings-surface {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background, var(--vscode-sideBar-background));
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+
+body.settings-page .settings-surface {
+  width: 100%;
+  height: 100%;
+}
+
+.settings-shell {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.settings-nav {
+  flex: 0 0 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 12px;
+  border-right: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border));
+  background: var(--vscode-sideBar-background);
+  overflow: auto;
+}
+
+.settings-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin: 0 4px 12px;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--vscode-textLink-foreground, var(--vscode-foreground));
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-back-arrow {
+  line-height: 1;
+}
+
+.settings-back:hover {
+  text-decoration: underline;
+  color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground));
+}
+
+.settings-back:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.settings-search-wrap {
+  margin: 0 4px 12px;
+}
+
+.settings-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border));
+  border-radius: 4px;
+  font: inherit;
+}
+
+.settings-search:focus {
+  outline: none;
+  border-color: var(--vscode-focusBorder);
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--vscode-foreground);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-nav-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--vscode-descriptionForeground);
+}
+
+.settings-nav-item.active .settings-nav-icon {
+  color: inherit;
+}
+
+.settings-nav-label {
+  min-width: 0;
+}
+
+.settings-nav-item:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.settings-nav-item.active {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+}
+
+.settings-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-nav-select {
+  display: none;
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.settings-nav-item.is-dim {
+  opacity: 0.45;
+}
+
+.settings-nav-item:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: -2px;
+}
+
+.settings-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 24px 8px;
+}
+
+.settings-crumb {
+  font-size: 13px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.settings-crumb-sep {
+  margin: 0 6px;
+  opacity: 0.6;
+}
+
+.settings-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-restore,
+.settings-action {
+  border: 1px solid var(--vscode-button-border, var(--vscode-editorWidget-border));
+  border-radius: 4px;
+  padding: 4px 10px;
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-restore:hover,
+.settings-action:hover {
+  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
+}
+
+.settings-restore-confirm {
+  margin: 0 24px 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--vscode-foreground) 6%, transparent);
+}
+
+.settings-restore-confirm-lead {
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.settings-restore-confirm-list {
+  margin: 8px 0 12px;
+  padding-left: 1.2em;
+  color: var(--vscode-foreground);
+  line-height: 1.45;
+}
+
+.settings-restore-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-restore-confirm-go,
+.settings-restore-confirm-cancel {
+  border: 1px solid var(--vscode-button-border, var(--vscode-editorWidget-border));
+  border-radius: 4px;
+  padding: 4px 10px;
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-restore-confirm-go {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: var(--vscode-button-border, transparent);
+}
+
+.settings-restore-confirm-go:hover {
+  background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+}
+
+.settings-restore-confirm-cancel:hover {
+  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
+}
+
+.settings-restore:focus-visible,
+.settings-restore-confirm-go:focus-visible,
+.settings-restore-confirm-cancel:focus-visible,
+.settings-action:focus-visible,
+.settings-select:focus-visible,
+.settings-switch:focus-visible,
+.settings-range input:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.settings-head,
+.settings-restore-confirm {
+  flex: 0 0 auto;
+}
+
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 8px 24px 32px;
+}
+
+.settings-group {
+  margin: 18px 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground);
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(8rem, max-content);
+  gap: 16px 24px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid color-mix(in oklab, var(--vscode-foreground) 10%, transparent);
+}
+
+.settings-row-copy {
+  min-width: 0;
+}
+
+.settings-row.is-disabled {
+  opacity: 0.55;
+}
+
+.settings-row-title {
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.settings-row-desc {
+  margin-top: 3px;
+  max-width: 48em;
+  color: var(--vscode-descriptionForeground);
+  line-height: 1.4;
+}
+
+.settings-row-control {
+  display: flex;
+  justify-content: flex-end;
+  justify-self: end;
+  align-items: center;
+  min-width: 0;
+}
+
+.settings-switch {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--vscode-foreground) 28%, transparent);
+  cursor: pointer;
+}
+
+.settings-switch.on {
+  background: var(--vscode-charts-blue, var(--vscode-button-background));
+}
+
+.settings-switch:disabled {
+  cursor: default;
+}
+
+.settings-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--vscode-foreground) 8%, var(--vscode-editor-background, var(--vscode-sideBar-background)));
+  transition: transform 120ms ease;
+}
+
+.settings-switch.on .settings-switch-knob {
+  transform: translateX(16px);
+}
+
+.settings-text {
+  min-width: 180px;
+  max-width: 280px;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border));
+  border-radius: 4px;
+  font: inherit;
+}
+
+.settings-text:focus {
+  outline: none;
+  border-color: var(--vscode-focusBorder);
+}
+
+.settings-row[data-kind="tags"] {
+  grid-template-columns: 1fr;
+  align-items: start;
+}
+
+.settings-row[data-kind="tags"] .settings-row-control {
+  justify-content: flex-start;
+}
+
+.settings-tags {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.settings-tags-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--vscode-foreground) 12%, transparent);
+  font-size: 12px;
+}
+
+.settings-tag-remove {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 0 0 2px;
+  line-height: 1;
+  font: inherit;
+}
+
+.settings-tags-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 4px 8px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border));
+  border-radius: 4px;
+  font: inherit;
+}
+
+.settings-tags-input:focus {
+  outline: none;
+  border-color: var(--vscode-focusBorder);
+}
+
+.settings-select {
+  min-width: 160px;
+  padding: 4px 8px;
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+  background: var(--vscode-dropdown-background, var(--vscode-input-background));
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-editorWidget-border));
+  border-radius: 4px;
+  font: inherit;
+}
+
+.settings-range {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-range input {
+  width: 140px;
+}
+
+.settings-range output {
+  min-width: 3.2em;
+  color: var(--vscode-descriptionForeground);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-empty {
+  padding: 24px 0;
+  color: var(--vscode-descriptionForeground);
+}
+
+.settings-value {
+  color: var(--vscode-descriptionForeground);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.settings-about-disclaimer {
+  margin: 28px 0 0;
+  padding-top: 16px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--vscode-descriptionForeground);
+}
+
+@media (max-width: 799px) {
+  .settings-shell { flex-direction: column; }
+  .settings-nav {
+    flex: 0 0 auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border));
+  }
+  .settings-search-wrap,
+  .settings-nav-list,
+  .settings-nav-select { flex: 1 1 100%; }
+  .settings-nav-list {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .settings-nav-item { width: auto; }
+}
+
+@media (max-width: 600px) {
+  .settings-row:not([data-kind="tags"]) {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+  .settings-row:not([data-kind="tags"]) .settings-row-control {
+    justify-content: flex-start;
+    justify-self: stretch;
+    width: 100%;
+  }
+  .settings-row:not([data-kind="tags"]) .settings-select,
+  .settings-row:not([data-kind="tags"]) .settings-text,
+  .settings-row:not([data-kind="tags"]) .settings-range,
+  .settings-row:not([data-kind="tags"]) .settings-range input,
+  .settings-row:not([data-kind="tags"]) .settings-action {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .settings-nav-list { display: none; }
+  .settings-nav-select.settings-select {
+    display: block;
+    min-width: 0;
+  }
+}

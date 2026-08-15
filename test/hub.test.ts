@@ -1,0 +1,256 @@
+import { describe, it, expect } from "vitest";
+import { Hub } from "../src/hub.js";
+import { REMOTE_PROTO_VERSION } from "../src/frames.js";
+
+class FakeSender {
+  sent: string[] = [];
+  send(data: string) {
+    this.sent.push(data);
+  }
+  json(): unknown[] {
+    return this.sent.map((s) => JSON.parse(s));
+  }
+}
+
+function hello(hub: Hub, deviceId = "devA", proto = REMOTE_PROTO_VERSION) {
+  return hub.fromUplink(deviceId, JSON.stringify({ t: "hello", proto }));
+}
+
+describe("Hub routing", () => {
+  it("host frames broadcast to every client of that device only", () => {
+    const hub = new Hub();
+    const up = new FakeSender();
+    const c1 = new FakeSender();
+    const c2 = new FakeSender();
+    const other = new FakeSender();
+    hub.attachUplink("devA", up);
+    hello(hub);
+    hub.addClient("devA", c1);
+    hub.addClient("devA", c2);
+    hub.addClient("devB", other);
+    hub.fromUplink("devA", JSON.stringify({ t: "host", msg: { type: "messageChunk", text: "hi" } }));
+    expect(c1.json()).toEqual([{ type: "messageChunk", text: "hi" }]);
+    expect(c2.json()).toEqual([{ type: "messageChunk", text: "hi" }]);
+    expect(other.sent).toEqual([]);
+  });
+
+  it("host-to frames route to the listed clients that are still connected", () => {
+    const hub = new Hub();
+    const c1 = new FakeSender();
+    const c2 = new FakeSender();
+    const c3 = new FakeSender();
+    hub.attachUplink("devA", new FakeSender());
+    hello(hub);
+    const id1 = hub.addClient("devA", c1);
+    hub.addClient("devA", c2);
+    const id3 = hub.addClient("devA", c3);
+    hub.removeClient("devA", id3);
+
+    expect(() => hub.fromUplink("devA", JSON.stringify({
+      t: "host-to",
+      clientIds: [id1, id3, "already-gone"],
+      msg: { type: "messageChunk", text: "group" },
+    }))).not.toThrow();
+    expect(c1.json()).toEqual([{ type: "messageChunk", text: "group" }]);
+    expect(c2.sent).toEqual([]);
+    expect(c3.sent).toEqual([]);
+  });
+
+  it("a client's ready becomes client-ready; the snapshot routes back to just that client", () => {
+    const hub = new Hub();
+    const up = new FakeSender();
+    const c1 = new FakeSender();
+    const c2 = new FakeSender();
+    hub.attachUplink("devA", up);
+    hello(hub);
+    const id1 = hub.addClient("devA", c1);
+    hub.addClient("devA", c2);
+    up.sent = []; // drop the clients-count notifications
+
+    expect(hub.fromClient("devA", id1, JSON.stringify({ type: "ready", tabToken: "logical-tab-1" }))).toBe("routed");
+    expect(up.json()).toEqual([{ t: "client-ready", clientId: id1, tabToken: "logical-tab-1" }]);
+
+    hub.fromUplink("devA", JSON.stringify({ t: "snapshot", clientId: id1, msgs: [{ type: "clearMessages" }, { type: "messageChunk", text: "x" }] }));
+    expect(c1.json()).toEqual([{ type: "clearMessages" }, { type: "messageChunk", text: "x" }]);
+    expect(c2.sent).toEqual([]);
+  });
+
+  it("non-ready client messages wrap into msg frames for the uplink", () => {
+    const hub = new Hub();
+    const up = new FakeSender();
+    hub.attachUplink("devA", up);
+    hello(hub);
+    const id = hub.addClient("devA", new FakeSender());
+    up.sent = [];
+    hub.fromClient("devA", id, JSON.stringify({ type: "send", text: "do it" }));
+    expect(up.json()).toEqual([{ t: "msg", clientId: id, msg: { type: "send", text: "do it" } }]);
+  });
+
+  it("omits an absent or non-string ready tab token", () => {
+    const hub = new Hub();
+    const up = new FakeSender();
+    hub.attachUplink("devA", up);
+    const id = hub.addClient("devA", new FakeSender());
+    up.sent = [];
+
+    hub.fromClient("devA", id, JSON.stringify({ type: "ready" }));
+    hub.fromClient("devA", id, JSON.stringify({ type: "ready", tabToken: 42 }));
+
+    expect(up.json()).toEqual([
+      { t: "client-ready", clientId: id },
+      { t: "client-ready", clientId: id },
+    ]);
+  });
+
+  it("reports offline when no uplink, dropped on garbage", () => {
+    const hub = new Hub();
+    const id = hub.addClient("devA", new FakeSender());
+    expect(hub.fromClient("devA", id, JSON.stringify({ type: "send", text: "x" }))).toBe("offline");
+    expect(hub.fromClient("devA", id, "garbage")).toBe("dropped");
+  });
+
+  it("refuses a second uplink for the same device", () => {
+    const hub = new Hub();
+    expect(hub.attachUplink("devA", new FakeSender())).toBe(true);
+    expect(hub.attachUplink("devA", new FakeSender())).toBe(false);
+    hub.detachUplink("devA");
+    expect(hub.attachUplink("devA", new FakeSender())).toBe(true);
+  });
+
+  it("a recreated host gets tab tokens, so an adverse-order reconnect can transfer ownership", () => {
+    const hub = new Hub();
+    const first = new FakeSender();
+    hub.attachUplink("devA", first);
+    const id1 = hub.addClient("devA", new FakeSender());
+    const id2 = hub.addClient("devA", new FakeSender());
+    hub.fromClient("devA", id1, JSON.stringify({ type: "ready", tabToken: "logical-tab-1" }));
+    hub.fromClient("devA", id2, JSON.stringify({ type: "ready", tabToken: "other-tab" }));
+    hub.detachUplink("devA");
+
+    // A fresh extension host must rebuild ownership from the surviving socket.
+    const reconnected = new FakeSender();
+    expect(hub.attachUplink("devA", reconnected)).toBe(true);
+    expect(reconnected.json()).toEqual([
+      { t: "clients", count: 2 },
+      { t: "client-ready", clientId: id1, tabToken: "logical-tab-1" },
+      { t: "client-ready", clientId: id2, tabToken: "other-tab" },
+    ]);
+
+    // The same logical tab reconnects before the old socket's delayed close.
+    // Both client ids carrying the same token gives the host the predecessor it
+    // needs to transfer ownership instead of rejecting the new client.
+    const replacement = hub.addClient("devA", new FakeSender());
+    hub.fromClient("devA", replacement, JSON.stringify({ type: "ready", tabToken: "logical-tab-1" }));
+    expect(reconnected.json().at(-1)).toEqual({
+      t: "client-ready", clientId: replacement, tabToken: "logical-tab-1",
+    });
+    hub.removeClient("devA", id1);
+    expect(reconnected.json().slice(-2)).toEqual([
+      { t: "client-left", clientId: id1 },
+      { t: "clients", count: 2 },
+    ]);
+  });
+
+  it("a client that disconnects during an uplink outage is not replayed on reconnect", () => {
+    const hub = new Hub();
+    hub.attachUplink("devA", new FakeSender());
+    const stayed = hub.addClient("devA", new FakeSender());
+    const left = hub.addClient("devA", new FakeSender());
+    hub.detachUplink("devA");
+    hub.removeClient("devA", left);
+
+    const reconnected = new FakeSender();
+    hub.attachUplink("devA", reconnected);
+    expect(reconnected.json()).toEqual([
+      { t: "clients", count: 1 },
+      { t: "client-ready", clientId: stayed },
+    ]);
+  });
+
+  it("retains a ready token received while the uplink is offline", () => {
+    const hub = new Hub();
+    const id = hub.addClient("devA", new FakeSender());
+    expect(hub.fromClient(
+      "devA",
+      id,
+      JSON.stringify({ type: "ready", tabToken: "offline-tab" }),
+    )).toBe("offline");
+
+    const reconnected = new FakeSender();
+    hub.attachUplink("devA", reconnected);
+    expect(reconnected.json()).toEqual([
+      { t: "clients", count: 1 },
+      { t: "client-ready", clientId: id, tabToken: "offline-tab" },
+    ]);
+  });
+
+  it("uplink learns which client left as well as the updated viewer count", () => {
+    const hub = new Hub();
+    const up = new FakeSender();
+    const c = new FakeSender();
+    const id = hub.addClient("devA", c); // before uplink attaches
+    hub.attachUplink("devA", up);
+    expect(up.json()).toEqual([
+      { t: "clients", count: 1 },
+      { t: "client-ready", clientId: id },
+    ]);
+    up.sent = [];
+    hub.removeClient("devA", id);
+    expect(up.json()).toEqual([
+      { t: "client-left", clientId: id },
+      { t: "clients", count: 0 },
+    ]);
+  });
+
+  it("snapshot to a departed client is a no-op", () => {
+    const hub = new Hub();
+    const up = new FakeSender();
+    hub.attachUplink("devA", up);
+    hello(hub);
+    const id = hub.addClient("devA", new FakeSender());
+    hub.removeClient("devA", id);
+    expect(() => hub.fromUplink("devA", JSON.stringify({ t: "snapshot", clientId: id, msgs: [{ type: "clearMessages" }] }))).not.toThrow();
+  });
+
+  it("requires hello before accepting host traffic", () => {
+    const hub = new Hub();
+    const client = new FakeSender();
+    hub.attachUplink("devA", new FakeSender());
+    hub.addClient("devA", client);
+
+    expect(hub.fromUplink(
+      "devA",
+      JSON.stringify({ t: "host", msg: { type: "messageChunk", text: "too early" } }),
+    )).toEqual({ kind: "refused", reason: "hello-required" });
+    expect(client.sent).toEqual([]);
+
+    expect(hello(hub)).toEqual({ kind: "accepted" });
+    expect(hub.fromUplink(
+      "devA",
+      JSON.stringify({ t: "host", msg: { type: "messageChunk", text: "accepted" } }),
+    )).toEqual({ kind: "accepted" });
+    expect(client.json()).toEqual([{ type: "messageChunk", text: "accepted" }]);
+  });
+
+  it("accepts its own protocol but refuses a peer newer than the relay", () => {
+    const current = new Hub();
+    current.attachUplink("devA", new FakeSender());
+    expect(hello(current)).toEqual({ kind: "accepted" });
+
+    const newer = new Hub();
+    newer.attachUplink("devA", new FakeSender());
+    expect(hello(newer, "devA", REMOTE_PROTO_VERSION + 1)).toEqual({
+      kind: "refused",
+      reason: "protocol-too-new",
+      peerProto: REMOTE_PROTO_VERSION + 1,
+    });
+  });
+
+  it("connectedDevices lists only devices with a live uplink", () => {
+    const hub = new Hub();
+    hub.attachUplink("devA", new FakeSender());
+    hub.addClient("devA", new FakeSender());
+    hub.addClient("devB", new FakeSender()); // no uplink
+    expect(hub.connectedDevices()).toEqual([{ deviceId: "devA", clients: 1 }]);
+  });
+});

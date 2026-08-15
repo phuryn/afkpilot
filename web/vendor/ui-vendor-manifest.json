@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "source": {
+    "repository": "grok-build-vscode",
+    "revision": "413df052a179ec8ed2997bbf84ca64149b4b70e2",
+    "appVersion": "3.9.0",
+    "filesMatchRevision": false
+  },
+  "artifacts": [
+    {
+      "source": "media/chat.css",
+      "destination": "media/chat.css",
+      "sha256": "4212ca669f8e3f5564fd480d4b0839b71b11a327f64839cddee991e2fcab8ae8"
+    },
+    {
+      "source": "media/chat.js",
+      "destination": "media/chat.js",
+      "sha256": "7237ab2bc5f94b6d7bd706bb76c27eeee492de4090bf173d58682d7f7c16296f"
+    },
+    {
+      "source": "media/file-panel.css",
+      "destination": "media/file-panel.css",
+      "sha256": "0680a18f190cfaab20d75ad1bc5118b4e6790af0d071a5e77e48f9300e236374"
+    },
+    {
+      "source": "media/file-panel.js",
+      "destination": "media/file-panel.js",
+      "sha256": "60c625856275fe43a26ecaf43b1afcc49e3e8fa43ec7e32cfc4d64798b6a7419"
+    },
+    {
+      "source": "media/syntax-highlight.js",
+      "destination": "media/syntax-highlight.js",
+      "sha256": "bb0ea9998a4938cc47d4967ab3de11139ca9b0aae138464d20116bf6342b6f51"
+    },
+    {
+      "source": "media/file-icons",
+      "destination": "media/file-icons",
+      "sha256": "6f72cd2aada853880173a4af2f08b5c3483fb0829ee60aac57a2a7690084c8e3"
+    },
+    {
+      "source": "media/pcm-worklet.js",
+      "destination": "media/pcm-worklet.js",
+      "sha256": "14255208f5214f0d308eecb632e1a0f07e8376322d9191017fc951c99a326fec"
+    },
+    {
+      "source": "media/settings.css",
+      "destination": "media/settings.css",
+      "sha256": "35db5c620dbcc7bfcd7d6db5153f46a5024c796e9aded9dc6c0ac1c59ae7c1ce"
+    },
+    {
+      "source": "media/settings.js",
+      "destination": "media/settings.js",
+      "sha256": "35758bd2ae6caedc548d24441d8802bfead806b21995f6fc6d41ae611423c9b4"
+    },
+    {
+      "source": "media/webview-helpers.js",
+      "destination": "media/webview-helpers.js",
+      "sha256": "374aad4297492a4e48294985c497286ec7d28bef530010344051df65789d2f07"
+    },
+    {
+      "source": "media/mathjax/tex-svg-full.js",
+      "destination": "media/mathjax/tex-svg-full.js",
+      "sha256": "a4354ff94fd868aea0cc6eaaa79a57fda0588646fc46ee3700a349ee0a11cbe6"
+    },
+    {
+      "source": "media/mermaid/mermaid.min.js",
+      "destination": "media/mermaid/mermaid.min.js",
+      "sha256": "70137e77bb273bb2ef972b86e8b0400cca8be53cb25bfc45911a186dc98665de"
+    },
+    {
+      "source": "resources/grok-icon.svg",
+      "destination": "resources/grok-icon.svg",
+      "sha256": "7334cf8eb50f12328ed747d7cdc662606565cb8c2f3dcb0b324390a7ddb77a5d"
+    }
+  ]
+}

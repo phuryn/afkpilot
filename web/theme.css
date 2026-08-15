@@ -1,0 +1,315 @@
+/* AFK Pilot — shared theme.
+ *
+ * Loaded by index / link / privacy / terms (chat.html stays dark-only and keeps
+ * its own vendored palette). One token layer, two themes: the dark set is the
+ * VS Code dark identity the product lives inside; the light set is a cool,
+ * quiet near-white — deliberately not a warm cream. The page's <head> stamps
+ * data-theme before paint, so there is no flash and no JS-off dark/light bug.
+ *
+ * Personality is carried by treatment, not an exotic face: a system sans for
+ * prose paired with the editor's own monospace for eyebrows, device names,
+ * pairing codes, and labels — the landing speaks the editor's language.
+ */
+
+/* ---- tokens: dark is the base (also the no-JS fallback) ---- */
+:root,
+:root[data-theme="dark"] {
+  --bg: #1e1e1e;
+  --surface: #252526;
+  --surface-2: #2a2d2e;
+  --border: #454545;
+  --border-soft: #333333;
+
+  --text: #cccccc;
+  --heading: #ededed;
+  --muted: #9d9d9d;
+  --faint: #6f6f6f;
+
+  --accent: #3794ff;
+  --accent-soft: rgba(55, 148, 255, 0.12);
+  --green: #4ec9b0;
+  --yellow: #d7ba7d;
+  --red: #f48771;
+
+  --btn: #0e639c;
+  --btn-hover: #1177bb;
+  --on-btn: #ffffff;
+
+  --logo: #ffffff;
+  --code-bg: #0c0c0c;
+  --ticket-bg: #1a1a1a;
+
+  --ring: rgba(55, 148, 255, 0.55);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 1px 2px rgba(0, 0, 0, 0.4), 0 24px 60px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg: #fbfbfc;
+  --surface: #ffffff;
+  --surface-2: #f2f3f5;
+  --border: #e2e4e8;
+  --border-soft: #ececef;
+
+  --text: #333840;
+  --heading: #14171c;
+  --muted: #565d67;
+  --faint: #8a909a;
+
+  --accent: #1f6feb;
+  --accent-soft: rgba(31, 111, 235, 0.09);
+  --green: #1a9e86;
+  --yellow: #9a6d15;
+  --red: #c4462f;
+
+  --btn: #0e639c;
+  --btn-hover: #1177bb;
+  --on-btn: #ffffff;
+
+  --logo: #14171c;
+  --code-bg: #f2f3f5;
+  --ticket-bg: #ffffff;
+
+  --ring: rgba(31, 111, 235, 0.4);
+  --shadow-sm: 0 1px 2px rgba(20, 23, 28, 0.06);
+  --shadow-lg: 0 1px 2px rgba(20, 23, 28, 0.06), 0 24px 54px rgba(20, 23, 28, 0.12);
+  color-scheme: light;
+}
+
+/* ---- type + space scale ---- */
+:root {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, Menlo, Consolas, monospace;
+
+  --step--1: 0.8125rem; /* 13 */
+  --step-0: 1rem;       /* 16 */
+  --step-1: 1.1875rem;  /* 19 */
+  --step-2: 1.4375rem;  /* 23 */
+  --step-3: clamp(1.6rem, 3.2vw, 2rem);
+  --step-hero: clamp(2.5rem, 6.4vw, 4.25rem);
+
+  --wrap: 1120px;
+  --measure: 42rem;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-lg: 18px;
+}
+
+/* ---- reset (scoped to these pages, not chat) ---- */
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--step-0);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  display: flex;
+  flex-direction: column;
+}
+
+h1, h2, h3 { color: var(--heading); font-weight: 600; margin: 0; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code, .mono { font-family: var(--font-mono); }
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.wrap {
+  width: 100%;
+  max-width: var(--wrap);
+  margin-inline: auto;
+  padding-inline: clamp(1.25rem, 4vw, 2.5rem);
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0;
+}
+
+.muted { color: var(--muted); }
+
+/* ---- header ---- */
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: 1.35rem;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--heading);
+  text-decoration: none;
+  font-weight: 600;
+}
+.brand:hover { text-decoration: none; }
+
+.logo-mark {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  background-color: var(--logo);
+  -webkit-mask: url(/logo.svg) center / contain no-repeat;
+  mask: url(/logo.svg) center / contain no-repeat;
+}
+
+.wordmark {
+  font-size: 1.0625rem;
+  letter-spacing: -0.01em;
+}
+.wordmark b { font-weight: 600; }
+.wordmark .dim { color: var(--muted); font-weight: 500; }
+
+.header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* Clerk's UserButton is an avatar only — name the account next to it so two
+   sign-in methods on the same machine are distinguishable. Mock mode leaves
+   the node empty/hidden. */
+.signed-in-as {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  max-width: min(28ch, 42vw);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+/* icon button (theme toggle) */
+.icon-toggle {
+  width: 38px;
+  height: 38px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.icon-toggle:hover { color: var(--heading); border-color: var(--faint); }
+.icon-toggle svg { width: 17px; height: 17px; display: block; }
+:root[data-theme="dark"] .icon-toggle .i-sun { display: block; }
+:root[data-theme="dark"] .icon-toggle .i-moon { display: none; }
+:root[data-theme="light"] .icon-toggle .i-sun { display: none; }
+:root[data-theme="light"] .icon-toggle .i-moon { display: block; }
+
+/* ---- buttons ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0.72rem 1.25rem;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.05s ease;
+}
+.btn:hover { text-decoration: none; }
+.btn:active { transform: translateY(1px); }
+
+.btn-primary {
+  background: var(--btn);
+  color: var(--on-btn);
+}
+.btn-primary:hover { background: var(--btn-hover); }
+
+.btn-secondary {
+  background: var(--surface);
+  color: var(--heading);
+  border-color: var(--border);
+}
+.btn-secondary:hover { border-color: var(--faint); background: var(--surface-2); }
+
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn:disabled:active { transform: none; }
+
+/* ---- footer ---- */
+.site-footer {
+  margin-top: auto;
+  border-top: 1px solid var(--border-soft);
+}
+.site-footer .wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.25rem;
+  padding-block: 1.75rem;
+  font-size: var(--step--1);
+  color: var(--muted);
+}
+.site-footer .copy { font-family: var(--font-mono); }
+.site-footer nav { display: inline-flex; gap: 1.25rem; margin-left: auto; }
+.site-footer a { color: var(--muted); }
+.site-footer a:hover { color: var(--heading); text-decoration: none; }
+/* The honest fine print: independence + trademark note, quiet on its own row. */
+.site-footer .fine {
+  flex-basis: 100%;
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--faint);
+}
+
+@media (max-width: 560px) {
+  .site-footer nav { margin-left: 0; width: 100%; }
+}
+
+/* ---- legal / long-form prose (privacy + terms) ---- */
+.legal-main { flex: 1; }
+.legal { max-width: var(--measure); padding-block: clamp(2.5rem, 6vw, 4rem); }
+.legal h1 { font-size: var(--step-3); letter-spacing: -0.015em; margin: 0.7rem 0 0; }
+.legal .lede { color: var(--muted); margin: 0.85rem 0 0; font-size: var(--step-1); line-height: 1.55; }
+.legal .effective { font-family: var(--font-mono); font-size: var(--step--1); color: var(--faint); margin: 1rem 0 0; }
+.legal h2 { font-size: var(--step-1); letter-spacing: -0.01em; margin: 2.6rem 0 0; }
+.legal p { margin: 0.75rem 0 0; line-height: 1.68; }
+.legal ul { margin: 0.85rem 0 0; padding-left: 1.2rem; }
+.legal li { margin: 0.4rem 0; line-height: 1.6; }
+.legal strong { color: var(--heading); font-weight: 600; }
+.legal .divider { border: 0; border-top: 1px solid var(--border-soft); margin: 2.75rem 0 0; }
+
+/* ---- sign-in gate (auth.js requireSignIn) ---- */
+.grok-auth-panel { margin-top: 1.1rem; text-align: center; }
+.grok-auth-panel p { color: var(--muted); font-size: 0.95rem; margin: 0 0 0.85rem; }
+
+/* ---- reduced motion floor ---- */
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+}
+
+/* The [hidden] attribute must always win: several elements here carry display
+   classes (.btn, .app, flex rows), and an author-origin `display` silently
+   defeats the UA's [hidden] rule without this belt. */
+[hidden] { display: none !important; }

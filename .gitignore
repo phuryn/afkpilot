@@ -1,0 +1,40 @@
+node_modules/
+# Scratch roots from the vendor-check test. It removes its own in a `finally`,
+# so these only survive a run that was KILLED — a timeout, a Ctrl-C. That is
+# exactly when nobody is looking, and one of them reached a commit via
+# `git add -A`. Ignored as a backstop; the test also builds them under the OS
+# temp dir now, so the repo is not the place they land in the first place.
+.tmp-vendor-check-*/
+# Agent scratch: a per-session goal file the owner asks for by name. Temporary
+# by construction — it describes one sitting's work, not the project.
+currentgoal.md
+dist/
+e2e-artifacts/
+.env
+CLAUDE.local.md
+supabase/.temp/
+
+# Machine-specific agent tool permissions — per-developer, never shared
+.claude/settings.local.json
+
+# Ad-hoc raw-output dirs an agent may leave behind while verifying
+.verification/
+
+# The maintainers' private working area — never in the public tree. History
+# and backup live in the private mirror repo, not here.
+docs/internal/
+
+# Points at the maintainers' own dev database — machine/account-specific
+.mcp.json
+
+# Throwaway spikes (Electron UI feasibility, etc.) — never shipped
+spike/
+
+# Grok CLI's per-workspace config. Machine-local: it is written by the agent
+# running here (MCP servers, CLI overrides) and describes this checkout on this
+# machine, not the project.
+.grok/
+
+# Screenshot frames from `npm run e2e:screens` — evidence for a person or a
+# model to look at, regenerated on every run. Never committed.
+.screens/

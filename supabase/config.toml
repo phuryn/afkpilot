@@ -1,0 +1,12 @@
+# Minimal on purpose. Schema changes ship ONLY as files under
+# supabase/migrations/ — the Supabase GitHub integration applies them
+# automatically on push (each environment tracks its branch); never apply SQL
+# by hand.
+#
+# Edge Functions / Storage buckets: NONE by design — the relay can never be an
+# edge function (long-lived WebSockets + in-memory hub state; it deploys to
+# Railway, see railway.json). If a side-task function is ever added under
+# supabase/functions/<name>/, it deploys ONLY if declared in this file — the
+# GitHub integration reads config.toml to pick deployment targets.
+
+project_id = "grok-remote"

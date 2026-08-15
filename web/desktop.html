@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script>
+  // Set the theme before first paint (no flash), and expose the toggle.
+  (function () {
+    var root = document.documentElement;
+    var saved;
+    try { saved = localStorage.getItem("grok-remote-theme"); } catch (e) {}
+    var initial = saved || ((window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark");
+    root.setAttribute("data-theme", initial);
+    window.__toggleTheme = function () {
+      var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem("grok-remote-theme", next); } catch (e) {}
+    };
+  })();
+</script>
+<title>Grok Build Desktop (Community) &mdash; the agent without terminal or IDE</title>
+<meta name="description" content="Grok Build Desktop (Community) is a free, unofficial standalone app for running the Grok Build coding agent without a terminal or an IDE such as VS Code. Connect it to AFK Pilot for phone access." />
+<meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#fbfbfc" media="(prefers-color-scheme: light)" />
+<link rel="canonical" href="https://afkpilot.com/desktop" />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://afkpilot.com/desktop" />
+<meta property="og:title" content="Grok Build Desktop (Community) &mdash; the agent without terminal or IDE" />
+<meta property="og:description" content="A free, unofficial standalone host for the Grok Build coding agent. Use AFK Pilot when you want to reach it from your phone." />
+<meta property="og:image" content="https://afkpilot.com/og-desktop.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="Grok Build Desktop (Community), a standalone coding agent host" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Grok Build Desktop (Community)" />
+<meta name="twitter:description" content="The free, unofficial standalone host for the Grok Build coding agent." />
+<meta name="twitter:image" content="https://afkpilot.com/og-desktop.png" />
+<meta name="twitter:image:alt" content="Grok Build Desktop (Community), a standalone coding agent host" />
+<link rel="icon" href="/favicon.svg" />
+<link rel="stylesheet" href="/theme.css" />
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Grok Build Desktop (Community)",
+  "description": "A free, unofficial standalone host for the Grok Build coding agent — no terminal or IDE required.",
+  "url": "https://afkpilot.com/desktop",
+  "downloadUrl": "https://github.com/phuryn/grok-build-vscode/releases",
+  "operatingSystem": "macOS, Windows",
+  "applicationCategory": "DeveloperApplication",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD",
+    "url": "https://github.com/phuryn/grok-build-vscode/releases"
+  }
+}
+</script>
+<style>
+  .desktop-main { flex: 1; }
+  .desktop-hero { padding-block: clamp(3.25rem, 8vw, 6.25rem) clamp(2.75rem, 6vw, 4.75rem); }
+  .desktop-hero-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 0.86fr) minmax(320px, 1.14fr);
+    gap: clamp(2rem, 6vw, 5.5rem);
+    align-items: center;
+  }
+  .desktop-hero h1 {
+    max-width: 11ch;
+    margin-top: 1rem;
+    font-size: var(--step-hero);
+    line-height: 1.04;
+    letter-spacing: -0.035em;
+  }
+  .desktop-lede {
+    max-width: 43ch;
+    margin: 1.4rem 0 0;
+    color: var(--muted);
+    font-size: var(--step-1);
+    line-height: 1.58;
+  }
+  .desktop-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 2rem; }
+  .desktop-note { margin: 1.15rem 0 0; color: var(--faint); font-family: var(--font-mono); font-size: var(--step--1); }
+  /* The real app, not an illustration. It is a dense three-panel shot, so it is
+     given the wider hero column and allowed to run past the wrap on desktop —
+     legibility of the shape matters more here than a tidy right margin. */
+  .host-shot {
+    margin: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    line-height: 0;
+  }
+  .host-shot img { display: block; width: 100%; height: auto; }
+  @media (min-width: 1100px) {
+    /* Bleed toward the right edge: three panels at 600px render the file tree as
+       texture rather than text. The bleed is taken from the gutter the wrap is
+       already leaving — (100vw - --wrap) / 2, less a margin so it never touches
+       the edge — because a fixed vw bleed overflows exactly where the gutter
+       runs out (measured: horizontal scroll at 1100px). max(0px, ...) keeps it
+       inert rather than positive when there is no gutter to spend. */
+    .host-shot {
+      margin-right: calc(-1 * max(0px, min(9.5rem, (100vw - var(--wrap)) / 2 - 1.5rem)));
+    }
+  }
+  .desktop-section { border-top: 1px solid var(--border-soft); padding-block: clamp(2.75rem, 6vw, 4.75rem); }
+  .desktop-section-head { max-width: 44rem; }
+  .desktop-section h2 { margin-top: 0.55rem; font-size: var(--step-3); letter-spacing: -0.02em; }
+  .desktop-section-head > p:last-child { margin: 0.8rem 0 0; color: var(--muted); }
+  .desktop-features { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 2.2rem; }
+  .desktop-feature { padding: 0.2rem clamp(1rem, 3vw, 2.3rem); }
+  .desktop-feature:first-child { padding-left: 0; }
+  .desktop-feature:last-child { padding-right: 0; }
+  .desktop-feature:not(:first-child) { border-left: 1px solid var(--border-soft); }
+  .desktop-feature h3 { margin-top: 0.65rem; font-size: var(--step-1); }
+  .desktop-feature p { margin: 0.45rem 0 0; color: var(--muted); font-size: 0.95rem; line-height: 1.56; }
+  .download-panel { margin-top: 2rem; padding: clamp(1.15rem, 3vw, 1.75rem); background: linear-gradient(135deg, var(--accent-soft), transparent 62%), var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+  .download-head { display: flex; justify-content: space-between; align-items: end; gap: 1rem; }
+  .download-head h3 { font-size: var(--step-1); }
+  .download-head p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.9rem; }
+  .download-status { color: var(--faint); font-family: var(--font-mono); font-size: 0.72rem; text-align: right; }
+  .download-primary { margin-top: 1.35rem; min-width: 17rem; }
+  .download-primary:disabled { background: var(--surface-2); border-color: var(--border); color: var(--muted); opacity: 1; }
+  .download-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.7rem; margin-top: 0.85rem; }
+  .download-option { display: flex; align-items: center; gap: 0.75rem; min-height: 4.6rem; padding: 0.8rem 0.9rem; background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); color: var(--heading); font: inherit; text-align: left; cursor: pointer; }
+  .download-option:hover:not(:disabled) { border-color: var(--faint); background: var(--surface-2); }
+  .download-option:disabled { color: var(--muted); cursor: default; }
+  .download-option[aria-current="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .platform-icon { display: grid; place-items: center; width: 1.8rem; height: 1.8rem; flex: none; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-family: var(--font-mono); font-size: 0.68rem; font-weight: 600; }
+  .download-option strong, .download-option small { display: block; }
+  .download-option strong { font-size: 0.86rem; font-weight: 600; }
+  .download-option small { margin-top: 0.15rem; color: var(--faint); font-family: var(--font-mono); font-size: 0.68rem; }
+  .release-link { display: inline-block; margin-top: 1rem; font-family: var(--font-mono); font-size: var(--step--1); }
+  .download-note { margin: 1.1rem 0 0; padding-top: 0.95rem; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 0.84rem; line-height: 1.55; }
+  .download-note em { color: var(--heading); font-style: normal; font-weight: 600; }
+  .download-note-tight { margin-top: 0.65rem; padding-top: 0; border-top: 0; }
+  .download-steps { margin: 0.5rem 0 0; padding-left: 1.15rem; color: var(--muted); font-size: 0.84rem; line-height: 1.55; }
+  .download-steps li { margin-top: 0.3rem; }
+  .download-steps em { color: var(--heading); font-style: normal; font-weight: 600; }
+  /* A command to copy, so it must survive a narrow window without reflowing
+     into something that no longer runs. */
+  .inline-cmd {
+    display: inline-block;
+    margin-top: 0.4rem;
+    padding: 0.35rem 0.6rem;
+    max-width: 100%;
+    overflow-x: auto;
+    background: var(--code-bg);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    white-space: pre;
+  }
+  .path-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 2rem; }
+  .path-card { display: flex; flex-direction: column; min-height: 100%; padding: 1.3rem; border: 1px solid var(--border-soft); border-radius: var(--radius-lg); background: var(--surface); }
+  .path-card h3 { font-size: var(--step-1); }
+  .path-card p { flex: 1; margin: 0.55rem 0 1.1rem; color: var(--muted); font-size: 0.92rem; line-height: 1.55; }
+  .path-card a { align-self: flex-start; font-family: var(--font-mono); font-size: var(--step--1); }
+  .community-note { max-width: 48rem; margin: 2rem 0 0; padding: 1rem 1.1rem; border-left: 2px solid var(--yellow); background: var(--accent-soft); color: var(--muted); font-size: 0.9rem; }
+  .community-note strong { color: var(--heading); }
+  @media (max-width: 760px) {
+    .desktop-hero-grid { grid-template-columns: 1fr; }
+    .desktop-hero h1 { max-width: 14ch; }
+    .host-shot { max-width: 39rem; }
+    .desktop-features, .path-grid { grid-template-columns: 1fr; gap: 1.5rem; }
+    .desktop-feature, .desktop-feature:first-child, .desktop-feature:last-child { padding: 0; }
+    .desktop-feature:not(:first-child) { padding-top: 1.5rem; border-left: 0; border-top: 1px solid var(--border-soft); }
+    .download-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 480px) {
+    .download-head { display: block; }
+    .download-status { margin-top: 0.7rem; text-align: left; }
+    .download-primary { width: 100%; min-width: 0; }
+  }
+</style>
+</head>
+<body>
+  <header class="site-header wrap">
+    <a class="brand" href="/">
+      <span class="logo-mark" aria-hidden="true"></span>
+      <span class="wordmark"><b>AFK</b> <span class="dim">Pilot</span></span>
+    </a>
+    <div class="header-actions">
+      <button class="icon-toggle" type="button" onclick="__toggleTheme()" aria-label="Toggle light and dark theme" title="Toggle theme">
+        <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.5M12 19v2.5M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2.5 12H5M19 12h2.5M4.2 19.8L6 18M18 6l1.8-1.8"/></svg>
+        <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.2 6.2 0 0 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="desktop-main">
+    <section class="desktop-hero">
+      <div class="wrap desktop-hero-grid">
+        <div>
+          <p class="eyebrow">Grok Build (Community) &mdash; standalone host</p>
+          <h1>The agent, outside the editor.</h1>
+          <p class="desktop-lede"><b>Grok Build Desktop (Community)</b> is a free, unofficial Electron app for running the Grok Build coding agent without terminal or IDE (e.g., VS Code). Open your projects, work with the agent, and keep the same host close at hand when you do not need an editor.</p>
+          <div class="desktop-actions">
+            <a class="btn btn-primary" href="#downloads">Choose your download</a>
+            <a class="btn btn-secondary" href="https://github.com/phuryn/grok-build-vscode" target="_blank" rel="noopener">View source</a>
+          </div>
+          <p class="desktop-note">Free to use &middot; macOS and Windows &middot; no terminal or IDE required</p>
+        </div>
+
+        <figure class="host-shot">
+          <img src="/desktop-app.webp" width="1400" height="869" decoding="async"
+               alt="Grok Build Desktop with a project open: projects on the left, the conversation with a generated image in the middle, the file tree on the right" />
+        </figure>
+      </div>
+    </section>
+
+    <section class="desktop-section">
+      <div class="wrap">
+        <div class="desktop-section-head">
+          <p class="eyebrow">A second way to host</p>
+          <h2>Desktop is the host. AFK Pilot is the link.</h2>
+          <p>Use the standalone app when you want the agent without an IDE. Add AFK Pilot when you want to pick up the same work from a phone or browser.</p>
+        </div>
+        <div class="desktop-features">
+          <article class="desktop-feature">
+            <span class="eyebrow">01 / standalone</span>
+            <h3>The agent, by itself</h3>
+            <p>No VS Code window required. Projects on the left, the conversation in the middle, your files on the right &mdash; and text files open to read and edit in place.</p>
+          </article>
+          <article class="desktop-feature">
+            <span class="eyebrow">02 / community</span>
+            <h3>Free and unofficial</h3>
+            <p>This is a community-built host. It is free to download and use, and it is not made or endorsed by SpaceXAI (formerly xAI).</p>
+          </article>
+          <article class="desktop-feature">
+            <span class="eyebrow">03 / remote</span>
+            <h3>Reach it when you leave</h3>
+            <p>Connect the app to AFK Pilot, then chat, review, and steer the host from your phone or any modern browser.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="desktop-section" id="downloads">
+      <div class="wrap">
+        <div class="desktop-section-head">
+          <p class="eyebrow">Get the app</p>
+          <h2>Choose your build.</h2>
+          <p>Your browser picks a sensible default when it can. Every platform stays visible below, so the download never depends on detection.</p>
+        </div>
+        <div class="download-panel">
+          <div class="download-head">
+            <div>
+              <h3 id="download-heading">Recommended for this device</h3>
+              <p id="download-help">Checking your operating system&hellip;</p>
+            </div>
+            <div class="download-status" id="download-status" aria-live="polite">Detecting&hellip;</div>
+          </div>
+          <button class="btn btn-primary download-primary" id="primary-download" type="button" disabled>Detecting&hellip;</button>
+          <div class="download-grid" aria-label="All desktop downloads">
+            <button class="download-option" type="button" data-download-key="macosAppleSilicon"><span class="platform-icon">mac</span><span><strong>macOS &mdash; Apple silicon</strong><small data-arch="arm64 installer">arm64 installer</small></span></button>
+            <button class="download-option" type="button" data-download-key="macosIntel"><span class="platform-icon">mac</span><span><strong>macOS &mdash; Intel</strong><small data-arch="x64 installer">x64 installer</small></span></button>
+            <button class="download-option" type="button" data-download-key="windowsX64"><span class="platform-icon">win</span><span><strong>Windows x64</strong><small data-arch="x64 installer">x64 installer</small></span></button>
+          </div>
+          <p class="download-note" id="macos-signed-note" hidden><em>On macOS</em>, the app is signed with a Developer ID and notarised by Apple. It opens on first launch &mdash; no warning to dismiss, nothing to allow through in Settings.</p>
+          <p class="download-note" id="windows-open-note" hidden><em>On Windows</em>, the installer is not code-signed yet, so SmartScreen shows &ldquo;Windows protected your PC&rdquo; the first time: click <em>More info</em>, then <em>Run anyway</em>. A certificate is on the way.</p>
+          <p class="download-note download-note-tight">The app runs a coding agent on your machine. It reads and edits files and runs commands, asking you first unless you turn that off &mdash; the same as the VS&nbsp;Code extension. Open projects you trust, and read the <a href="https://github.com/phuryn/grok-build-vscode" target="_blank" rel="noopener">source</a> if you want to see exactly what it does.</p>
+          <a class="release-link" href="https://github.com/phuryn/grok-build-vscode/releases" target="_blank" rel="noopener">View all releases on GitHub &rarr;</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="desktop-section">
+      <div class="wrap">
+        <div class="desktop-section-head">
+          <p class="eyebrow">Keep going</p>
+          <h2>One host family, three useful places.</h2>
+        </div>
+        <div class="path-grid">
+          <article class="path-card">
+            <h3>Desktop</h3>
+            <p>Run the agent standalone on macOS or Windows.</p>
+            <a href="#downloads">Choose a build &rarr;</a>
+          </article>
+          <article class="path-card">
+            <h3>Source and releases</h3>
+            <p>Read the public source, follow development, or get the latest installer.</p>
+            <a href="https://github.com/phuryn/grok-build-vscode" target="_blank" rel="noopener">Open the GitHub repo &rarr;</a>
+          </article>
+          <article class="path-card">
+            <h3>AFK Pilot</h3>
+            <p>Link a host to your phone or browser and take the conversation with you.</p>
+            <a href="/">Start with AFK Pilot &rarr;</a>
+          </article>
+        </div>
+        <p class="community-note"><strong>Community notice.</strong> Grok Build Desktop (Community) is an unofficial community project. Grok and Grok Build are trademarks of xAI, and this project is not affiliated with or endorsed by SpaceXAI (formerly xAI).</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <span class="copy">&copy; The Product Compass</span>
+      <nav>
+        <a href="/">AFK Pilot</a>
+        <a href="https://github.com/phuryn/grok-build-vscode/issues" target="_blank" rel="noopener">Support</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/terms">Terms</a>
+      </nav>
+      <p class="fine">AFK Pilot and Grok Build Desktop are independent community products, not affiliated with or endorsed by SpaceXAI (formerly xAI). Grok and Grok Build are trademarks of xAI, used only to describe what these products work with.</p>
+    </div>
+  </footer>
+
+<script>
+  // Installers are discovered from the GitHub Releases API rather than pasted
+  // in here, because a hardcoded URL is wrong the moment a release ships and
+  // nobody notices until someone downloads a stale build.
+  //
+  // The browser asks GitHub directly. Unauthenticated rate limits are per
+  // client IP, so each visitor spends one request out of their own hourly
+  // budget; routing it through the relay would pool every visitor onto one
+  // server IP and make the limit reachable.
+  //
+  // /releases rather than /releases/latest: `latest` excludes pre-releases, and
+  // a build may be marked one. Taking the newest release that actually carries
+  // installers is the property we want either way.
+  //
+  // per_page=100 (the endpoint's maximum) rather than a small page, because the
+  // desktop app releases far less often than the extension does. At ten per
+  // page, eleven extension-only releases would push the newest desktop build
+  // off the end of the response and disable every download button while
+  // perfectly good installers sat on GitHub. One page of 100 is roughly two
+  // years of the current release cadence; if it is ever exceeded the page
+  // degrades to "coming soon" with the releases link, which is the same place
+  // every other failure lands.
+  const RELEASES_URL = "https://github.com/phuryn/grok-build-vscode/releases";
+  const RELEASES_API = "https://api.github.com/repos/phuryn/grok-build-vscode/releases?per_page=100";
+
+  // Asset names come from electron-builder's artifactName, which carries the
+  // version — match on the suffix so a version bump needs no change here.
+  const ASSET_PATTERNS = Object.freeze({
+    macosAppleSilicon: /-mac-arm64\.dmg$/i,
+    macosIntel: /-mac-x64\.dmg$/i,
+    windowsX64: /-win-x64\.exe$/i,
+  });
+
+  const DOWNLOAD_URLS = { macosAppleSilicon: "", macosIntel: "", windowsX64: "" };
+  const DOWNLOAD_SIZES = { macosAppleSilicon: 0, macosIntel: 0, windowsX64: 0 };
+  let releaseName = "";
+
+  function formatSize(bytes) {
+    if (!bytes) return "";
+    return (bytes / (1024 * 1024)).toFixed(0) + " MB";
+  }
+
+  // Returns "found", "none" (GitHub answered and there is no desktop build), or
+  // "unavailable" (GitHub did not answer). The last two look identical on screen
+  // if you let them: telling someone no build exists when the API was merely
+  // rate-limited sends them away for good over a temporary failure.
+  async function discoverDownloads() {
+    let releases;
+    try {
+      const response = await fetch(RELEASES_API, {
+        headers: { Accept: "application/vnd.github+json" },
+      });
+      if (!response.ok) return "unavailable";
+      releases = await response.json();
+    } catch (e) {
+      return "unavailable";
+    }
+    if (!Array.isArray(releases)) return "unavailable";
+
+    // Newest first is the API's own order. Take the newest release that
+    // actually carries desktop installers: the extension also ships releases
+    // with only a .vsix attached, and those must not blank out the buttons.
+    for (const release of releases) {
+      if (!release || release.draft || !Array.isArray(release.assets)) continue;
+      const found = {};
+      const sizes = {};
+      for (const asset of release.assets) {
+        for (const key of Object.keys(ASSET_PATTERNS)) {
+          if (!found[key] && ASSET_PATTERNS[key].test(asset.name || "")) {
+            found[key] = asset.browser_download_url;
+            sizes[key] = asset.size || 0;
+          }
+        }
+      }
+      if (!Object.keys(found).length) continue;
+      Object.assign(DOWNLOAD_URLS, found);
+      Object.assign(DOWNLOAD_SIZES, sizes);
+      releaseName = release.tag_name || release.name || "";
+      return "found";
+    }
+    return "none";
+  }
+
+  const PLATFORM_LABELS = Object.freeze({
+    macosAppleSilicon: "macOS Apple silicon",
+    macosIntel: "macOS Intel",
+    windowsX64: "Windows x64",
+  });
+  const primaryDownload = document.getElementById("primary-download");
+  const downloadHelp = document.getElementById("download-help");
+  const downloadStatus = document.getElementById("download-status");
+  const optionButtons = Array.from(document.querySelectorAll("[data-download-key]"));
+
+  function configureButton(button, key, primary) {
+    const label = PLATFORM_LABELS[key];
+    const url = DOWNLOAD_URLS[key];
+    button.disabled = !url;
+    button.dataset.downloadKey = key;
+    button.setAttribute("aria-label", url ? "Download " + label : label + " coming soon");
+    if (primary) button.textContent = url ? "Download " + label : label + " - coming soon";
+    // The size sits where the architecture already was: it is the one thing
+    // worth knowing before clicking an 80 MB link on a phone tether.
+    const detail = button.querySelector("small");
+    if (detail && url) {
+      const size = formatSize(DOWNLOAD_SIZES[key]);
+      detail.textContent = size ? detail.dataset.arch + " · " + size : detail.dataset.arch;
+    }
+    // Mirrored onto the element so the resolved asset is inspectable — both in
+    // devtools when a download looks wrong, and by the e2e check that proves
+    // Windows gets the .exe rather than its 89 KB .blockmap sibling.
+    if (url) button.dataset.downloadUrl = url;
+    else delete button.dataset.downloadUrl;
+    const handler = function () { if (url) window.location.href = url; };
+    button.onclick = handler;
+  }
+
+  async function detectPlatform() {
+    const hints = navigator.userAgentData;
+    const hintedPlatform = hints && typeof hints.platform === "string" ? hints.platform : "";
+    const fallback = navigator.userAgent || navigator.platform || "";
+    let architecture = "";
+    if (hints && typeof hints.getHighEntropyValues === "function") {
+      try {
+        const highEntropy = await hints.getHighEntropyValues(["architecture"]);
+        architecture = highEntropy.architecture || "";
+      } catch (e) {}
+    }
+    const evidence = (hintedPlatform + " " + fallback).toLowerCase();
+    if (evidence.indexOf("win") !== -1) return "windowsX64";
+    if (evidence.indexOf("mac") !== -1) {
+      if (/arm|aarch/i.test(architecture)) return "macosAppleSilicon";
+      if (/x86|x64|intel/i.test(architecture)) return "macosIntel";
+      // Browsers commonly hide the Mac CPU architecture. Apple silicon is the
+      // current default; the Intel option remains one click below.
+      return "macosAppleSilicon";
+    }
+    return null;
+  }
+
+  async function setupDownloads() {
+    const [outcome, detected] = await Promise.all([discoverDownloads(), detectPlatform()]);
+    const available = outcome === "found";
+    optionButtons.forEach(function (button) { configureButton(button, button.dataset.downloadKey, false); });
+    optionButtons.forEach(function (button) {
+      button.setAttribute("aria-current", detected && button.dataset.downloadKey === detected ? "true" : "false");
+    });
+
+    // One note per OS, and only once there is something to download — a warning
+    // about first-run behaviour on a page that cannot yet give you a file is
+    // noise attached to nothing.
+    //
+    // These used to say the same thing to everyone: not notarised, expect to be
+    // blocked, here are three steps in a settings pane. That stopped being true
+    // for macOS at 3.2.7, which ships signed with a Developer ID and notarised
+    // by Apple. Telling a Mac visitor to expect a Gatekeeper warning that will
+    // not appear is worse than saying nothing — it reads as "you did it wrong"
+    // when the app simply opens.
+    //
+    // Windows is genuinely still unsigned, so its warning stays. Shown BEFORE
+    // the block rather than after, because nobody comes back to read small
+    // print once SmartScreen has called the download unrecognised.
+    const perOs = {
+      windowsX64: ["windows-open-note"],
+      macos: ["macos-signed-note"],
+    };
+    if (available && detected) {
+      const ids = detected.indexOf("macos") === 0 ? perOs.macos : perOs[detected] || [];
+      ids.forEach(function (id) { document.getElementById(id).removeAttribute("hidden"); });
+    }
+
+    if (!available) {
+      primaryDownload.disabled = true;
+      if (outcome === "unavailable") {
+        // GitHub did not answer — rate limit, offline, an outage. Do not turn
+        // that into a claim about what exists.
+        primaryDownload.textContent = "Downloads unavailable right now";
+        downloadHelp.textContent = "We could not reach GitHub to list the builds. Try again shortly, or use the releases page below.";
+        downloadStatus.textContent = "Check back";
+      } else {
+        primaryDownload.textContent = "Builds coming soon";
+        downloadHelp.textContent = "Installers are not published yet. The releases page below is where they will appear.";
+        downloadStatus.textContent = "No build yet";
+      }
+      return;
+    }
+    if (!detected) {
+      primaryDownload.disabled = true;
+      primaryDownload.textContent = "Choose a platform below";
+      downloadHelp.textContent = "This browser did not identify macOS or Windows.";
+      downloadStatus.textContent = "Choose below";
+      return;
+    }
+    configureButton(primaryDownload, detected, true);
+    downloadHelp.textContent = "The recommended installer for this device.";
+    downloadStatus.textContent = releaseName
+      ? PLATFORM_LABELS[detected] + " · " + releaseName
+      : "Detected: " + PLATFORM_LABELS[detected];
+  }
+
+  // Keep the release destination discoverable even while direct installer URLs
+  // are still being filled in above.
+  document.querySelector(".release-link").href = RELEASES_URL;
+  setupDownloads();
+</script>
+</body>
+</html>

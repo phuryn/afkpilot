@@ -1,0 +1,8 @@
+# AFK Pilot
+# Marketing + docs are public; the functional pages (device pairing and the
+# chat client) carry no useful index content and sit behind sign-in.
+User-agent: *
+Allow: /
+Disallow: /chat
+Disallow: /link
+Sitemap: https://afkpilot.com/sitemap.xml

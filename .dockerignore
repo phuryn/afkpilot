@@ -1,0 +1,10 @@
+# Build context excludes. web/vendor/ is COMMITTED (since 2026-07-19) and NOT
+# excluded, so the image builds from a bare clone — refresh it with
+# `npm run sync-ui` and commit the diff when the extension UI changes.
+node_modules
+dist
+.env*
+e2e-artifacts
+.git
+test
+scripts/browser-e2e.mjs

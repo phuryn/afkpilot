@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#1e1e1e"/>
+  <rect width="1200" height="8" fill="#3794ff"/>
+  <circle cx="1050" cy="-20" r="270" fill="#252526"/>
+  <circle cx="1110" cy="30" r="170" fill="#2a2d2e"/>
+  <image href="logo.svg" x="84" y="70" width="76" height="76" style="filter: invert(1)"/>
+  <text x="184" y="120" fill="#ededed" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="700" letter-spacing="1">AFK PILOT</text>
+  <text x="84" y="255" fill="#ededed" font-family="Arial, Helvetica, sans-serif" font-size="74" font-weight="700" letter-spacing="-2">Your Grok agent</text>
+  <text x="84" y="335" fill="#ededed" font-family="Arial, Helvetica, sans-serif" font-size="74" font-weight="700" letter-spacing="-2">from any browser.</text>
+  <text x="88" y="402" fill="#9d9d9d" font-family="Arial, Helvetica, sans-serif" font-size="25">Pair a Grok Build host once.</text>
+  <text x="88" y="435" fill="#9d9d9d" font-family="Arial, Helvetica, sans-serif" font-size="25">Chat and steer it from your phone.</text>
+  <rect x="84" y="500" width="355" height="58" rx="9" fill="#0e639c"/>
+  <text x="112" y="538" fill="#ffffff" font-family="Consolas, monospace" font-size="20" letter-spacing="1">AFKPILOT.COM</text>
+  <g transform="translate(800 190)">
+    <rect width="260" height="280" rx="20" fill="#252526" stroke="#454545" stroke-width="2"/>
+    <rect x="22" y="24" width="216" height="38" rx="7" fill="#2a2d2e"/>
+    <circle cx="42" cy="43" r="5" fill="#4ec9b0"/>
+    <text x="58" y="49" fill="#9d9d9d" font-family="Consolas, monospace" font-size="13">GROK BUILD HOST</text>
+    <rect x="22" y="88" width="166" height="42" rx="8" fill="#3794ff" opacity=".18"/>
+    <text x="42" y="115" fill="#ededed" font-family="Arial, sans-serif" font-size="15">Review this change</text>
+    <text x="22" y="170" fill="#4ec9b0" font-family="Consolas, monospace" font-size="14">● connected</text>
+    <rect x="22" y="206" width="216" height="2" fill="#454545"/>
+    <text x="22" y="244" fill="#6f6f6f" font-family="Consolas, monospace" font-size="13">send from anywhere _</text>
+  </g>
+</svg>

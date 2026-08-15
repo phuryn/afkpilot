@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<!-- Draft — have a lawyer review before public launch. -->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script>
+  (function () {
+    var root = document.documentElement;
+    var saved;
+    try { saved = localStorage.getItem("grok-remote-theme"); } catch (e) {}
+    var initial = saved || ((window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark");
+    root.setAttribute("data-theme", initial);
+    window.__toggleTheme = function () {
+      var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem("grok-remote-theme", next); } catch (e) {}
+    };
+  })();
+</script>
+<title>Terms — AFK Pilot</title>
+<meta name="description" content="The terms for using AFK Pilot: link only devices you control, plan limits, billing and cancellation, availability, and the usual disclaimers." />
+<meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#fbfbfc" media="(prefers-color-scheme: light)" />
+<link rel="icon" href="/favicon.svg" />
+<link rel="stylesheet" href="/theme.css" />
+</head>
+<body>
+  <header class="site-header wrap">
+    <a class="brand" href="/">
+      <span class="logo-mark" aria-hidden="true"></span>
+      <span class="wordmark"><b>AFK</b> <span class="dim">Pilot</span></span>
+    </a>
+    <div class="header-actions">
+      <button class="icon-toggle" type="button" onclick="__toggleTheme()" aria-label="Toggle light and dark theme" title="Toggle theme">
+        <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.5M12 19v2.5M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2.5 12H5M19 12h2.5M4.2 19.8L6 18M18 6l1.8-1.8"/></svg>
+        <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.2 6.2 0 0 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="legal-main">
+    <article class="legal wrap">
+      <p class="eyebrow">Terms</p>
+      <h1>Terms of Service</h1>
+      <p class="lede">These terms cover your use of AFK Pilot. Using the service means you agree to them.</p>
+      <p class="effective">Effective 2026-07-18</p>
+
+      <h2>The service</h2>
+      <p>AFK Pilot is a relay and web client that lets you control the Grok Build for VS Code (Community) agent running in your own VS Code from a browser. You link a device with a one-time code, and messages are relayed between that device and your browser. We provide the connection; the agent and your workspace remain yours. AFK Pilot is an independent product — not affiliated with, endorsed by, or sponsored by SpaceXAI (formerly xAI); Grok and Grok Build are trademarks of xAI, used only to describe what the service works with.</p>
+
+      <h2>Who you are contracting with</h2>
+      <p>The service is provided by:</p>
+      <p>
+        HURYN Sp. z o.o.<br />
+        Hoża 29, 00-521 Warsaw, Poland<br />
+        Tax ID (NIP): PL7011027727<br />
+        National Court Register (KRS): 0000893173
+      </p>
+
+      <h2>Acceptable use</h2>
+      <ul>
+        <li>You may only link devices you own or are authorized to control.</li>
+        <li>You are responsible for what your agent does on your machine through the connection.</li>
+        <li>No abuse of the service, no attempts to break or overload the relay, and no unlawful use.</li>
+      </ul>
+
+      <h2>Plans and limits</h2>
+      <p>The Free plan includes a set allowance — currently one linked device and a weekly message cap. These limits may change with reasonable notice. Remote Max removes those limits. The current price is shown at checkout once you sign in.</p>
+
+      <h2>Billing and cancellation</h2>
+      <p>Paid plans are billed through Clerk and Stripe. You can cancel any time; cancellation takes effect at the end of the current billing period, and access continues until then. We do not offer pro-rated refunds for partial periods unless required by law.</p>
+
+      <h2>Availability</h2>
+      <p>We aim to keep the service running, but it is provided on a best-effort basis. There is no service-level agreement on the Free plan, and we may perform maintenance or change features over time.</p>
+
+      <h2>Disclaimers and liability</h2>
+      <p>The service is provided "as is" and "as available", without warranties of any kind, whether express or implied, including fitness for a particular purpose and non-infringement. To the fullest extent permitted by law, our aggregate liability for any claim relating to the service is limited to the greater of the amount you paid us in the twelve months before the claim, or USD 100. We are not liable for indirect, incidental, or consequential damages, or for actions your own agent takes on your machine.</p>
+
+      <h2>Termination</h2>
+      <p>You may stop using the service and delete your account at any time. We may suspend or terminate access for abuse, non-payment, or violation of these terms.</p>
+
+      <h2>Changes to these terms</h2>
+      <p>We may update these terms. When we make material changes, we will update the effective date above and, where appropriate, notify you. Continued use after a change means you accept the revised terms.</p>
+
+      <h2>Contact</h2>
+      <p>Questions about these terms? Reach us at <a href="mailto:support@productcompass.pm">support@productcompass.pm</a>.</p>
+
+      <hr class="divider" />
+      <p class="effective">The Product Compass · HURYN Sp. z o.o.</p>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <span class="copy">© The Product Compass</span>
+      <nav>
+        <a href="/#faq">FAQ</a>
+        <a href="https://github.com/phuryn/grok-build-vscode/issues" target="_blank" rel="noopener">Support</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/terms">Terms</a>
+      </nav>
+      <p class="fine">AFK Pilot is an independent product, not affiliated with or endorsed by SpaceXAI (formerly xAI). Grok and Grok Build are trademarks of xAI, used only to describe what this service works with.</p>
+    </div>
+  </footer>
+</body>
+</html>
