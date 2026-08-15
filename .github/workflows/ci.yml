@@ -1,0 +1,69 @@
+name: CI
+
+# This repo had no CI until 2026-08-15. Everything here ran only when a person
+# remembered to run it, which is how `e2e:repo-switch` sat red for ten days
+# before anyone noticed. `npm run gate` is the release gate; this makes it run
+# on its own.
+on:
+  push:
+    branches: [main, production]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      # Every e2e script here drives a real Chromium through Playwright —
+      # browser-e2e, touch-ui-check, legacy-host-check, tab-identity-check,
+      # desktop-downloads-check and ui-screens-check. Headless, so no xvfb.
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      # `gate:ci` is `gate` MINUS `e2e:browser`. Not a convenience trim: the
+      # browser suite drives the real Clerk sign-in modal and needs the dev
+      # Clerk + Supabase keys, and its own header says that without a .env the
+      # relay runs mock mode and "this script will fail its Clerk check". No
+      # secrets are configured here, so running it would land red on every
+      # push. Every other suite deliberately BLANKS the credentials to force
+      # keyless mode, so they are hermetic by design.
+      #
+      # What that costs: the authenticated mile — ClerkJS hot-load, the
+      # sign-in modal, the __session cookie on the WS upgrade, link approval
+      # and revocation — is NOT covered here. `npm run gate` locally still
+      # covers it, and stays mandatory before promoting to production. To close
+      # the gap, add the dev Clerk/Supabase keys as repository secrets and
+      # switch this step to `npm run gate` (maintainer's call — it puts dev
+      # credentials in CI).
+      #
+      # `check:vendor` (chained by `npm test`) authenticates web/vendor against
+      # its committed hash manifest, so it works from a bare clone with no
+      # sibling extension checkout.
+      - name: npm run gate:ci
+        run: npm run gate:ci
+
+      # The screenshot gate writes frames a human (or a model) can look at when
+      # something fails. Kept only on failure; .screens/ is gitignored locally.
+      - name: Upload screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screens
+          path: .screens/
+          if-no-files-found: ignore
+          retention-days: 7

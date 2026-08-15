@@ -1,12 +1,16 @@
 # Delivery and release flow
 
-The repositories ship differently. The relay uses branch-connected deployment services and a local release gate; it has no CI workflow. The extension uses GitHub Actions for pull requests and a separate maintainer release process.
+The repositories ship differently. The relay uses branch-connected deployment services, a GitHub Actions gate, and a local release gate that covers one mile CI cannot. The extension uses GitHub Actions for pull requests and a separate maintainer release process.
 
 ## What a contributor sees
 
 ### Relay pull requests
 
-A relay pull request receives code review but no repository-hosted CI check. The author is responsible for running the relevant focused tests and, before promotion, `npm run gate` locally. Include the commands and results in the pull request so reviewers can distinguish an unrun gate from a failure.
+Pushes and pull requests targeting `main` (and pushes to `production`) run `.github/workflows/ci.yml`: Node.js 20, locked dependencies, a Chromium install for Playwright, then `npm run gate:ci`.
+
+`gate:ci` is `gate` minus `e2e:browser`. That one suite drives the real Clerk sign-in modal and needs the dev Clerk and Supabase keys; without them the relay starts in mock mode and the suite fails its Clerk check, so it cannot run unattended without repository secrets. Everything else blanks its credentials deliberately and is hermetic.
+
+So CI does **not** cover the authenticated mile — ClerkJS hot-load, the sign-in modal, the `__session` cookie on the WebSocket upgrade, link approval and revocation. Running `npm run gate` locally still does, and remains mandatory before promotion. Include the commands and results in the pull request so reviewers can distinguish an unrun gate from a failure.
 
 Do not push a contributor branch to `production`. Deployment credentials, environment configuration, and production promotion remain maintainer responsibilities.
 

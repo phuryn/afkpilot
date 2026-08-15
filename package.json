@@ -17,6 +17,7 @@
     "e2e:screens": "npm run build && node scripts/ui-screens-check.mjs",
     "e2e:legacy": "npm run build && node scripts/legacy-host-check.mjs && node scripts/tab-identity-check.mjs",
     "gate": "npm run typecheck && npm test && npm run e2e:touch && npm run e2e:legacy && npm run e2e:browser && npm run e2e:downloads && npm run e2e:screens",
+    "gate:ci": "npm run typecheck && npm test && npm run e2e:touch && npm run e2e:legacy && npm run e2e:downloads && npm run e2e:screens",
     "smoke": "node scripts/prod-smoke.mjs",
     "smoke:auth": "node scripts/auth-canary.mjs",
     "typecheck": "tsc -p . --noEmit"

@@ -57,7 +57,8 @@ npm run e2e:touch   # phone-emulated /chat — touch affordances
 npm run e2e:legacy  # /chat against a v2.0.4-only host — the compatibility contract
 npm run e2e:screens # real Chromium, two viewports, screenshot gates
 npm run e2e:downloads # /desktop with the GitHub Releases API stubbed
-npm run gate        # ALL of the above — this repo has no CI; run it before release
+npm run gate        # ALL of the above — mandatory before promoting to production
+npm run gate:ci     # what CI runs: gate minus e2e:browser (that one needs Clerk keys)
 npm start           # http://127.0.0.1:8787 (RELAY_HOST / RELAY_PORT env)
 ```
 
