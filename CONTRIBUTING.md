@@ -2,20 +2,22 @@
 
 Thank you for contributing. This repository contains the relay and remote browser client; the VS Code/Cursor extension and Electron desktop host live in the sibling `grok-build-vscode` repository. Read [the repository map](docs/repositories.md) before changing a contract shared by both.
 
+**Issues live in the extension repo.** This repository's issue tracker is disabled so all reports land in one place: file bugs and feature requests — including relay and web-client ones — at [grok-build-vscode issues](https://github.com/phuryn/grok-build-vscode/issues), and note there when a report concerns the relay.
+
 ## Local setup
 
 Use Node.js 20 and npm. Clone the repositories beside one another:
 
 ```text
 work/
-├── grok-remote/
+├── afkpilot/
 └── grok-build-vscode/
 ```
 
 The relay has an account-free development path:
 
 ```sh
-cd grok-remote
+cd afkpilot
 npm install
 npm start
 ```

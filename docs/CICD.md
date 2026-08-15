@@ -21,7 +21,7 @@ These jobs do not publish a release. They establish that the source builds, unit
 
 ## Relay deployment
 
-There are no files under `.github/workflows/` in `grok-remote`. The checked-in `Dockerfile` supplies the Node.js 20 production image, and `railway.json` defines the Docker build, `/api/health` health check, and restart policy.
+There are no files under `.github/workflows/` in `afkpilot`. The checked-in `Dockerfile` supplies the Node.js 20 production image, and `railway.json` defines the Docker build, `/api/health` health check, and restart policy.
 
 The environment flow is:
 

@@ -1,4 +1,4 @@
-# CLAUDE.md — grok-remote
+# CLAUDE.md — afkpilot
 
 Relay server + web client for **AFK Pilot** (afkpilot.com) — remote control of
 the [grok-build-vscode](https://github.com/phuryn/grok-build-vscode)

@@ -1,6 +1,6 @@
 # UI design system
 
-The design system is implemented in CSS rather than a separate token package. Its canonical shared sources are `grok-build-vscode/media/chat.css` and `media/file-panel.css`. The relay copies those files to `web/vendor/media/`; do not edit the vendored copies. Browser-only layout and theme values live in `grok-remote/web/chat.html`.
+The design system is implemented in CSS rather than a separate token package. Its canonical shared sources are `grok-build-vscode/media/chat.css` and `media/file-panel.css`. The relay copies those files to `web/vendor/media/`; do not edit the vendored copies. Browser-only layout and theme values live in `afkpilot/web/chat.html`.
 
 The values below are the implemented contract. Each value names the custom property, selector, or media query that defines it.
 
@@ -127,4 +127,4 @@ IDE and Electron surfaces receive `--vscode-*` values from their host theme. The
 | `--vscode-scrollbarSlider-hoverBackground` | `rgba(100,100,100,0.7)` | `rgba(100,100,100,0.55)` |
 | `--vscode-scrollbarSlider-activeBackground` | `rgba(191,191,191,0.5)` | `rgba(0,0,0,0.6)` |
 
-`html` uses `#1a1a1a` outside the centered dark app and `:root[data-theme="light"]` uses `#fbfbfc`. Theme choice is stored under the browser-only `grok-remote-theme` local-storage key; this affects presentation only, not host capabilities.
+`html` uses `#1a1a1a` outside the centered dark app and `:root[data-theme="light"]` uses `#fbfbfc`. Theme choice is stored under the browser-only `afkpilot-theme` local-storage key; this affects presentation only, not host capabilities.

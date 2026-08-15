@@ -1,5 +1,5 @@
 {
-  "name": "grok-remote",
+  "name": "afkpilot",
   "version": "0.1.0",
   "private": true,
   "description": "Relay server + web client for grok-build-vscode remote control (topology B). Clerk auth + Supabase persistence.",

@@ -1,6 +1,6 @@
 # Architecture
 
-`grok-remote` is a WebSocket relay and browser host for a coding-agent UI that runs on a developer's machine. The host extension makes one outbound uplink; authenticated browser clients connect to the relay and exchange the same webview messages used locally.
+`afkpilot` is a WebSocket relay and browser host for a coding-agent UI that runs on a developer's machine. The host extension makes one outbound uplink; authenticated browser clients connect to the relay and exchange the same webview messages used locally.
 
 This document is the map of that system. Follow its links for implementation detail.
 

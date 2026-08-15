@@ -1,6 +1,6 @@
-# grok-remote
+# AFK Pilot
 
-The relay server + web client behind **[AFK Pilot](https://afkpilot.com)** —
+The relay server + web client behind **[afkpilot.com](https://afkpilot.com)** —
 remote control for the
 [Grok Build for VS Code (Community)](https://github.com/phuryn/grok-build-vscode)
 extension. The extension dials **out** to this relay over WebSocket; your
@@ -11,6 +11,11 @@ clients (images only).
 
 This repo is also the engineering-documentation home for **both** repos — see
 [docs/](docs/README.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+
+> **Report issues in the extension repo:** this repo's issue tracker is
+> deliberately disabled so everything lands in one place. Bugs and feature
+> requests — relay and web-client ones included — go to
+> [grok-build-vscode issues](https://github.com/phuryn/grok-build-vscode/issues).
 
 ## How it fits together
 

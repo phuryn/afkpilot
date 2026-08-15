@@ -4,7 +4,7 @@ The system is split across two repositories. Contributors should normally clone 
 
 ```text
 work/
-├── grok-remote/
+├── afkpilot/
 └── grok-build-vscode/
 ```
 
@@ -12,14 +12,14 @@ work/
 
 | Repository | Owns |
 | --- | --- |
-| `grok-remote` | HTTP and WebSocket relay, authentication and device registry adapters, aggregate usage controls, remote browser shell, deployment configuration, Supabase migrations, and the committed copy of the shared renderer. |
+| `afkpilot` | HTTP and WebSocket relay, authentication and device registry adapters, aggregate usage controls, remote browser shell, deployment configuration, Supabase migrations, and the committed copy of the shared renderer. |
 | `grok-build-vscode` | VS Code/Cursor extension, Electron desktop host, ACP provider integration, workspace and terminal operations, remote capability policy, outbound uplink, and the source copy of the chat renderer. |
 
 The extension repository is the source of truth for anything that runs on the developer's machine. The relay repository is the source of truth for transport, browser hosting, server-side authentication, and persistence.
 
 ## Mirrored wire contract
 
-`grok-remote/src/frames.ts` and `grok-build-vscode/src/remote-frames.ts` intentionally mirror the relay envelope. Both currently declare `REMOTE_PROTO_VERSION = 1`.
+`afkpilot/src/frames.ts` and `grok-build-vscode/src/remote-frames.ts` intentionally mirror the relay envelope. Both currently declare `REMOTE_PROTO_VERSION = 1`.
 
 The envelope carries:
 
@@ -61,4 +61,4 @@ Branch, promotion, and release mechanics are documented in [delivery](CICD.md).
 
 ## Licensing
 
-`grok-build-vscode` has used the FSL-1.1-MIT license since version 2.0.0; the repository's tags and `LICENSE` file are authoritative for each version. For `grok-remote`, see [LICENSE](../LICENSE).
+`grok-build-vscode` has used the FSL-1.1-MIT license since version 2.0.0; the repository's tags and `LICENSE` file are authoritative for each version. For `afkpilot`, see [LICENSE](../LICENSE).

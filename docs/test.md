@@ -6,7 +6,7 @@ Run focused checks while iterating. Run the applicable repository gate before pr
 
 ## Relay tests
 
-Run these commands from `grok-remote`.
+Run these commands from `afkpilot`.
 
 | Command | What it exercises | When to run |
 | --- | --- | --- |
@@ -62,7 +62,7 @@ npm test
 npm run test:desktop
 npm run e2e:screens
 
-# grok-remote
+# afkpilot
 npm test
 npm run e2e:touch
 npm run e2e:legacy

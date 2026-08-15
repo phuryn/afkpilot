@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Two-stage build for the grok-remote relay (relay + web client, one service).
+# Two-stage build for the afkpilot relay (relay + web client, one service).
 #
 # web/vendor/ is COMMITTED (since 2026-07-19), so the image builds from a bare
 # clone. `npm run build` runs check:vendor first — the build stage therefore

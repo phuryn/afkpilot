@@ -16,4 +16,4 @@ Start with [architecture](architecture.md) for the system boundary, then use the
 - [Relay protocol](relay-protocol.md) — frame-level transport contract.
 - [Security](security.md) — threat model and security invariants.
 
-The documentation assumes the repositories are sibling directories named `grok-remote` and `grok-build-vscode`. Paths are relative to those roots unless stated otherwise.
+The documentation assumes the repositories are sibling directories named `afkpilot` and `grok-build-vscode`. Paths are relative to those roots unless stated otherwise.
