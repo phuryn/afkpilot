@@ -6,11 +6,11 @@ The repositories ship differently. The relay uses branch-connected deployment se
 
 ### Relay pull requests
 
-Pushes and pull requests targeting `main` (and pushes to `production`) run `.github/workflows/ci.yml`: Node.js 20, locked dependencies, a Chromium install for Playwright, then `npm run gate:ci`.
+Pushes and pull requests targeting `main` (and pushes to `production`) run `.github/workflows/ci.yml`: Node.js 20, locked dependencies, a Chromium install for Playwright, then `npm run gate:ci`, plus a separate `lifecycle` job that also checks out `phuryn/grok-build-vscode` (public, no secrets) and runs the cross-repo host-restart e2e under `xvfb-run`.
 
-`gate:ci` is `gate` minus `e2e:browser`. That one suite drives the real Clerk sign-in modal and needs the dev Clerk and Supabase keys; without them the relay starts in mock mode and the suite fails its Clerk check, so it cannot run unattended without repository secrets. Everything else blanks its credentials deliberately and is hermetic.
+`gate:ci` is `gate` minus `e2e:browser` and minus `e2e:lifecycle`. `e2e:browser` drives the real Clerk sign-in modal and needs the dev Clerk and Supabase keys; without them the relay starts in mock mode and the suite fails its Clerk check, so it cannot run unattended without repository secrets. `e2e:lifecycle` needs a checkout of `phuryn/grok-build-vscode` (real desktop host) and runs in its own job. Everything else blanks its credentials deliberately and is hermetic.
 
-So CI does **not** cover the authenticated mile — ClerkJS hot-load, the sign-in modal, the `__session` cookie on the WebSocket upgrade, link approval and revocation. Running `npm run gate` locally still does, and remains mandatory before promotion. Include the commands and results in the pull request so reviewers can distinguish an unrun gate from a failure.
+So the `gate` job does **not** cover the authenticated mile — ClerkJS hot-load, the sign-in modal, the `__session` cookie on the WebSocket upgrade, link approval and revocation — nor the cross-repo host-restart mile. Running `npm run gate` locally still covers the authenticated mile, and remains mandatory before promotion. Include the commands and results in the pull request so reviewers can distinguish an unrun gate from a failure.
 
 Do not push a contributor branch to `production`. Deployment credentials, environment configuration, and production promotion remain maintainer responsibilities.
 
@@ -25,7 +25,7 @@ These jobs do not publish a release. They establish that the source builds, unit
 
 ## Relay deployment
 
-There are no files under `.github/workflows/` in `afkpilot`. The checked-in `Dockerfile` supplies the Node.js 20 production image, and `railway.json` defines the Docker build, `/api/health` health check, and restart policy.
+Relay deployment is not driven by the GitHub Actions workflows in `.github/workflows/` (those run the test gate, including the cross-repo `lifecycle` job). The checked-in `Dockerfile` supplies the Node.js 20 production image, and `railway.json` defines the Docker build, `/api/health` health check, and restart policy.
 
 The environment flow is:
 
@@ -78,3 +78,5 @@ relay gate -> relay development deploy -> smoke -> production promotion
 ```
 
 Protocol additions must remain safe for older extensions during the rollout. See [repositories](repositories.md#release-ordering) and [testing](test.md) for the exact gate matrix.
+
+The same order applies to the lifecycle CI job. It checks out `phuryn/grok-build-vscode` at the default-branch tip and cannot pass until the host-side contract that job depends on is on that branch (unique fake session ids and stdin shutdown, sibling commit `357a300`). A local sibling checkout can run against an unpushed commit; CI cannot.

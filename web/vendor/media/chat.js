@@ -6838,7 +6838,7 @@
       onb.innerHTML =
         `<div class="onb">` +
           `<p class="onb-heading">Sign in with Claude Code</p>` +
-          `<p class="onb-desc">Use Anthropic's own <code>claude</code> CLI. This app does not offer Claude.ai login and does not store an API key.</p>` +
+          `<p class="onb-desc">This app never implements, proxies, holds, or forwards Claude credentials. Sign-in happens entirely inside Anthropic's own CLI, which may use your Claude subscription or an Anthropic Console account depending on how you sign in.</p>` +
           `<button class="onb-action onb-secondary" type="button" data-act="connectProvider" data-provider="claude">Open terminal &amp; run <code>claude auth login</code></button>` +
           `<button class="onb-action" type="button" data-act="recheckProvider" data-provider="claude">Done - connect Claude</button>` +
         `</div>`;

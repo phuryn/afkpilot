@@ -1,0 +1,140 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import {
+  describeIsolationMismatch,
+  hostProcessGone,
+  hostRequired,
+  isReplacementHostFrameType,
+  parseInvert,
+  persistTurnForLoad,
+  queuedTurnArrived,
+  resolveExtensionRoot,
+  sessionStoreDir,
+  skipReason,
+  waitFor,
+} from "../scripts/lifecycle-e2e.mjs";
+
+describe("lifecycle e2e harness", () => {
+  it("skips only when the sibling checkout or part-1 runner is absent", () => {
+    expect(skipReason("")).toMatch(/not found/i);
+    expect(skipReason(join(tmpdir(), "no-such-grok-build-vscode"))).toMatch(/not found/i);
+
+    const root = mkdtempSync(join(tmpdir(), "afk-lifecycle-skip-"));
+    try {
+      expect(skipReason(root)).toMatch(/lifecycle host runner missing/i);
+      mkdirSync(join(root, "scripts"), { recursive: true });
+      writeFileSync(join(root, "scripts", "lifecycle-host.mjs"), "// stub\n");
+      expect(skipReason(root)).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves the sibling next to this repo unless GROK_BUILD_VSCODE is set", () => {
+    const fromEnv = resolveExtensionRoot({ GROK_BUILD_VSCODE: "D:\\other\\ext" }, "C:\\relay");
+    expect(fromEnv.replace(/\\/g, "/")).toMatch(/other\/ext$/);
+    const sibling = resolveExtensionRoot({}, "C:\\work\\grok-remote");
+    expect(sibling.replace(/\\/g, "/")).toMatch(/work\/grok-build-vscode$/);
+  });
+
+  it("names what never arrived", async () => {
+    await expect(waitFor(() => false, "the host to detach", 80)).rejects.toThrow(
+      /timed out waiting for the host to detach/,
+    );
+  });
+
+  it("parses invert faults as a set", () => {
+    expect([...parseInvert("skip-kill, skip-admission")].sort()).toEqual([
+      "skip-admission",
+      "skip-kill",
+    ]);
+    expect(parseInvert("").size).toBe(0);
+  });
+
+  it("seeds session/load replay files under GROK_HOME, never ~/.grok", () => {
+    const home = mkdtempSync(join(tmpdir(), "afk-lifecycle-home-"));
+    try {
+      persistTurnForLoad(home, home, "sess-1", "hello", "ok");
+      const dir = sessionStoreDir(home, home, "sess-1");
+      expect(dir.startsWith(home)).toBe(true);
+      expect(dir.includes(".grok")).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("the script itself skips loudly and exits 0 when the sibling is absent", () => {
+    const missing = join(tmpdir(), "afk-no-sibling-lifecycle");
+    const run = spawnSync(process.execPath, ["scripts/lifecycle-e2e.mjs"], {
+      encoding: "utf8",
+      env: { ...process.env, GROK_BUILD_VSCODE: missing, LIFECYCLE_REQUIRE_HOST: "" },
+    });
+    expect(run.status).toBe(0);
+    expect(`${run.stdout}\n${run.stderr}`).toMatch(/SKIP:/);
+    expect(`${run.stdout}\n${run.stderr}`).toMatch(/not found/);
+  });
+
+  it("fails instead of skipping when LIFECYCLE_REQUIRE_HOST is set", () => {
+    expect(hostRequired({ LIFECYCLE_REQUIRE_HOST: "1" })).toBe(true);
+    expect(hostRequired({ LIFECYCLE_REQUIRE_HOST: "true" })).toBe(true);
+    expect(hostRequired({})).toBe(false);
+
+    const missing = join(tmpdir(), "afk-no-sibling-lifecycle-required");
+    const run = spawnSync(process.execPath, ["scripts/lifecycle-e2e.mjs"], {
+      encoding: "utf8",
+      env: { ...process.env, GROK_BUILD_VSCODE: missing, LIFECYCLE_REQUIRE_HOST: "1" },
+    });
+    expect(run.status).not.toBe(0);
+    expect(`${run.stdout}\n${run.stderr}`).toMatch(/LIFECYCLE_REQUIRE_HOST/);
+    expect(`${run.stdout}\n${run.stderr}`).toMatch(/not found/);
+  });
+
+  it("treats a POSIX signal death as the process being gone", () => {
+    expect(hostProcessGone({ exitCode: null, signal: "SIGKILL", child: { killed: false } })).toBe(true);
+    expect(hostProcessGone({ exitCode: 0, signal: null, child: { killed: false } })).toBe(true);
+    expect(hostProcessGone({ exitCode: null, signal: null, child: { killed: true } })).toBe(true);
+    expect(hostProcessGone({ exitCode: null, signal: null, child: { killed: false } })).toBe(false);
+  });
+
+  it("does not treat a stale agent ok as delivery of a later prompt", () => {
+    const stale = { users: ["lifecycle-queued-while-down"], agents: ["ok"] };
+    expect(queuedTurnArrived(stale, "lifecycle-queued-while-down", 1)).toBe(false);
+    expect(queuedTurnArrived(
+      { users: ["lifecycle-queued-while-down"], agents: ["ok", "ok"] },
+      "lifecycle-queued-while-down",
+      1,
+    )).toBe(true);
+    expect(queuedTurnArrived(
+      { users: ["lifecycle-alpha-one"], agents: ["ok"] },
+      "lifecycle-queued-while-down",
+      0,
+    )).toBe(false);
+  });
+
+  it("isolation mismatch reports observed ids, not a stale constant-id hypothesis", () => {
+    const msg = describeIsolationMismatch({
+      expectedRepo: "bravo",
+      remembered: { id: "fake-session-54380-1" },
+      previousId: "fake-session-54380-1",
+      users: ["lifecycle-alpha-one"],
+      title: "lifecycle-alpha-one",
+    });
+    expect(msg).toMatch(/fake-session-54380-1/);
+    expect(msg).toMatch(/lifecycle-alpha-one/);
+    expect(msg).not.toMatch(/If both workspaces share fake-session-1/);
+    expect(msg).not.toMatch(/fixture is still minting a constant id/);
+    expect(isReplacementHostFrameType("initialState")).toBe(true);
+    expect(isReplacementHostFrameType("error")).toBe(false);
+  });
+
+  it("always compiles the sibling instead of trusting an existing out/", () => {
+    const src = readFileSync(join("scripts", "lifecycle-e2e.mjs"), "utf8");
+    expect(src).not.toMatch(/if \(existsSync\(frames\) && existsSync\(desktop\)\) return/);
+    expect(src).toMatch(/do not trust a stale out/);
+    expect(src).toMatch(/stdio: \["pipe", "pipe", "pipe"\]/);
+    expect(src).toMatch(/GROK_LIFECYCLE_HOST_SHUTDOWN/);
+  });
+});
