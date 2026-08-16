@@ -1480,7 +1480,6 @@ window.grokRemoteClient = true;
   var resyncScrollTop = null;
   var restoreTimer = null;
   var offlineHold = null;
-  var resyncTimer = null;
   var deviceOffline = false;
   var identityTimer = null;
   var identityFailTimer = null;
@@ -1507,7 +1506,6 @@ window.grokRemoteClient = true;
   }
   function clearOfflineGrace() {
     if (offlineHold) { clearTimeout(offlineHold); offlineHold = null; }
-    if (resyncTimer) { clearInterval(resyncTimer); resyncTimer = null; }
   }
 
   // Over-quota wall (above the composer). Shown when the relay bounces a send
@@ -1807,12 +1805,12 @@ window.grokRemoteClient = true;
   function beginDeviceOfflineGrace() {
     if (deviceOffline || offlineHold) return;
     clearIdentityFailTimer();
-    if (!resyncTimer) {
-      resyncTimer = setInterval(function () {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify(readyMessage()));
-        }
-      }, 3000);
+    // One probe covers the false-offline case (host never detached).
+    // Repeating it on a timer restarts attachUplink's snapshot over a
+    // just-flushed send — chat.js re-posts resumeSession on every
+    // initialState and that aborts the turn after the user bubble paints.
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try { ws.send(JSON.stringify(readyMessage())); } catch (_) { /* socket raced */ }
     }
     offlineHold = setTimeout(handlePersistentDeviceOffline, deviceOfflineGraceMs());
   }

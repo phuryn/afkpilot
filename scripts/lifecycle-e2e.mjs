@@ -647,6 +647,26 @@ async function dumpFailure(page, relay, host, label) {
     const dir = join(RELAY_ROOT, "e2e-artifacts", "lifecycle");
     mkdirSync(dir, { recursive: true });
     if (page) await page.screenshot({ path: join(dir, `${label}.png`), fullPage: true });
+    try {
+      const client = await page.evaluate(() => {
+        const texts = (sel) => [...document.querySelectorAll(sel)].map((el) => (el.innerText || "").trim());
+        const deviceId = new URLSearchParams(location.search).get("device") || "";
+        let outbox = null;
+        try { outbox = sessionStorage.getItem("afk-outbox:" + deviceId); } catch (_) { /* */ }
+        return {
+          users: texts(".msg.user:not(.queued)"),
+          agents: texts(".msg.agent"),
+          queued: texts(".msg.user.queued"),
+          errors: texts(".msg.error"),
+          input: document.querySelector("#input")?.value || "",
+          restoring: document.body.classList.contains("identity-restoring"),
+          outbox,
+        };
+      }).catch(() => null);
+      if (client) {
+        writeFileSync(join(dir, `${label}-client.json`), `${JSON.stringify(client, null, 2)}\n`);
+      }
+    } catch { /* dump is best-effort */ }
     writeFileSync(join(dir, `${label}-relay.log`), `${relay?.stdout || ""}\n--- stderr ---\n${relay?.stderr || ""}`);
     if (host) {
       writeFileSync(join(dir, `${label}-host.log`), `${host.stdout || ""}\n--- stderr ---\n${host.stderr || ""}`);

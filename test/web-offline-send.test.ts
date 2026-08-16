@@ -329,4 +329,14 @@ describe("offline live-send hold", () => {
     expect(graceBlock.indexOf("data.type === \"error\""))
       .toBeLessThan(graceBlock.indexOf("readyMessage()"));
   });
+
+  it("probes a false-offline host once, not on a timer that races the flush", () => {
+    const graceFn = html.slice(
+      html.indexOf("function beginDeviceOfflineGrace"),
+      html.indexOf("function flushRestoredOutbox"),
+    );
+    expect(graceFn).toContain("readyMessage()");
+    expect(graceFn).not.toContain("setInterval");
+    expect(graceFn).not.toContain("3000");
+  });
 });
