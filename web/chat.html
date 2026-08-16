@@ -847,22 +847,73 @@ window.grokRemoteClient = true;
   function isDeviceOfflineError(data) {
     return !!(data && data.type === "error" && /^Device offline/.test(data.text || ""));
   }
+  function isNonRetryableRelayBounce(data) {
+    return !!(data && data.type === "error" && (
+      /^Free plan limit/.test(data.text || "") ||
+      /^Slow down/.test(data.text || "")
+    ));
+  }
+  function inboundFrameProvesDeviceAlive(data) {
+    // The relay's Device-offline bounce is the only inbound frame that is
+    // NOT evidence of a live uplink. A host error, a quota bounce, a
+    // snapshot — anything else crossed a reachable socket.
+    return !isDeviceOfflineError(data);
+  }
+  function sendCorrelationId(message) {
+    return message && typeof message.submissionId === "string" && message.submissionId
+      ? message.submissionId
+      : "";
+  }
+  function outboxEntryMatchesMessage(queuedRaw, message) {
+    if (!message || message.type !== "send") return false;
+    try {
+      var queued = JSON.parse(queuedRaw);
+      if (queued.type !== "send") return false;
+      if (typeof message.queuedSendId === "string" && message.queuedSendId) {
+        return queued.queuedSendId === message.queuedSendId;
+      }
+      var id = sendCorrelationId(message);
+      if (id) return sendCorrelationId(queued) === id;
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
   function outboxAfterPersist(current, raw, message) {
-    // Only a host-issued queuedSendId identifies the same logical submission.
-    // Ordinary sends deliberately have no id and must survive even when their
-    // text is identical.
-    if (message && message.type === "send" && typeof message.queuedSendId === "string") {
-      var duplicate = current.some(function (queuedRaw) {
-        try {
-          var queued = JSON.parse(queuedRaw);
-          return queued.type === "send" && queued.queuedSendId === message.queuedSendId;
-        } catch (_) {
-          return false;
-        }
-      });
-      if (duplicate) return current;
+    // queuedSendId (host-owned busy queue) and submissionId (live remote
+    // send) each name one logical prompt. Ordinary sends with neither
+    // still survive even when their text is identical.
+    if (current.some(function (queuedRaw) { return outboxEntryMatchesMessage(queuedRaw, message); })) {
+      return current;
     }
     return current.concat([raw]);
+  }
+  function outboxIndexAcknowledgedBy(current, data) {
+    if (!data || data.type !== "userMessage" || data.steer) return -1;
+    var id = sendCorrelationId(data);
+    for (var i = 0; i < current.length; i++) {
+      try {
+        var queued = JSON.parse(current[i]);
+        if (queued.type !== "send") continue;
+        if (id && sendCorrelationId(queued) === id) return i;
+      } catch (_) { /* keep scanning */ }
+    }
+    if (id || typeof data.text !== "string" || !data.text) return -1;
+    // Old host: userMessage is the ack but has no submissionId. Match
+    // one send by exact text — that echo is still an acknowledgement,
+    // not a guess that something landed.
+    for (var j = 0; j < current.length; j++) {
+      try {
+        var queuedText = JSON.parse(current[j]);
+        if (queuedText.type === "send" && queuedText.text === data.text) return j;
+      } catch (_) { /* keep scanning */ }
+    }
+    return -1;
+  }
+  function outboxAfterAck(current, data) {
+    var idx = outboxIndexAcknowledgedBy(current, data);
+    if (idx < 0) return current;
+    return current.slice(0, idx).concat(current.slice(idx + 1));
   }
   function shouldReenterIdentityOnDeviceOffline(restoreComplete, mournableCount) {
     // Identity already confirmed means the outbox flush gate will never run
@@ -878,6 +929,57 @@ window.grokRemoteClient = true;
     if (opts.changesIdentity) return "abandon-and-send";
     return "outbox";
   }
+  function liveOutboundAfterRemember(current, raw, message) {
+    return current.concat([{ raw: raw, message: message }]);
+  }
+  function liveOutboundAfterAck(current, data) {
+    if (!data || data.type !== "userMessage" || data.steer) return current;
+    var id = sendCorrelationId(data);
+    if (id) {
+      return current.filter(function (entry) {
+        return sendCorrelationId(entry.message) !== id;
+      });
+    }
+    if (typeof data.text !== "string" || !data.text) return current;
+    var dropped = false;
+    return current.filter(function (entry) {
+      if (dropped) return true;
+      var message = entry.message;
+      if (message && message.type === "send" && message.text === data.text) {
+        dropped = true;
+        return false;
+      }
+      return true;
+    });
+  }
+  function liveOutboundHeldByOffline(current, data) {
+    var id = sendCorrelationId(data);
+    if (id) {
+      return current.filter(function (entry) {
+        return sendCorrelationId(entry.message) === id;
+      });
+    }
+    // Untagged bounce cannot name a prompt. Id-bearing entries wait for
+    // their own bounce — sweeping them here replays a commit whose ack
+    // was lost.
+    return current.filter(function (entry) {
+      return !sendCorrelationId(entry.message);
+    });
+  }
+  function liveOutboundAfterOfflineHold(current, data) {
+    var held = liveOutboundHeldByOffline(current, data);
+    if (!held.length) return current;
+    return current.filter(function (entry) {
+      return held.indexOf(entry) === -1;
+    });
+  }
+  function liveOutboundAfterNamedDrop(current, data) {
+    var id = sendCorrelationId(data);
+    if (!id) return current;
+    return current.filter(function (entry) {
+      return sendCorrelationId(entry.message) !== id;
+    });
+  }
   function persistOutboxMessage(raw, message) {
     var next = outboxAfterPersist(queue, raw, message);
     if (next === queue) return;
@@ -886,15 +988,31 @@ window.grokRemoteClient = true;
   }
   var liveOutbound = [];
   function rememberLiveOutbound(raw, message) {
-    liveOutbound.push({ raw: raw, message: message });
+    liveOutbound = liveOutboundAfterRemember(liveOutbound, raw, message);
   }
-  function clearLiveOutbound() {
-    liveOutbound = [];
-  }
-  function holdLiveOutboundInOutbox() {
-    for (var i = 0; i < liveOutbound.length; i++) {
-      persistOutboxMessage(liveOutbound[i].raw, liveOutbound[i].message);
+  function acknowledgeLiveOutbound(data) {
+    if (isNonRetryableRelayBounce(data)) {
+      // Quota / rate-limit: the send was refused and must not auto-retry.
+      liveOutbound = liveOutboundAfterNamedDrop(liveOutbound, data);
+      return;
     }
+    liveOutbound = liveOutboundAfterAck(liveOutbound, data);
+    var next = outboxAfterAck(queue, data);
+    if (next !== queue) {
+      queue = next;
+      saveQueue();
+    }
+  }
+  function holdLiveOutboundInOutbox(data) {
+    var held = liveOutboundHeldByOffline(liveOutbound, data);
+    for (var i = 0; i < held.length; i++) {
+      persistOutboxMessage(held[i].raw, held[i].message);
+    }
+    liveOutbound = liveOutboundAfterOfflineHold(liveOutbound, data);
+  }
+  function forgetUnbouncedLiveOutbound() {
+    // Unbounced entries were not refused. After a confirmed restore,
+    // replaying them would duplicate a commit whose ack was lost.
     liveOutbound = [];
   }
   saveQueue();
@@ -1642,6 +1760,7 @@ window.grokRemoteClient = true;
     identityRepoConfirmed = false;
     identitySessionConfirmed = false;
     identityRestoreComplete = true;
+    forgetUnbouncedLiveOutbound();
     document.body.classList.remove("identity-restoring");
     setVoiceTransportReady(
       !!ws && ws.readyState === WebSocket.OPEN && !deviceOffline && !offlineHold
@@ -1706,9 +1825,8 @@ window.grokRemoteClient = true;
     finishIdentityRestore();
     pending.forEach(function (raw) {
       ws.send(raw);
-      // Identity is complete again the moment we flush. If the host dies
-      // between this write and a non-offline frame, Device offline must be
-      // able to fold the same payload back into the outbox.
+      // finishIdentityRestore dropped leftover in-flight entries. Re-arm
+      // only what this flush just wrote so a later bounce can name them.
       try { rememberLiveOutbound(raw, JSON.parse(raw)); }
       catch (_) { rememberLiveOutbound(raw, null); }
     });
@@ -1881,12 +1999,13 @@ window.grokRemoteClient = true;
       //
       // Swallowing the banner must not swallow the send that provoked it.
       // A live send already left the composer and the outbox (identity was
-      // confirmed). Fold it back into the outbox and, if we thought identity
-      // was settled, re-open the restore gate so the returning host's
-      // confirmation is what flushes it — not the first non-error frame,
-      // which can be a boot-gap snapshot of the wrong session.
+      // confirmed). Fold only the bounce-named send back into the outbox
+      // and, if we thought identity was settled, re-open the restore gate
+      // so the returning host's confirmation is what flushes it — not the
+      // first non-error frame, which can be a boot-gap snapshot of the
+      // wrong session.
       if (isDeviceOfflineError(data)) {
-        holdLiveOutboundInOutbox();
+        holdLiveOutboundInOutbox(data);
         var identityWasComplete = identityRestoreComplete;
         beginDeviceOfflineGrace();
         if (shouldReenterIdentityOnDeviceOffline(identityWasComplete, mournableQueueCount())) {
@@ -1894,20 +2013,31 @@ window.grokRemoteClient = true;
         }
         return;
       }
-      clearLiveOutbound();
-      // Anything that isn't an error means the device is alive — cancel any
-      // pending offline notice from the race above.
-      if (data && data.type !== "error") {
+      acknowledgeLiveOutbound(data);
+      // A host error is still a live uplink. Gating this on type !== "error"
+      // left an error-only returning host in grace until persistent-offline
+      // stopped resync, with the fail timer disarmed — queued work stranded.
+      if (inboundFrameProvesDeviceAlive(data)) {
+        var wasHeld = !!offlineHold || deviceOffline;
         clearOfflineGrace();
         if (deviceOffline) {
           deviceOffline = false;
           if (identityRestoreComplete) setVoiceTransportReady(true);
         }
-        // The device is live again: if a restore is still pending, the fail
-        // timer must tick once more - grace cleared it, and without this
-        // re-arm a host that surfaces one frame and stalls would hold the
-        // outbox forever (the exact deadlock this timer exists to bound).
         if (identityTarget && !identityFailTimer) armIdentityFailTimer();
+        // A repos/sessions/initialState frame is already the handshake.
+        // Another ready here restarts the snapshot and can race a just-flushed
+        // send. Only an error-only return needs the poke.
+        if (
+          wasHeld &&
+          data && data.type === "error" &&
+          identityTarget &&
+          !identityRestoreComplete &&
+          ws &&
+          ws.readyState === WebSocket.OPEN
+        ) {
+          try { ws.send(JSON.stringify(readyMessage())); } catch (_) { /* socket raced */ }
+        }
       }
       // Quota bounce: surface the wall above the composer alongside the
       // in-chat error (the relay's fixed copy carries the reset countdown).

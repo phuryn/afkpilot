@@ -20,6 +20,20 @@ import {
 
 export interface Sender {
   send(data: string): void;
+  /** Present on a real WebSocket. Absent on test fakes, which are treated
+   *  as deliverable. Same numeric values as the WebSocket spec. */
+  readonly readyState?: number;
+}
+
+/** WebSocket.OPEN. Hub stays free of a `ws` import. */
+const WS_OPEN = 1;
+
+function senderDeliverable(s: Sender | undefined): boolean {
+  if (!s) return false;
+  // CONNECTING / CLOSING / CLOSED all fail this. ws.send() while CLOSING
+  // does not throw and does not deliver — treating that as "connected"
+  // charges the user, reports routed, and never bounces Device offline.
+  return s.readyState === undefined || s.readyState === WS_OPEN;
 }
 
 interface DeviceHub {
@@ -88,7 +102,7 @@ export class Hub {
   }
 
   uplinkConnected(deviceId: string): boolean {
-    return !!this.devices.get(deviceId)?.uplink;
+    return senderDeliverable(this.devices.get(deviceId)?.uplink);
   }
 
   /** An extension->relay frame arrived. */
@@ -150,8 +164,9 @@ export class Hub {
   /** A browser->relay message arrived. `ready` becomes a routed client-ready
    *  (the uplink answers with that client's snapshot); everything else wraps
    *  into a `msg` frame — the EXTENSION owns the capability gate, the relay
-   *  stays policy-free. Returns "offline" when no uplink is connected so the
-   *  server can tell the browser. */
+   *  stays policy-free. Returns "offline" when no uplink is deliverable
+   *  (missing, or a WebSocket that is not OPEN) so the server can tell
+   *  the browser. */
   fromClient(deviceId: string, clientId: string, raw: string): "routed" | "dropped" | "offline" {
     const msg: ProtocolMsg | null = parseClientMsg(raw);
     if (!msg) return "dropped";
@@ -160,14 +175,14 @@ export class Hub {
       const client = d.clients.get(clientId);
       const tabToken = typeof msg.tabToken === "string" ? msg.tabToken : undefined;
       if (client) client.tabToken = tabToken;
-      if (!d.uplink) return "offline";
+      if (!senderDeliverable(d.uplink)) return "offline";
       this.safeSend(
         d.uplink,
         JSON.stringify(clientReadyFrame(clientId, tabToken)),
       );
       return "routed";
     }
-    if (!d.uplink) return "offline";
+    if (!senderDeliverable(d.uplink)) return "offline";
     this.safeSend(d.uplink, JSON.stringify(msgFrame(clientId, msg)));
     return "routed";
   }
@@ -180,7 +195,7 @@ export class Hub {
   connectedDevices(): { deviceId: string; clients: number }[] {
     const out: { deviceId: string; clients: number }[] = [];
     for (const [deviceId, d] of this.devices) {
-      if (d.uplink) out.push({ deviceId, clients: d.clients.size });
+      if (senderDeliverable(d.uplink)) out.push({ deviceId, clients: d.clients.size });
     }
     return out;
   }

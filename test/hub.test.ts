@@ -4,6 +4,7 @@ import { REMOTE_PROTO_VERSION } from "../src/frames.js";
 
 class FakeSender {
   sent: string[] = [];
+  readyState?: number;
   send(data: string) {
     this.sent.push(data);
   }
@@ -252,5 +253,25 @@ describe("Hub routing", () => {
     hub.addClient("devA", new FakeSender());
     hub.addClient("devB", new FakeSender()); // no uplink
     expect(hub.connectedDevices()).toEqual([{ deviceId: "devA", clients: 1 }]);
+  });
+
+  it("a CLOSING uplink is not deliverable: fromClient returns offline and send is not called", () => {
+    const hub = new Hub();
+    const up = new FakeSender();
+    hub.attachUplink("devA", up);
+    hello(hub);
+    const id = hub.addClient("devA", new FakeSender());
+    up.sent = [];
+    up.readyState = 2; // WebSocket.CLOSING — send() does not throw
+
+    expect(hub.uplinkConnected("devA")).toBe(false);
+    expect(hub.connectedDevices()).toEqual([]);
+    expect(hub.fromClient("devA", id, JSON.stringify({ type: "send", text: "during-close" }))).toBe("offline");
+    expect(up.sent).toEqual([]);
+
+    up.readyState = 1; // WebSocket.OPEN
+    expect(hub.uplinkConnected("devA")).toBe(true);
+    expect(hub.fromClient("devA", id, JSON.stringify({ type: "send", text: "after-reopen" }))).toBe("routed");
+    expect(up.json()).toEqual([{ t: "msg", clientId: id, msg: { type: "send", text: "after-reopen" } }]);
   });
 });

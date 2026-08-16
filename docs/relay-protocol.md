@@ -162,7 +162,7 @@ shim unchanged):
 - relay unwraps `host`/`host-to`/`snapshot` frames and delivers plain HostMsg
   JSON. `host` is device-wide; `host-to` and `snapshot` preserve per-client
   ownership.
-- no uplink connected → relay injects `{type:"error", text:"Device offline — VS Code isn't connected to the relay."}` (rendered by chat.js's normal error path).
+- no uplink connected (or the uplink is not deliverable — `readyState` other than OPEN) → relay injects `{type:"error", text:"Device offline — VS Code isn't connected to the relay."}`, plus `submissionId` when the refused frame carried one, so the browser can hold that send and no other (rendered by chat.js's normal error path).
 
 Every browser socket receives a fresh, opaque `clientId`, including after a
 reconnect. The extension owns the mapping from that id to the tab's selected

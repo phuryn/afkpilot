@@ -948,9 +948,15 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     }
     const clientId = hub.addClient(deviceId, ws);
     log(`[relay] client ${clientId} joined device ${deviceId}`);
-    const bounce = (text: string) => {
+    const bounce = (text: string, submissionId?: string) => {
       try {
-        ws.send(JSON.stringify({ type: "error", text }));
+        // submissionId is a correlation token only — copied from the refused
+        // frame so the browser can hold that send and no other. Never stored.
+        ws.send(JSON.stringify({
+          type: "error",
+          text,
+          ...(submissionId ? { submissionId } : {}),
+        }));
       } catch {
         /* client teardown race */
       }
@@ -960,7 +966,12 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     // overtake a send that is still being metered).
     let frameChain: Promise<void> = Promise.resolve();
     let lastUsageErrLog = 0;
-    const handleFrame = async (raw: string, type: unknown, authoredText: boolean) => {
+    const handleFrame = async (
+      raw: string,
+      type: unknown,
+      authoredText: boolean,
+      submissionId?: string,
+    ) => {
       // Two different limits, on purpose (owner, 2026-07-30).
       //
       // WEEKLY QUOTA counts messages the user WROTE — that is exactly what the
@@ -998,10 +1009,10 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         // token. The client retries a Device-offline bounce automatically,
         // so metering first would bill the same typed prompt twice.
         if (!hub.uplinkConnected(deviceId)) {
-          return bounce("Device offline — VS Code isn't connected to the relay.");
+          return bounce("Device offline — VS Code isn't connected to the relay.", submissionId);
         }
         if (messageRate && !messageRate.limiter.take(userId, messageRate.perMinute)) {
-          return bounce(`Slow down — at most ${messageRate.perMinute} messages per minute.`);
+          return bounce(`Slow down — at most ${messageRate.perMinute} messages per minute.`, submissionId);
         }
         if (chargesQuota && !isEntitled && freeTier) {
           const win = usageWindow(Date.now());
@@ -1010,6 +1021,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
             if (count > freeTier.weeklyMsgs) {
               return bounce(
                 `Free plan limit reached (${freeTier.weeklyMsgs} messages this week). Resets in ${resetsInText(win.resetsAt - Date.now())}. Upgrade to Remote Max for unlimited use.`,
+                submissionId,
               );
             }
           } catch (e) {
@@ -1027,7 +1039,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         // Uncapped frames (ready) must still reach fromClient so an offline
         // tabToken is kept. Capped frames only land here if the uplink
         // dropped during increment; UsageStore cannot refund.
-        bounce("Device offline — VS Code isn't connected to the relay.");
+        bounce("Device offline — VS Code isn't connected to the relay.", submissionId);
       }
     };
     admit((raw) => {
@@ -1038,10 +1050,16 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       // boolean (never the text) travels on. The relay stays policy-free and
       // payload-blind; capability gating remains the extension's job.
       let authoredText = false;
+      // Copied onto Device-offline / quota / rate-limit bounces so the
+      // browser can correlate without reading prompt text.
+      let submissionId: string | undefined;
       try {
-        const parsed = JSON.parse(raw) as { type?: unknown; comment?: unknown };
+        const parsed = JSON.parse(raw) as { type?: unknown; comment?: unknown; submissionId?: unknown };
         type = parsed.type;
         authoredText = typeof parsed.comment === "string" && parsed.comment.trim().length > 0;
+        if (typeof parsed.submissionId === "string" && parsed.submissionId) {
+          submissionId = parsed.submissionId;
+        }
       } catch {
         /* fromClient drops unparseable frames after preserving their order */
       }
@@ -1060,7 +1078,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
           return;
         }
       }
-      frameChain = frameChain.then(() => handleFrame(raw, type, authoredText)).catch(() => undefined);
+      frameChain = frameChain.then(() => handleFrame(raw, type, authoredText, submissionId)).catch(() => undefined);
     });
     ws.on("close", () => hub.removeClient(deviceId, clientId));
     ws.on("error", () => ws.close());

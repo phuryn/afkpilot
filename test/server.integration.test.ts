@@ -909,6 +909,40 @@ class CountingUsageStore implements UsageStore {
   }
 }
 
+/** Holds increment() until open() so a host can emit traffic and die
+ *  during the await — the interleaving that used to erase the browser
+ *  retry record and, on the relay, used to report routed after a charge. */
+class LatchUsageStore implements UsageStore {
+  started = 0;
+  increments = 0;
+  private readonly inner = new InMemoryUsageStore();
+  private release!: () => void;
+  private readonly gate = new Promise<void>((resolve) => {
+    this.release = resolve;
+  });
+  async increment(userId: string, windowStartMs: number): Promise<number> {
+    this.started += 1;
+    await this.gate;
+    this.increments += 1;
+    return this.inner.increment(userId, windowStartMs);
+  }
+  peek(userId: string, windowStartMs: number): Promise<number> {
+    return this.inner.peek(userId, windowStartMs);
+  }
+  open(): void {
+    this.release();
+  }
+}
+
+async function waitUntil(pred: () => boolean, label: string, timeoutMs = 1000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (pred()) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
 /** Two overlapping increment() calls wait until both have entered, so a
  *  peek-then-act rewrite of the quota check would let both slip under the
  *  cap. increment-then-check still serializes on the store write. */
@@ -1015,10 +1049,14 @@ describe("free-tier meter charges only delivered messages", () => {
       const { deviceId, deviceToken } = await linkMeterDevice(base, "good-C", "offline-meter box");
       const { client, inbox } = await openMeterClient(wsBase, deviceId, "good-C");
 
-      client.send(JSON.stringify({ type: "send", text: "lost while offline" }));
+      client.send(JSON.stringify({ type: "send", text: "lost while offline", submissionId: "offline-sub-1" }));
       client.send(JSON.stringify({ type: "send", text: "retried while still offline" }));
-      expect((await inbox.matching((m) => m.type === "error")).text).toMatch(DEVICE_OFFLINE);
-      expect((await inbox.matching((m) => m.type === "error")).text).toMatch(DEVICE_OFFLINE);
+      const named = await inbox.matching((m) => m.type === "error");
+      expect(named.text).toMatch(DEVICE_OFFLINE);
+      expect(named.submissionId).toBe("offline-sub-1");
+      const unnamed = await inbox.matching((m) => m.type === "error");
+      expect(unnamed.text).toMatch(DEVICE_OFFLINE);
+      expect(unnamed.submissionId).toBeUndefined();
 
       const win = usageWindow(Date.now());
       expect(usage.increments).toBe(0);
@@ -1161,6 +1199,60 @@ describe("free-tier meter charges only delivered messages", () => {
       // (delivery is decided before the limiter), not Slow down.
       client.send(JSON.stringify({ type: "send", text: "offline-after-cap" }));
       expect((await inbox.matching((m) => m.type === "error")).text).toMatch(DEVICE_OFFLINE);
+
+      client.close();
+    } finally {
+      await relay.close();
+    }
+  });
+
+  it("a CLOSING uplink is not charged and bounces Device offline with the send's submissionId", async () => {
+    const usage = new CountingUsageStore();
+    const { relay, base, wsBase } = await startMeterRelay({ weeklyMsgs: 2, usage });
+    try {
+      const { deviceId, deviceToken } = await linkMeterDevice(base, "good-C", "closing-meter box");
+      const { uplink } = await attachMeterUplink(wsBase, deviceToken, "closing-meter box");
+      const { client, inbox } = await openMeterClient(wsBase, deviceId, "good-C");
+
+      uplink.close();
+      expect([WebSocket.CLOSING, WebSocket.CLOSED]).toContain(uplink.readyState);
+      client.send(JSON.stringify({ type: "send", text: "during-close", submissionId: "close-sub-1" }));
+      const err = await inbox.matching((m) => m.type === "error");
+      expect(err.text).toMatch(DEVICE_OFFLINE);
+      expect(err.submissionId).toBe("close-sub-1");
+      expect(usage.increments).toBe(0);
+
+      client.close();
+    } finally {
+      await relay.close();
+    }
+  });
+
+  it("death during increment still bounces the named send so the client can retry", async () => {
+    const usage = new LatchUsageStore();
+    const { relay, base, wsBase } = await startMeterRelay({ weeklyMsgs: 5, usage });
+    try {
+      const { deviceId, deviceToken } = await linkMeterDevice(base, "good-C", "latch-meter box");
+      const { uplink } = await attachMeterUplink(wsBase, deviceToken, "latch-meter box");
+      const { client, inbox } = await openMeterClient(wsBase, deviceId, "good-C");
+
+      client.send(JSON.stringify({ type: "send", text: "in-flight", submissionId: "inc-sub-1" }));
+      await waitUntil(() => usage.started === 1, "increment to start");
+
+      // Host traffic during the await — the interleaving that used to erase
+      // the browser's retry record. The relay must still name the bounce.
+      uplink.send(JSON.stringify({ t: "host", msg: { type: "sessions", activeId: "s1" } }));
+      expect((await inbox.matching((m) => m.type === "sessions")).activeId).toBe("s1");
+
+      const uplinkClosed = new Promise<void>((resolve) => uplink.once("close", () => resolve()));
+      uplink.close();
+      await uplinkClosed;
+
+      usage.open();
+      const err = await inbox.matching((m) => m.type === "error");
+      expect(err.text).toMatch(DEVICE_OFFLINE);
+      expect(err.submissionId).toBe("inc-sub-1");
+      expect(usage.increments).toBe(1);
 
       client.close();
     } finally {
