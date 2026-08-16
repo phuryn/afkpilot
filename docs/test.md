@@ -4,6 +4,58 @@ The repositories test different boundaries. The relay owns transport, browser co
 
 Run focused checks while iterating. Run the applicable repository gate before promotion or release.
 
+## What each harness makes real — and what that leaves invisible
+
+The catalogues below say what each suite *covers*. This says what each one
+**fakes**, which is the more useful question: a bug survives exactly where every
+harness stubs the same side.
+
+| Harness | Relay | Browser client | Host | Agent CLI |
+| --- | --- | --- | --- | --- |
+| relay `npm test` | real (in-process) | — | — | — |
+| `e2e:touch` / `e2e:screens` | real, keyless | **real Chromium** | *scripted stub* | — |
+| `e2e:legacy` / tab-identity | real, keyless | real Chromium | *scripted stub* | — |
+| `e2e:browser` | real + real Clerk/Supabase | real Chromium | *scripted stub* | — |
+| `e2e:lifecycle` | real, keyless | real Chromium | **real desktop app** | fake ACP CLI |
+| extension `npm test` | — | happy-dom (no layout) | pure modules | — |
+| `test:integration` | — | *stubbed* | **real VS Code host** | fake ACP CLI |
+| `test:desktop` / `e2e:screens` | — | real Electron window | real desktop host | fake ACP CLI |
+| `test:live` | — | — | compiled modules | **real grok** |
+| `smoke:live` | — | real Electron window | real desktop app | **real grok** |
+
+Read the two stub columns. Before `e2e:lifecycle` existed, **every** relay suite
+drove a real browser against a *stub host* — instant, always warm, never
+refuses, never dies — and **every** extension suite drove a real host against a
+*stubbed client* with no outbox, no tab memory and no reconnect. So a defect
+needing both real halves was invisible by construction, and one needing a
+**restart** was doubly so, because every harness boots once into steady state
+and stays there.
+
+That is not hypothetical. The restore race shipped through all of it. And on the
+day `e2e:lifecycle` first ran it found two more of the same family, neither
+reachable by any other suite:
+
+- a prompt sent while the host was restarting was **silently dropped** by the
+  browser client (fixed in `93e2b53`);
+- the host **silently abandons a send** when a concurrent `startSession` bumps
+  the generation after the `userMessage` echo — the client sees the echo, treats
+  it as success, and waits forever.
+
+The practical rule when adding a harness: write down which side it fakes, and
+check whether that side is already faked by everything else. If it is, the new
+suite mostly re-covers ground. Coverage of *surfaces* is not coverage of
+*journeys* — nothing here except `e2e:lifecycle` can kill a process in the
+middle of one.
+
+Second-order traps worth knowing, both of which have bitten:
+
+- **happy-dom has no layout engine.** Rects are zero and stylesheets never
+  apply, so an icon with no size or a control pushed off-screen satisfies every
+  assertion the DOM suites can make. That is what the screens checks are for.
+- **A green run is not a passing suite if it flakes.** `e2e:lifecycle` was
+  green two runs in three while a real bug was live. Judge it on a series, not
+  on one result.
+
 ## Relay tests
 
 Run these commands from `afkpilot`.
