@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { LinkStore, makeLinkCode } from "../src/link-store.js";
 import { InMemoryDeviceRegistry, type DeviceRegistry } from "../src/devices.js";
 import { MinuteRateLimiter } from "../src/limits.js";
-import { InMemoryUsageStore, type UsageStore } from "../src/usage.js";
+import { InMemoryUsageStore, usageWindow, type UsageStore } from "../src/usage.js";
 import { MockSessionVerifier, type SessionClaims, type SessionVerifier } from "../src/auth.js";
 import { Hub } from "../src/hub.js";
 import {
@@ -887,6 +887,284 @@ describe("free tier (unentitled users get capped access)", () => {
       up.close();
     } finally {
       await relay5.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Metering order: a frame the relay cannot deliver must not increment the
+// weekly counter (and must not spend a burst token). The increment-then-check
+// race property and FAIL OPEN stay as they are for the deliverable path.
+// ---------------------------------------------------------------------------
+
+class CountingUsageStore implements UsageStore {
+  increments = 0;
+  constructor(private readonly inner: UsageStore = new InMemoryUsageStore()) {}
+  async increment(userId: string, windowStartMs: number): Promise<number> {
+    this.increments += 1;
+    return this.inner.increment(userId, windowStartMs);
+  }
+  peek(userId: string, windowStartMs: number): Promise<number> {
+    return this.inner.peek(userId, windowStartMs);
+  }
+}
+
+/** Two overlapping increment() calls wait until both have entered, so a
+ *  peek-then-act rewrite of the quota check would let both slip under the
+ *  cap. increment-then-check still serializes on the store write. */
+class BarrierUsageStore implements UsageStore {
+  started = 0;
+  readonly inner = new InMemoryUsageStore();
+  private unlock!: () => void;
+  private readonly barrier = new Promise<void>((resolve) => {
+    this.unlock = resolve;
+  });
+  constructor(private readonly waitFor: number) {}
+  async increment(userId: string, windowStartMs: number): Promise<number> {
+    this.started += 1;
+    if (this.started >= this.waitFor) this.unlock();
+    await this.barrier;
+    return this.inner.increment(userId, windowStartMs);
+  }
+  peek(userId: string, windowStartMs: number): Promise<number> {
+    return this.inner.peek(userId, windowStartMs);
+  }
+}
+
+async function startMeterRelay(opts: {
+  weeklyMsgs: number;
+  usage: UsageStore;
+  messageRate?: { perMinute: number; limiter: MinuteRateLimiter };
+}): Promise<{ relay: RelayServer; base: string; wsBase: string }> {
+  let n = 0;
+  const store = new LinkStore({ now: Date.now, randomCode: () => makeLinkCode(() => (n++ * 7) % 32) });
+  const devices = new InMemoryDeviceRegistry({
+    now: Date.now,
+    randomUUID: () => `meter-kid-${++n}`,
+    randomBytes: (size) => cryptoRandomBytes(size),
+    randomId: () => `meter-dev-${++n}`,
+  });
+  const relay = createRelayServer({
+    host: "127.0.0.1",
+    port: 0,
+    webRoot,
+    store,
+    devices,
+    sessions: new StrictVerifier(),
+    requiredFeature: "remote",
+    freeTier: { devices: 4, weeklyMsgs: opts.weeklyMsgs, usage: opts.usage },
+    messageRate: opts.messageRate,
+    hub: new Hub(),
+    log: () => {},
+  });
+  await new Promise<void>((r) => relay.server.once("listening", () => r()));
+  return {
+    relay,
+    base: `http://127.0.0.1:${relay.port()}`,
+    wsBase: `ws://127.0.0.1:${relay.port()}`,
+  };
+}
+
+async function linkMeterDevice(
+  base: string,
+  token: string,
+  name: string,
+): Promise<{ deviceId: string; deviceToken: string }> {
+  const { json: started } = await postAuth(base, "/api/link/start", { name });
+  expect((await postAuth(base, "/api/link/approve", { code: started.code }, token)).json.ok).toBe(true);
+  const deviceToken: string = (await postAuth(base, "/api/link/poll", { code: started.code })).json.token;
+  const devices = (await (await fetch(`${base}/api/devices`, { headers: { authorization: `Bearer ${token}` } })).json())
+    .devices as Array<{ name: string; deviceId: string }>;
+  const row = devices.find((d) => d.name === name);
+  if (!row) throw new Error(`device ${name} not listed`);
+  return { deviceId: row.deviceId, deviceToken };
+}
+
+async function attachMeterUplink(
+  wsBase: string,
+  deviceToken: string,
+  name: string,
+): Promise<{ uplink: WebSocket; inbox: WsInbox }> {
+  const uplink = new WebSocket(`${wsBase}/uplink?token=${encodeURIComponent(deviceToken)}`);
+  const inbox = new WsInbox(uplink);
+  await waitOpen(uplink);
+  uplink.send(JSON.stringify({ t: "hello", proto: 1, device: { name } }));
+  return { uplink, inbox };
+}
+
+async function openMeterClient(
+  wsBase: string,
+  deviceId: string,
+  token: string,
+): Promise<{ client: WebSocket; inbox: WsInbox }> {
+  const client = new WebSocket(`${wsBase}/client?device=${encodeURIComponent(deviceId)}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const inbox = new WsInbox(client);
+  await waitOpen(client);
+  return { client, inbox };
+}
+
+const DEVICE_OFFLINE = /Device offline — VS Code isn't connected to the relay/;
+
+describe("free-tier meter charges only delivered messages", () => {
+  it("an offline send does not increment; an online send still does", async () => {
+    const usage = new CountingUsageStore();
+    const { relay, base, wsBase } = await startMeterRelay({ weeklyMsgs: 2, usage });
+    try {
+      const { deviceId, deviceToken } = await linkMeterDevice(base, "good-C", "offline-meter box");
+      const { client, inbox } = await openMeterClient(wsBase, deviceId, "good-C");
+
+      client.send(JSON.stringify({ type: "send", text: "lost while offline" }));
+      client.send(JSON.stringify({ type: "send", text: "retried while still offline" }));
+      expect((await inbox.matching((m) => m.type === "error")).text).toMatch(DEVICE_OFFLINE);
+      expect((await inbox.matching((m) => m.type === "error")).text).toMatch(DEVICE_OFFLINE);
+
+      const win = usageWindow(Date.now());
+      expect(usage.increments).toBe(0);
+      expect(await usage.peek("user_C", win.start)).toBe(0);
+      const meOffline = await (await fetch(`${base}/api/me`, { headers: { authorization: "Bearer good-C" } })).json();
+      expect(meOffline.limits.used).toBe(0);
+
+      const { uplink, inbox: upInbox } = await attachMeterUplink(wsBase, deviceToken, "offline-meter box");
+      client.send(JSON.stringify({ type: "send", text: "now online" }));
+      expect((await upInbox.matching((m) => m.t === "msg")).msg.text).toBe("now online");
+      expect(usage.increments).toBe(1);
+      expect(await usage.peek("user_C", win.start)).toBe(1);
+
+      uplink.close();
+      client.close();
+    } finally {
+      await relay.close();
+    }
+  });
+
+  it("increment-then-check still serializes two overlapping sends at the cap", async () => {
+    // weeklyMsgs=1 + two in-flight increment()s: peek-then-act would deliver
+    // both (both peek 0). increment-then-check delivers one and bounces the
+    // other, and the stored count is 2 (meter display clamps to the cap).
+    const usage = new BarrierUsageStore(2);
+    const { relay, base, wsBase } = await startMeterRelay({ weeklyMsgs: 1, usage });
+    try {
+      const { deviceId, deviceToken } = await linkMeterDevice(base, "good-D", "race-meter box");
+      const { uplink, inbox: upInbox } = await attachMeterUplink(wsBase, deviceToken, "race-meter box");
+      const a = await openMeterClient(wsBase, deviceId, "good-D");
+      const b = await openMeterClient(wsBase, deviceId, "good-D");
+
+      a.client.send(JSON.stringify({ type: "send", text: "race-a" }));
+      b.client.send(JSON.stringify({ type: "send", text: "race-b" }));
+
+      const delivered = await upInbox.matching((m) => m.t === "msg");
+      expect(["race-a", "race-b"]).toContain(delivered.msg.text);
+      const bounced = await Promise.race([
+        a.inbox.matching((m) => m.type === "error"),
+        b.inbox.matching((m) => m.type === "error"),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("neither send bounced — peek-then-act slipped both under the cap")),
+            500,
+          ),
+        ),
+      ]);
+      expect(bounced.text).toMatch(/Free plan limit/);
+
+      a.client.send(JSON.stringify({ type: "ready" }));
+      const next = await upInbox.matching((m) => m.t === "client-ready" || m.t === "msg");
+      expect(next.t).toBe("client-ready");
+
+      expect(usage.started).toBe(2);
+      expect(await usage.peek("user_D", usageWindow(Date.now()).start)).toBe(2);
+      const me = await (await fetch(`${base}/api/me`, { headers: { authorization: "Bearer good-D" } })).json();
+      expect(me.limits.used).toBe(1);
+
+      a.client.close();
+      b.client.close();
+      uplink.close();
+    } finally {
+      await relay.close();
+    }
+  });
+
+  it("a usage-store outage still fails open for a deliverable send", async () => {
+    const usage: UsageStore = {
+      increment: async () => {
+        throw new Error("db down");
+      },
+      peek: async () => {
+        throw new Error("db down");
+      },
+    };
+    const { relay, base, wsBase } = await startMeterRelay({ weeklyMsgs: 1, usage });
+    try {
+      const { deviceId, deviceToken } = await linkMeterDevice(base, "good-E", "outage-meter box");
+      const { uplink, inbox: upInbox } = await attachMeterUplink(wsBase, deviceToken, "outage-meter box");
+      const { client } = await openMeterClient(wsBase, deviceId, "good-E");
+
+      client.send(JSON.stringify({ type: "send", text: "o1" }));
+      client.send(JSON.stringify({ type: "send", text: "o2" }));
+      const first = await Promise.race([
+        upInbox.matching((m) => m.t === "msg" && m.msg.type === "send"),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("store outage blocked the send — fail-open did not hold")), 500),
+        ),
+      ]);
+      expect(first.msg.text).toBe("o1");
+      expect((await upInbox.matching((m) => m.t === "msg" && m.msg.type === "send")).msg.text).toBe("o2");
+
+      client.close();
+      uplink.close();
+    } finally {
+      await relay.close();
+    }
+  });
+
+  it("an undeliverable send does not spend a burst token", async () => {
+    const usage = new CountingUsageStore();
+    const { relay, base, wsBase } = await startMeterRelay({
+      weeklyMsgs: 10,
+      usage,
+      messageRate: { perMinute: 2, limiter: new MinuteRateLimiter(Date.now) },
+    });
+    try {
+      const { deviceId, deviceToken } = await linkMeterDevice(base, "good-C", "burst-offline box");
+      const { client, inbox } = await openMeterClient(wsBase, deviceId, "good-C");
+
+      client.send(JSON.stringify({ type: "send", text: "offline-1" }));
+      client.send(JSON.stringify({ type: "send", text: "offline-2" }));
+      expect((await inbox.matching((m) => m.type === "error")).text).toMatch(DEVICE_OFFLINE);
+      expect((await inbox.matching((m) => m.type === "error")).text).toMatch(DEVICE_OFFLINE);
+      expect(usage.increments).toBe(0);
+
+      const { uplink, inbox: upInbox } = await attachMeterUplink(wsBase, deviceToken, "burst-offline box");
+      client.send(JSON.stringify({ type: "send", text: "online-1" }));
+      client.send(JSON.stringify({ type: "send", text: "online-2" }));
+      const firstOnline = await Promise.race([
+        upInbox.matching((m) => m.t === "msg"),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("online send was not routed — offline retries spent the burst bucket")),
+            500,
+          ),
+        ),
+      ]);
+      expect(firstOnline.msg.text).toBe("online-1");
+      expect((await upInbox.matching((m) => m.t === "msg")).msg.text).toBe("online-2");
+
+      client.send(JSON.stringify({ type: "send", text: "online-3" }));
+      expect((await inbox.matching((m) => m.type === "error")).text).toMatch(/Slow down/);
+
+      const uplinkClosed = new Promise<void>((resolve) => uplink.once("close", () => resolve()));
+      uplink.close();
+      await uplinkClosed;
+      await new Promise((r) => setTimeout(r, 50));
+      // Bucket is spent; a now-offline send must still say Device offline
+      // (delivery is decided before the limiter), not Slow down.
+      client.send(JSON.stringify({ type: "send", text: "offline-after-cap" }));
+      expect((await inbox.matching((m) => m.type === "error")).text).toMatch(DEVICE_OFFLINE);
+
+      client.close();
+    } finally {
+      await relay.close();
     }
   });
 });

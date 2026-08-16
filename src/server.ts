@@ -668,9 +668,9 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
           const win = usageWindow(Date.now());
           let used = 0;
           try {
-            // Clamped: blocked attempts still increment the stored count
-            // (atomic increment-then-check), but the meter shows at most the
-            // cap — "5 / 2" would read like a bug.
+            // Clamped: over-quota attempts still increment the stored count
+            // (atomic increment-then-check — delivery was possible), but the
+            // meter shows at most the cap — "5 / 2" would read like a bug.
             used = Math.min(await freeTier.usage.peek(claims.userId, win.start), freeTier.weeklyMsgs);
           } catch {
             /* usage store down — the meter shows 0 rather than erroring */
@@ -994,6 +994,12 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       const capped = chargesQuota || type === "exitPlanAnswer" ||
         type === "newSession" || type === "summarizeSpeech";
       if (capped) {
+        // Delivery is the only thing that costs — weekly quota or burst
+        // token. The client retries a Device-offline bounce automatically,
+        // so metering first would bill the same typed prompt twice.
+        if (!hub.uplinkConnected(deviceId)) {
+          return bounce("Device offline — VS Code isn't connected to the relay.");
+        }
         if (messageRate && !messageRate.limiter.take(userId, messageRate.perMinute)) {
           return bounce(`Slow down — at most ${messageRate.perMinute} messages per minute.`);
         }
@@ -1018,13 +1024,10 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       }
       const result = hub.fromClient(deviceId, clientId, raw);
       if (result === "offline") {
-        // Rendered by chat.js's normal error path — the page stays up and the
-        // user re-sends once the extension reconnects.
-        try {
-          ws.send(JSON.stringify({ type: "error", text: "Device offline — VS Code isn't connected to the relay." }));
-        } catch {
-          /* client teardown race */
-        }
+        // Uncapped frames (ready) must still reach fromClient so an offline
+        // tabToken is kept. Capped frames only land here if the uplink
+        // dropped during increment; UsageStore cannot refund.
+        bounce("Device offline — VS Code isn't connected to the relay.");
       }
     };
     admit((raw) => {
