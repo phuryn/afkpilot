@@ -40,8 +40,10 @@
 // browser socket; the relay bounces Device offline; grace still swallows the
 // banner (the usual reconnect race) but the client folds that send back into
 // the persisted outbox and re-opens the identity gate so the replacement
-// host's confirmation releases it. Isolation still runs so one red does not
-// hide the other.
+// host's confirmation releases it. Arrival is the happy path. A replacing
+// start that already echoed the user bubble cannot be replayed (duplicate),
+// so that interleaving ends as interrupted-after-echo — named, not treated
+// as arrival. Isolation still runs so one red does not hide the other.
 //
 // Locally, skip loudly (print why, exit 0) when the sibling checkout is
 // absent. CI sets LIFECYCLE_REQUIRE_HOST=1 so the same absence fails.
@@ -146,6 +148,64 @@ export function queuedTurnArrived(transcript, prompt, agentsBefore) {
   const agents = Array.isArray(transcript?.agents) ? transcript.agents : [];
   const newOk = agents.length > agentsBefore && agents.some((a) => String(a).includes(AGENT_OK));
   return !!(user && newOk);
+}
+
+// Additive host marker for the post-echo restart bail. Phrase matching across
+// two repos is how a copy edit turns this gate the wrong colour; detect the
+// code (or an error frame after userMessage) instead of the sentence.
+export const INTERRUPTED_SEND_CODE = "interrupted-send";
+
+export function errorAfterUserEcho(frames) {
+  let sawUser = false;
+  for (const frame of Array.isArray(frames) ? frames : []) {
+    const type = frame && frame.type;
+    if (type === "userMessage") sawUser = true;
+    else if (sawUser && type === "error") return true;
+  }
+  return false;
+}
+
+export function classifyQueueRelease(transcript, prompt, agentsBefore = 0, frames = []) {
+  if (queuedTurnArrived(transcript, prompt, agentsBefore)) return "arrived";
+  const users = Array.isArray(transcript?.users) ? transcript.users : [];
+  const echoed = users.some((u) => String(u).includes(prompt));
+  const codes = [
+    ...(Array.isArray(transcript?.errorCodes) ? transcript.errorCodes : []),
+    ...(Array.isArray(frames) ? frames : []).map((f) => f && f.code).filter(Boolean),
+  ];
+  const coded = codes.includes(INTERRUPTED_SEND_CODE);
+  if (echoed && (coded || errorAfterUserEcho(frames))) return "interrupted-after-echo";
+  const input = String(transcript?.input || "");
+  const queued = Array.isArray(transcript?.queued) ? transcript.queued : [];
+  if (input.includes(prompt) || queued.some((u) => String(u).includes(prompt))) {
+    return "failed-visibly-recoverable";
+  }
+  return null;
+}
+
+export function isFollowUpNewSessionFrame(type) {
+  return type === "clearMessages" || type === "setBusy" || type === "session";
+}
+
+export function unselectedRepoPlusSettled({
+  previousPrompts = [],
+  users = [],
+  restoring = false,
+  welcome = "",
+  sendTitle = "",
+  railNewIntent = null,
+  sessionFramesSinceClick = 0,
+} = {}) {
+  if (restoring) return false;
+  if (railNewIntent) return false;
+  if (/Loading conversation/i.test(welcome || "")) return false;
+  if (/Initializing|Starting/i.test(sendTitle || "")) return false;
+  if (previousPrompts.some((p) => users.some((u) => String(u).includes(p)))) return false;
+  // Unselected-repo "+" is selectRepo (host mints when the repo is empty) plus
+  // a follow-up newSession. One `session` frame is the first mint; the
+  // composer is usable then. Empty new sessions are not written to tab
+  // identity, so a remembered-id check deadlocks.
+  return sessionFramesSinceClick >= 2;
 }
 
 export function describeIsolationMismatch({
@@ -507,10 +567,12 @@ function makeWorkspace(root, name) {
 async function readTranscript(page) {
   return page.evaluate(() => {
     const texts = (sel) => [...document.querySelectorAll(sel)].map((el) => (el.innerText || "").trim());
+    const errorNodes = [...document.querySelectorAll(".msg.error")];
     return {
       users: texts(".msg.user:not(.queued)"),
       agents: texts(".msg.agent"),
-      errors: texts(".msg.error"),
+      errors: errorNodes.map((el) => (el.innerText || "").trim()),
+      errorCodes: errorNodes.map((el) => el.getAttribute("data-error-code")).filter(Boolean),
       queued: texts(".msg.user.queued"),
       notSent: [...document.querySelectorAll(".queued-tag")].map((el) => (el.textContent || "").trim()),
       input: document.querySelector("#input")?.value || "",
@@ -590,26 +652,23 @@ async function waitForAnsweredTurn(page, prompt, where, agentsBefore = 0) {
   }, `${where}: user prompt ${JSON.stringify(prompt)} and a new agent ${JSON.stringify(AGENT_OK)}`, 45000);
 }
 
-async function waitForVisibleFailureOrArrival(page, prompt, where, agentsBefore = 0) {
+async function hostFramesSince(page, since) {
+  return page.evaluate((n) => (window.__lifecycleHostFrames || []).slice(n), since);
+}
+
+async function waitForVisibleFailureOrArrival(page, prompt, where, agentsBefore = 0, framesSince = 0) {
   let outcome = "";
   await waitFor(async () => {
     const t = await readTranscript(page);
     assertNotBurst(t, where);
-    if (queuedTurnArrived(t, prompt, agentsBefore)) {
-      outcome = "arrived";
-      return true;
-    }
-    const visibleFail =
-      t.queued.some((u) => u.includes(prompt)) ||
-      (t.notSent.some((n) => /Not sent|Queued/i.test(n)) && t.queued.some((u) => u.includes(prompt))) ||
-      t.input.includes(prompt) ||
-      t.errors.some((e) => /offline|not sent|returned to the input|could not be restored|queued/i.test(e));
-    if (visibleFail) {
-      outcome = "failed-visibly";
+    const frames = await hostFramesSince(page, framesSince);
+    const classified = classifyQueueRelease(t, prompt, agentsBefore, frames);
+    if (classified) {
+      outcome = classified;
       return true;
     }
     return false;
-  }, `${where}: queued work ${JSON.stringify(prompt)} to arrive or fail visibly (silent drop is the defect)`, 45000);
+  }, `${where}: queued work ${JSON.stringify(prompt)} to arrive, interrupt after echo, or fail with the text recoverable (silent drop is the defect)`, 45000);
   return outcome;
 }
 
@@ -624,6 +683,29 @@ async function startNewSessionInRepo(page, label) {
   const add = repo.locator("button[title*='New session'], button[title*='start a new session']").first();
   await add.waitFor({ state: "visible", timeout: 10000 });
   await add.evaluate((el) => el.click());
+}
+
+async function waitForRailPlusSettled(page, {
+  previousPrompts,
+  framesBeforeClick,
+  where,
+}) {
+  await waitFor(async () => {
+    const t = await readTranscript(page);
+    assertNotBurst(t, where);
+    const intent = await page.evaluate(() => window.__grokRailNewIntent || null);
+    const frames = await hostFramesSince(page, framesBeforeClick);
+    const sessionFrames = frames.filter((f) => f && f.type === "session").length;
+    return unselectedRepoPlusSettled({
+      previousPrompts,
+      users: t.users,
+      restoring: t.restoring,
+      welcome: t.welcome,
+      sendTitle: t.sendTitle,
+      railNewIntent: intent,
+      sessionFramesSinceClick: sessionFrames,
+    });
+  }, where, 45000);
 }
 
 async function resumeRepoSession(page, label, sessionText) {
@@ -642,30 +724,50 @@ async function resumeRepoSession(page, label, sessionText) {
   await head.evaluate((el) => el.click());
 }
 
+async function readClientDump(page) {
+  return page.evaluate(() => {
+    const texts = (sel) => [...document.querySelectorAll(sel)].map((el) => (el.innerText || "").trim());
+    const errorNodes = [...document.querySelectorAll(".msg.error")];
+    const deviceId = new URLSearchParams(location.search).get("device") || "";
+    let outbox = null;
+    let remembered = null;
+    try { outbox = sessionStorage.getItem("afk-outbox:" + deviceId); } catch (_) { /* */ }
+    try {
+      const raw = sessionStorage.getItem(`grok.remote.tabSession:${deviceId}`);
+      remembered = raw ? JSON.parse(raw) : null;
+    } catch (_) { /* */ }
+    return {
+      users: texts(".msg.user:not(.queued)"),
+      agents: texts(".msg.agent"),
+      queued: texts(".msg.user.queued"),
+      errors: errorNodes.map((el) => (el.innerText || "").trim()),
+      errorCodes: errorNodes.map((el) => el.getAttribute("data-error-code")).filter(Boolean),
+      input: document.querySelector("#input")?.value || "",
+      restoring: document.body.classList.contains("identity-restoring"),
+      sendTitle: document.querySelector("#send-btn")?.getAttribute("title") || "",
+      welcome: document.querySelector("#welcome-version")?.textContent || "",
+      railNewIntent: window.__grokRailNewIntent || null,
+      remembered,
+      outbox,
+      hostFrames: window.__lifecycleHostFrames || [],
+    };
+  });
+}
+
+function writeLifecycleArtifact(name, value) {
+  const dir = join(RELAY_ROOT, "e2e-artifacts", "lifecycle");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, name), typeof value === "string" ? value : `${JSON.stringify(value, null, 2)}\n`);
+}
+
 async function dumpFailure(page, relay, host, label) {
   try {
     const dir = join(RELAY_ROOT, "e2e-artifacts", "lifecycle");
     mkdirSync(dir, { recursive: true });
     if (page) await page.screenshot({ path: join(dir, `${label}.png`), fullPage: true });
     try {
-      const client = await page.evaluate(() => {
-        const texts = (sel) => [...document.querySelectorAll(sel)].map((el) => (el.innerText || "").trim());
-        const deviceId = new URLSearchParams(location.search).get("device") || "";
-        let outbox = null;
-        try { outbox = sessionStorage.getItem("afk-outbox:" + deviceId); } catch (_) { /* */ }
-        return {
-          users: texts(".msg.user:not(.queued)"),
-          agents: texts(".msg.agent"),
-          queued: texts(".msg.user.queued"),
-          errors: texts(".msg.error"),
-          input: document.querySelector("#input")?.value || "",
-          restoring: document.body.classList.contains("identity-restoring"),
-          outbox,
-        };
-      }).catch(() => null);
-      if (client) {
-        writeFileSync(join(dir, `${label}-client.json`), `${JSON.stringify(client, null, 2)}\n`);
-      }
+      const client = await readClientDump(page).catch(() => null);
+      if (client) writeLifecycleArtifact(`${label}-client.json`, client);
     } catch { /* dump is best-effort */ }
     writeFileSync(join(dir, `${label}-relay.log`), `${relay?.stdout || ""}\n--- stderr ---\n${relay?.stderr || ""}`);
     if (host) {
@@ -683,7 +785,12 @@ function installHostFrameTap() {
   window.addEventListener("message", (e) => {
     const d = e.data;
     if (d && typeof d.type === "string") {
-      window.__lifecycleHostFrames.push({ type: d.type, at: Date.now() });
+      const rec = { type: d.type, at: Date.now() };
+      if (d.type === "error") {
+        if (typeof d.text === "string") rec.text = d.text;
+        if (typeof d.code === "string") rec.code = d.code;
+      }
+      window.__lifecycleHostFrames.push(rec);
     }
   });
 }
@@ -909,6 +1016,10 @@ async function main() {
       log(`old host pid ${oldPid} is gone; uplink dropped`);
     }
 
+    // Snapshot BEFORE the outbox can flush. Identity confirmation is the
+    // same handshake that restores A2, so reading the agent count after
+    // that wait treats an already-arrived queued turn as "not yet".
+    const agentsWhenQueued = (await readTranscript(page)).agents.length;
     if (inverted("skip-queue-send")) {
       log("INVERT skip-queue-send — not queueing work while the host is down");
     } else {
@@ -953,7 +1064,6 @@ async function main() {
       `after restart the tab restored the first alpha session instead of the one it owned. users=${JSON.stringify(afterRestart.users)}`,
     );
 
-    const agentsAtReplacement = (await readTranscript(page)).agents.length;
     const defects = [];
     if (!inverted("skip-queue-send")) {
       try {
@@ -961,16 +1071,24 @@ async function main() {
           page,
           PROMPT_QUEUED,
           "queue release after restart",
-          agentsAtReplacement,
+          agentsWhenQueued,
+          framesBeforeRestart,
         );
-        log(`queued work while host was down: ${outcome}`);
         const finalT = await readTranscript(page);
-        const vanished =
-          !finalT.users.some((u) => u.includes(PROMPT_QUEUED)) &&
-          !finalT.queued.some((u) => u.includes(PROMPT_QUEUED)) &&
-          !finalT.input.includes(PROMPT_QUEUED) &&
-          !finalT.errors.some((e) => /offline|not sent|returned to the input|queued/i.test(e));
-        if (vanished) {
+        const frames = await hostFramesSince(page, framesBeforeRestart);
+        const classified = classifyQueueRelease(finalT, PROMPT_QUEUED, agentsWhenQueued, frames);
+        try {
+          writeLifecycleArtifact("queue-release-client.json", {
+            outcome,
+            classified,
+            agentsWhenQueued,
+            transcript: finalT,
+            errorFrames: frames.filter((f) => f && f.type === "error"),
+            client: await readClientDump(page).catch(() => null),
+          });
+        } catch { /* diagnostic */ }
+        log(`queued work while host was down: ${outcome}`);
+        if (!classified) {
           defects.push(
             `queued work ${JSON.stringify(PROMPT_QUEUED)} was silently dropped after restart. ` +
               `transcript=${JSON.stringify(finalT)}`,
@@ -979,12 +1097,24 @@ async function main() {
       } catch (e) {
         const msg = (e && e.message) || String(e);
         log(`queued check failed (isolation still runs): ${msg}`);
+        try {
+          const t = await readTranscript(page);
+          const frames = await hostFramesSince(page, framesBeforeRestart);
+          writeLifecycleArtifact("queue-release-client.json", {
+            outcome: "timeout",
+            classified: classifyQueueRelease(t, PROMPT_QUEUED, agentsWhenQueued, frames),
+            agentsWhenQueued,
+            transcript: t,
+            errorFrames: frames.filter((f) => f && f.type === "error"),
+            client: await readClientDump(page).catch(() => null),
+          });
+        } catch { /* diagnostic */ }
         defects.push(msg);
       }
     } else {
       await waitFor(async () => {
         const t = await readTranscript(page);
-        return queuedTurnArrived(t, PROMPT_QUEUED, agentsAtReplacement);
+        return queuedTurnArrived(t, PROMPT_QUEUED, agentsWhenQueued);
       }, "INVERT skip-queue-send still asserts the unsent prompt arrived (should go red)", 8000);
     }
 
@@ -997,9 +1127,9 @@ async function main() {
     );
     log("restart reconnect kept the conversation and session id");
 
-    // 6. repo switch — two workspaces, no bleed. The rail "+" is optimistic;
-    // wait for the previous transcript to leave, not for the composer (already
-    // usable on the conversation we are leaving).
+    // 6. repo switch — two workspaces, no bleed. The rail "+" on another
+    // project is two host operations; waitForRailPlusSettled is the bind
+    // signal, not the composer (already usable on the conversation we leave).
     if (inverted("skip-repo-switch")) {
       log("INVERT skip-repo-switch — staying on the first repo");
       sessionB = sessionA;
@@ -1009,14 +1139,13 @@ async function main() {
         "INVERT: isolation asserted without switching (must go red)",
       );
     } else {
+      const framesBeforeBravoPlus = await hostFrameCount(page);
       await startNewSessionInRepo(page, "bravo");
-      await waitFor(async () => {
-        const t = await readTranscript(page);
-        if (t.restoring) return false;
-        if (/Loading conversation/i.test(t.welcome)) return false;
-        return !t.users.some((u) => u.includes(PROMPT_A)) &&
-          !t.users.some((u) => u.includes(PROMPT_A2));
-      }, "bravo new session to bind — previous transcript must leave the tab", 45000);
+      await waitForRailPlusSettled(page, {
+        previousPrompts: [PROMPT_A, PROMPT_A2],
+        framesBeforeClick: framesBeforeBravoPlus,
+        where: "bravo new session to bind — previous transcript must leave and the follow-up newSession must settle",
+      });
       await waitForChatUsable(page, "bravo new session composer");
       const afterSwitch = await readTranscript(page);
       sessionB = await readRememberedSession(page, deviceId);

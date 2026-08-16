@@ -4,10 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  classifyQueueRelease,
   describeIsolationMismatch,
+  errorAfterUserEcho,
   hostProcessGone,
   hostRequired,
+  INTERRUPTED_SEND_CODE,
+  isFollowUpNewSessionFrame,
   isReplacementHostFrameType,
+  unselectedRepoPlusSettled,
   parseInvert,
   persistTurnForLoad,
   queuedTurnArrived,
@@ -114,6 +119,87 @@ describe("lifecycle e2e harness", () => {
     )).toBe(false);
   });
 
+  it("names queue-release outcomes instead of matching host copy", () => {
+    const prompt = "lifecycle-queued-while-down";
+    expect(classifyQueueRelease(
+      { users: [prompt], agents: ["ok", "ok"] },
+      prompt,
+      1,
+    )).toBe("arrived");
+    expect(classifyQueueRelease(
+      { users: [prompt], agents: ["ok"], errors: ["unrelated restore banner"] },
+      prompt,
+      1,
+      [{ type: "userMessage" }, { type: "error", text: "The session restarted while this message was being sent, so delivery is uncertain." }],
+    )).toBe("interrupted-after-echo");
+    expect(classifyQueueRelease(
+      { users: [prompt], agents: ["ok"], errorCodes: [INTERRUPTED_SEND_CODE] },
+      prompt,
+      1,
+      [],
+    )).toBe("interrupted-after-echo");
+    expect(classifyQueueRelease(
+      { users: [prompt], agents: ["ok"], errors: ["Still restoring the previous conversation."] },
+      prompt,
+      1,
+      [{ type: "error", text: "Still restoring the previous conversation." }, { type: "userMessage" }],
+    )).toBe(null);
+    expect(classifyQueueRelease(
+      { users: [prompt], agents: ["ok"], input: "" },
+      prompt,
+      1,
+      [{ type: "userMessage" }],
+    )).toBe(null);
+    expect(classifyQueueRelease(
+      { users: [], agents: ["ok"], input: prompt },
+      prompt,
+      0,
+    )).toBe("failed-visibly-recoverable");
+    expect(classifyQueueRelease(
+      { users: [], agents: [], queued: [prompt] },
+      prompt,
+      0,
+    )).toBe("failed-visibly-recoverable");
+    expect(errorAfterUserEcho([{ type: "error" }, { type: "userMessage" }])).toBe(false);
+    expect(errorAfterUserEcho([{ type: "userMessage" }, { type: "error" }])).toBe(true);
+    expect(isFollowUpNewSessionFrame("clearMessages")).toBe(true);
+    expect(isFollowUpNewSessionFrame("error")).toBe(false);
+  });
+
+  it("treats a queued turn that landed during restore as arrival, not a silent drop", () => {
+    const prompt = "lifecycle-queued-while-down";
+    const afterFlush = {
+      users: ["lifecycle-alpha-two", `${prompt}\n9:07 PM`],
+      agents: ["ok\n9:07 PM", "ok\n9:07 PM"],
+    };
+    expect(queuedTurnArrived(afterFlush, prompt, 2)).toBe(false);
+    expect(queuedTurnArrived(afterFlush, prompt, 1)).toBe(true);
+    expect(classifyQueueRelease(afterFlush, prompt, 1)).toBe("arrived");
+  });
+
+  it("does not wait for tab identity on an empty new session after repo +", () => {
+    const ready = {
+      previousPrompts: ["lifecycle-alpha-two"],
+      users: [],
+      restoring: false,
+      welcome: "Connected",
+      sendTitle: "Send",
+      railNewIntent: null,
+    };
+    expect(unselectedRepoPlusSettled({ ...ready, sessionFramesSinceClick: 1 })).toBe(false);
+    expect(unselectedRepoPlusSettled({ ...ready, sessionFramesSinceClick: 2 })).toBe(true);
+    expect(unselectedRepoPlusSettled({
+      ...ready,
+      railNewIntent: "C:\\tmp\\bravo",
+      sessionFramesSinceClick: 2,
+    })).toBe(false);
+    expect(unselectedRepoPlusSettled({
+      ...ready,
+      users: ["lifecycle-alpha-two"],
+      sessionFramesSinceClick: 2,
+    })).toBe(false);
+  });
+
   it("isolation mismatch reports observed ids, not a stale constant-id hypothesis", () => {
     const msg = describeIsolationMismatch({
       expectedRepo: "bravo",
@@ -136,5 +222,7 @@ describe("lifecycle e2e harness", () => {
     expect(src).toMatch(/do not trust a stale out/);
     expect(src).toMatch(/stdio: \["pipe", "pipe", "pipe"\]/);
     expect(src).toMatch(/GROK_LIFECYCLE_HOST_SHUTDOWN/);
+    expect(src).not.toMatch(/offline\|not sent\|returned to the input/);
+    expect(src).toMatch(/INTERRUPTED_SEND_CODE/);
   });
 });

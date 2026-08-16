@@ -17,6 +17,7 @@ const {
   isDeviceOfflineError,
   isNonRetryableRelayBounce,
   inboundFrameProvesDeviceAlive,
+  errorCodeFromFrame,
   sendCorrelationId,
   outboxAfterPersist,
   outboxAfterAck,
@@ -32,6 +33,7 @@ const {
     isDeviceOfflineError,
     isNonRetryableRelayBounce,
     inboundFrameProvesDeviceAlive,
+    errorCodeFromFrame,
     sendCorrelationId,
     outboxAfterPersist,
     outboxAfterAck,
@@ -47,6 +49,7 @@ const {
   isDeviceOfflineError: (data: unknown) => boolean;
   isNonRetryableRelayBounce: (data: unknown) => boolean;
   inboundFrameProvesDeviceAlive: (data: unknown) => boolean;
+  errorCodeFromFrame: (data: unknown) => string;
   sendCorrelationId: (message: unknown) => string;
   outboxAfterPersist: (current: string[], raw: string, message: unknown) => string[];
   outboxAfterAck: (current: string[], data: unknown) => string[];
@@ -102,6 +105,14 @@ function sendRaw(text: string, submissionId: string): string {
 }
 
 describe("offline live-send hold", () => {
+  it("reads an additive error code and ignores host copy", () => {
+    expect(errorCodeFromFrame({ type: "error", text: "anything", code: "interrupted-send" })).toBe("interrupted-send");
+    expect(errorCodeFromFrame({ type: "error", text: "The session restarted while this message was being sent, so delivery is uncertain." })).toBe("");
+    expect(errorCodeFromFrame({ type: "error", code: 1 })).toBe("");
+    expect(errorCodeFromFrame({ type: "agentError", code: "interrupted-send" })).toBe("");
+    expect(errorCodeFromFrame(null)).toBe("");
+  });
+
   it("matches the relay's fixed Device offline prefix and nothing else", () => {
     expect(isDeviceOfflineError({
       type: "error",

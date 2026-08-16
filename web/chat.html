@@ -859,6 +859,9 @@ window.grokRemoteClient = true;
     // snapshot — anything else crossed a reachable socket.
     return !isDeviceOfflineError(data);
   }
+  function errorCodeFromFrame(data) {
+    return data && data.type === "error" && typeof data.code === "string" ? data.code : "";
+  }
   function sendCorrelationId(message) {
     return message && typeof message.submissionId === "string" && message.submissionId
       ? message.submissionId
@@ -2046,6 +2049,14 @@ window.grokRemoteClient = true;
       inspectRepoOpenFrame(data);
       settleReconnectVeil();
       window.dispatchEvent(new MessageEvent("message", { data: data }));
+      // Host-supplied machine marker. chat.js paints `.msg.error` from `text`
+      // only; copy is not a contract, so the code has to live on the node.
+      var stampedCode = errorCodeFromFrame(data);
+      if (stampedCode) {
+        var errorNodes = document.querySelectorAll(".msg.error");
+        var lastError = errorNodes[errorNodes.length - 1];
+        if (lastError) lastError.setAttribute("data-error-code", stampedCode);
+      }
       // Run after dispatch: chat.js handles initialState synchronously and
       // re-asserts its saved selectRepo/resumeSession through our shim first.
       // We still wait for the resulting host confirmations before flushing.
