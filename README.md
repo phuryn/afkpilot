@@ -1,16 +1,34 @@
 # AFK Pilot
 
-The relay server + web client behind **[afkpilot.com](https://afkpilot.com)** —
-remote control for the
-[Grok Build for VS Code (Community)](https://github.com/phuryn/grok-build-vscode)
-extension. The extension dials **out** to this relay over WebSocket; your
-phone or browser connects to the same relay; the relay ferries the
-extension's existing host↔webview protocol between them. Nothing is hosted on
-your laptop and nothing dials into it. Videos are never transferred to remote
-clients (images only).
+[![License: FSL-1.1-MIT](https://img.shields.io/badge/License-FSL--1.1--MIT-blue.svg)](LICENSE) [![Agents](https://img.shields.io/badge/Agents-Grok%20Build%20%C2%B7%20Codex-000000)](https://github.com/phuryn/grok-build-vscode) [![Remote Control](https://img.shields.io/badge/Remote%20Control-afkpilot.com-0E639C)](https://afkpilot.com) [![Companion](https://img.shields.io/badge/Companion-grok--build--vscode-24292E?logo=github&logoColor=white)](https://github.com/phuryn/grok-build-vscode)
 
-This repo is also the engineering-documentation home for **both** repos — see
-[docs/](docs/README.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+**Watch, approve and steer your coding agent from your phone.** AFK Pilot pairs
+the [Grok Build for VS Code (Community)](https://github.com/phuryn/grok-build-vscode)
+extension with any browser: follow a running turn, approve permissions, answer
+questions, and send or steer messages while you are away from your desk.
+
+### Just want to use it?
+
+Everything a user needs ships with the extension, not here:
+
+- **[Install the extension](https://marketplace.visualstudio.com/items?itemName=PawelHuryn.grok-vscode-phuryn)**, then turn on Remote Control from the gear menu.
+- **[What it does and how to use it](https://github.com/phuryn/grok-build-vscode#readme)** — features, quick start, Remote Control.
+- **[User documentation](https://github.com/phuryn/grok-build-vscode/blob/main/docs/README.md)** — install paths, desktop app, slash commands, voice, privacy.
+- **[Grok Build Desktop](https://afkpilot.com/desktop)** — the standalone app, if you would rather not use an editor.
+- Sign in and manage your devices at **[afkpilot.com](https://afkpilot.com)**.
+
+### This repository
+
+The engineering half: the relay server and web client behind afkpilot.com, and
+the documentation home for **both** repos. The extension dials **out** to this
+relay over WebSocket; your phone or browser connects to the same relay; the
+relay ferries the extension's existing host↔webview protocol between them.
+Nothing is hosted on your laptop and nothing dials into it. Videos are never
+transferred to remote clients (images only).
+
+Contributors start with [docs/](docs/README.md) and
+[CONTRIBUTING.md](CONTRIBUTING.md); the rest of this README is the architecture
+tour.
 
 > **Report issues in the extension repo:** this repo's issue tracker is
 > deliberately disabled so everything lands in one place. Bugs and feature
@@ -138,10 +156,11 @@ docker run -p 8787:8787 --env-file .env grok-relay
   limits, the GitHub token for `/download` + `/update/*`) is in
   [docs/variables-secrets.md](docs/variables-secrets.md); how the hosted
   service ships is in [docs/CICD.md](docs/CICD.md).
-- Deploy gate: `npm run gate` locally (this repo has no CI), then
-  `npm run smoke <url>` against the deployment; `npm run smoke:auth` covers
-  the authenticated link→approve→connect mile when canary credentials are
-  configured.
+- Deploy gate: CI runs `npm run gate:ci` on every push and pull request, but it
+  cannot run `e2e:browser` (no Clerk credentials), so `npm run gate` locally is
+  still the release gate. Then `npm run smoke <url>` against the deployment;
+  `npm run smoke:auth` covers the authenticated link→approve→connect mile when
+  canary credentials are configured.
 
 ## License
 
