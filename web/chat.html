@@ -964,9 +964,15 @@ window.grokRemoteClient = true;
     }
     // Untagged bounce cannot name a prompt. Id-bearing entries wait for
     // their own bounce — sweeping them here replays a commit whose ack
-    // was lost.
+    // was lost. Restore/bookkeeping frames are not prompts: holding
+    // resumeSession re-opens identity and flushes it a second time.
     return current.filter(function (entry) {
-      return !sendCorrelationId(entry.message);
+      if (sendCorrelationId(entry.message)) return false;
+      var message = entry.message;
+      if (!message || typeof message.type !== "string") return true;
+      return message.type === "send" ||
+        message.type === "queueSend" ||
+        message.type === "steerSend";
     });
   }
   function liveOutboundAfterOfflineHold(current, data) {
@@ -1490,6 +1496,7 @@ window.grokRemoteClient = true;
   var identityRepoConfirmed = false;
   var identitySessionConfirmed = false;
   var identityRestoreComplete = false;
+  var identityEverCompleted = false;
   var voiceTransportReady = false;
   var interruptingVoice = false;
   var DEVICE_OFFLINE_GRACE_MS = 12000;
@@ -1761,6 +1768,7 @@ window.grokRemoteClient = true;
     identityRepoConfirmed = false;
     identitySessionConfirmed = false;
     identityRestoreComplete = true;
+    identityEverCompleted = true;
     forgetUnbouncedLiveOutbound();
     document.body.classList.remove("identity-restoring");
     setVoiceTransportReady(
@@ -1771,6 +1779,15 @@ window.grokRemoteClient = true;
   function abandonIdentityRestore(outboxReason) {
     reportOutboxFailure(outboxReason);
     finishIdentityRestore();
+  }
+
+  function voiceCaptureActive() {
+    var mic = document.getElementById("mic-btn");
+    return !!mic && (
+      mic.classList.contains("connecting") ||
+      mic.classList.contains("listening") ||
+      mic.classList.contains("transcribing")
+    );
   }
 
   function handlePersistentDeviceOffline() {
@@ -1784,13 +1801,17 @@ window.grokRemoteClient = true;
     document.body.classList.remove("identity-restoring");
     clearIdentityFailTimer();
     setVoiceTransportReady(false);
-    var mic = document.getElementById("mic-btn");
-    var recording = !!mic && (
-      mic.classList.contains("connecting") ||
-      mic.classList.contains("listening") ||
-      mic.classList.contains("transcribing")
-    );
-    if (recording) {
+    // Re-entry exists so a host that returns during grace can confirm
+    // before flush. If grace expires with no user work left, close a
+    // leftover gate so paste/upload/voice see "socket down" rather than
+    // "identity not restored". A first connect that never confirmed, or
+    // a held prompt, stays open so a later snapshot can finish the job.
+    if (
+      identityEverCompleted &&
+      !identityRestoreComplete &&
+      mournableQueueCount() === 0
+    ) finishIdentityRestore();
+    if (voiceCaptureActive()) {
       interruptRemoteVoice(
         "Voice recording stopped because the device stayed offline. Start again after VS Code reconnects."
       );
@@ -1812,7 +1833,10 @@ window.grokRemoteClient = true;
     // Repeating it on a timer restarts attachUplink's snapshot over a
     // just-flushed send — chat.js re-posts resumeSession on every
     // initialState and that aborts the turn after the user bubble paints.
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    // Skip the probe during a live capture: ready becomes client-ready, a
+    // still-connected host answers with a snapshot, and those frames would
+    // cancel the timer that stops the mic.
+    if (ws && ws.readyState === WebSocket.OPEN && !voiceCaptureActive()) {
       try { ws.send(JSON.stringify(readyMessage())); } catch (_) { /* socket raced */ }
     }
     offlineHold = setTimeout(handlePersistentDeviceOffline, deviceOfflineGraceMs());
@@ -2018,7 +2042,11 @@ window.grokRemoteClient = true;
       // A host error is still a live uplink. Gating this on type !== "error"
       // left an error-only returning host in grace until persistent-offline
       // stopped resync, with the fail timer disarmed — queued work stranded.
-      if (inboundFrameProvesDeviceAlive(data)) {
+      // A live capture is the exception: frames elicited by our own ready
+      // probe (or a restore handshake that started because the bounce held
+      // unacked bookkeeping) are not proof the outage ended, and clearing
+      // grace here leaves the mic in a host-unconfirmed listening state.
+      if (inboundFrameProvesDeviceAlive(data) && !voiceCaptureActive()) {
         var wasHeld = !!offlineHold || deviceOffline;
         clearOfflineGrace();
         if (deviceOffline) {

@@ -325,6 +325,17 @@ describe("offline live-send hold", () => {
     expect(held.map((e) => e.raw)).toEqual([untagged]);
   });
 
+  it("an untagged bounce does not hold restore bookkeeping as if it were a prompt", () => {
+    const resume = JSON.stringify({ type: "resumeSession", id: "s1", cwd: "/work/legacy" });
+    const list = JSON.stringify({ type: "listSessions" });
+    const send = JSON.stringify({ type: "send", text: "old-host prompt" });
+    let live = liveOutboundAfterRemember([], resume, JSON.parse(resume));
+    live = liveOutboundAfterRemember(live, list, JSON.parse(list));
+    live = liveOutboundAfterRemember(live, send, JSON.parse(send));
+    const held = liveOutboundHeldByOffline(live, DEVICE_OFFLINE);
+    expect(held.map((e) => e.raw)).toEqual([send]);
+  });
+
   it("an error-only returning host still clears grace and re-arms the fail timer", () => {
     expect(html).toContain("inboundFrameProvesDeviceAlive(data)");
     expect(html).toContain("A host error is still a live uplink");
@@ -339,6 +350,9 @@ describe("offline live-send hold", () => {
     expect(graceBlock).toContain("readyMessage()");
     expect(graceBlock.indexOf("data.type === \"error\""))
       .toBeLessThan(graceBlock.indexOf("readyMessage()"));
+    expect(graceBlock).toContain("voiceCaptureActive()");
+    expect(graceBlock.indexOf("inboundFrameProvesDeviceAlive(data) && !voiceCaptureActive()"))
+      .toBeGreaterThan(-1);
   });
 
   it("probes a false-offline host once, not on a timer that races the flush", () => {
@@ -349,5 +363,27 @@ describe("offline live-send hold", () => {
     expect(graceFn).toContain("readyMessage()");
     expect(graceFn).not.toContain("setInterval");
     expect(graceFn).not.toContain("3000");
+  });
+
+  it("does not let a live capture's ready-probe snapshot cancel the persist timer", () => {
+    const graceFn = html.slice(
+      html.indexOf("function beginDeviceOfflineGrace"),
+      html.indexOf("function flushRestoredOutbox"),
+    );
+    expect(graceFn).toContain("!voiceCaptureActive()");
+    expect(graceFn.indexOf("!voiceCaptureActive()"))
+      .toBeLessThan(graceFn.indexOf("readyMessage()"));
+    expect(html).toContain("function voiceCaptureActive()");
+  });
+
+  it("closes a Device-offline identity re-entry when grace expires, without flushing", () => {
+    const persistFn = html.slice(
+      html.indexOf("function handlePersistentDeviceOffline"),
+      html.indexOf("function beginDeviceOfflineGrace"),
+    );
+    expect(persistFn).toContain("identityEverCompleted");
+    expect(persistFn).toContain("mournableQueueCount() === 0");
+    expect(persistFn).toContain("finishIdentityRestore()");
+    expect(persistFn).not.toContain("flushRestoredOutbox()");
   });
 });
