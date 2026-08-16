@@ -2746,7 +2746,7 @@
       // already refused.
       const needsLogin = connected && provider.needsLogin === true;
       const action = needsLogin ? "Sign in again" : connected ? "Sign out" : "Connect";
-      const name = provider.id === "codex" ? "Codex" : "Grok";
+      const name = providerDisplayName(provider.id);
       addGearItem(
         `<span class="gear-lead"><span class="provider-glyph provider-${provider.id}">${providerLogoMarkup(provider.id)}</span><span>${name}</span></span><span class="popover-ver${needsLogin ? " popover-warn" : ""}">${action}</span>`,
         () => {
@@ -2865,10 +2865,10 @@
     // A signed-out agent has no knowable model list, and the placeholder shown
     // in its place ("Codex default") reads as something you can select — so its
     // rows are replaced by the one action that can actually help.
-    const signInProviders = ["grok", "codex"].filter(providerNeedsLogin);
+    const signInProviders = ["grok", "codex", "claude"].filter(providerNeedsLogin);
     models = models.filter((model) => !signInProviders.includes(model.provider || state.activeProvider));
     if (grouped) {
-      models = ["grok", "codex"].flatMap((provider) => models.filter((model) =>
+      models = ["grok", "codex", "claude"].flatMap((provider) => models.filter((model) =>
         (model.provider || state.activeProvider) === provider));
     }
     let group = "";
@@ -2877,7 +2877,7 @@
       group = provider;
       const heading = document.createElement("div");
       heading.className = "popover-section model-provider-heading";
-      heading.textContent = provider === "codex" ? "Codex" : "Grok";
+      heading.textContent = providerDisplayName(provider);
       gearPopover.appendChild(heading);
     };
     const addSignInRow = (provider) => {
@@ -2915,7 +2915,7 @@
       gearPopover.appendChild(el);
     };
     if (grouped) {
-      for (const provider of ["grok", "codex"]) {
+      for (const provider of ["grok", "codex", "claude"]) {
         for (const m of models) {
           if ((m.provider || state.activeProvider) === provider) renderModelRow(m);
         }
@@ -3457,19 +3457,32 @@
   const PROVIDER_LOGO_PATHS = {
     grok: "M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815",
     codex: "M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z",
+    // Four-point sparkle — distinct from the Grok/Codex marks, currentColor.
+    claude: "M12 2l2.2 7.8L22 12l-7.8 2.2L12 22l-2.2-7.8L2 12l7.8-2.2z",
   };
 
+  function providerDisplayName(provider) {
+    if (provider === "codex") return "Codex";
+    if (provider === "claude") return "Claude";
+    return "Grok";
+  }
+
+  function providerLogoId(provider) {
+    if (provider === "codex" || provider === "claude") return provider;
+    return "grok";
+  }
+
   function providerLogoMarkup(provider) {
-    const id = provider === "codex" ? "codex" : "grok";
+    const id = providerLogoId(provider);
     return `<svg class="provider-logo" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="${PROVIDER_LOGO_PATHS[id]}"></path></svg>`;
   }
 
   function makeProviderGlyph(provider, dotValue, sessionId) {
-    const id = provider === "codex" ? "codex" : "grok";
+    const id = providerLogoId(provider);
     const glyph = document.createElement("span");
     glyph.className = "provider-glyph provider-" + id;
     glyph.innerHTML = providerLogoMarkup(id);
-    glyph.title = id === "codex" ? "Codex" : "Grok";
+    glyph.title = providerDisplayName(id);
     glyph.setAttribute("aria-label", glyph.title);
     if (sessionId) {
       const badge = document.createElement("span");
@@ -6717,9 +6730,9 @@
     const onb = $("welcome-onboarding");
     const ver = $("welcome-version");
     if (!onb) return;
-    if (IS_REMOTE && (mode === "connect-agent" || mode === "codex-login" || mode === "auth-required")) {
+    if (IS_REMOTE && (mode === "connect-agent" || mode === "codex-login" || mode === "claude-login" || mode === "auth-required")) {
       if (ver) setWelcomeStatus("Sign in at the desk", false);
-      const providerName = mode === "codex-login" ? "Codex" : mode === "auth-required" ? "Grok" : "an agent";
+      const providerName = mode === "codex-login" ? "Codex" : mode === "claude-login" ? "Claude" : mode === "auth-required" ? "Grok" : "an agent";
       onb.innerHTML =
         `<div class="onb">` +
           `<p class="onb-heading">Sign in at the desk</p>` +
@@ -6739,6 +6752,9 @@
             `</button>` +
             `<button class="onb-agent-tile onb-action" type="button" data-act="connectProvider" data-provider="codex">` +
               `<span class="onb-agent-mark">${providerLogoMarkup("codex")}</span><span><strong>Codex</strong><small>OpenAI Codex CLI</small></span>` +
+            `</button>` +
+            `<button class="onb-agent-tile onb-action" type="button" data-act="connectProvider" data-provider="claude">` +
+              `<span class="onb-agent-mark">${providerLogoMarkup("claude")}</span><span><strong>Claude</strong><small>Claude Code CLI</small></span>` +
             `</button>` +
           `</div>` +
         `</div>`;
@@ -6802,6 +6818,29 @@
           `<p class="onb-desc">Finish the sign-in flow in the terminal, then continue here.</p>` +
           `<button class="onb-action onb-secondary" type="button" data-act="connectProvider" data-provider="codex">Open terminal &amp; run <code>codex login</code></button>` +
           `<button class="onb-action" type="button" data-act="recheckProvider" data-provider="codex">Done - connect Codex</button>` +
+        `</div>`;
+    } else if (mode === "missing-claude") {
+      if (ver) setWelcomeStatus("Claude Code not found", false);
+      if (IS_REMOTE) {
+        onb.innerHTML = `<div class="onb"><p class="onb-heading">Claude Code is missing at the desk</p>` +
+          `<p class="onb-desc">Install Anthropic's Claude Code CLI on the computer running this workspace, then refresh this remote view.</p></div>`;
+        return;
+      }
+      onb.innerHTML =
+        `<div class="onb">` +
+          `<p class="onb-heading">Install Claude Code</p>` +
+          `<p class="onb-desc">This app does not install or sign in to Claude for you. Install Anthropic's own Claude Code CLI, sign in with <code>claude auth login</code>, then re-check.</p>` +
+          `<div class="onb-cmd"><code>claude --version</code><button class="onb-copy" type="button" title="Copy" data-cmd="claude --version">${ICON.copy}</button></div>` +
+          `<button class="onb-action" type="button" data-act="recheckProvider" data-provider="claude">Re-check</button>` +
+        `</div>`;
+    } else if (mode === "claude-login") {
+      if (ver) setWelcomeStatus("Finish signing in", false);
+      onb.innerHTML =
+        `<div class="onb">` +
+          `<p class="onb-heading">Sign in with Claude Code</p>` +
+          `<p class="onb-desc">Use Anthropic's own <code>claude</code> CLI. This app does not offer Claude.ai login and does not store an API key.</p>` +
+          `<button class="onb-action onb-secondary" type="button" data-act="connectProvider" data-provider="claude">Open terminal &amp; run <code>claude auth login</code></button>` +
+          `<button class="onb-action" type="button" data-act="recheckProvider" data-provider="claude">Done - connect Claude</button>` +
         `</div>`;
     } else if (mode === "auth-required") {
       if (ver) setWelcomeStatus("Authentication required", false);
@@ -11514,7 +11553,7 @@
       case "providerState":
         state.providersKnown = true;
         state.providers = Array.isArray(msg.providers) ? msg.providers.filter((provider) =>
-          provider && (provider.id === "grok" || provider.id === "codex")) : [];
+          provider && (provider.id === "grok" || provider.id === "codex" || provider.id === "claude")) : [];
         // Connecting an additional account happens from the gear while the
         // current transcript stays mounted. The login/recovery view temporarily
         // borrows the welcome overlay; dismiss it when the provider it was
@@ -11767,7 +11806,7 @@
       case "initialized": {
         // The ACP handshake is done, but session/new or session/load may still be
         // running. Keep showing Starting until the startup lock clears.
-        if (msg.info.provider !== "codex") state.cliVersion = msg.info.version || "";
+        if (!msg.info.provider || msg.info.provider === "grok") state.cliVersion = msg.info.version || "";
         state.startingPhase = true;
         setWelcomeStatus("Starting", true);
         const onb = $("welcome-onboarding");
@@ -11783,7 +11822,7 @@
       }
       case "session": {
         state.currentModelId = msg.currentModelId;
-        state.activeProvider = msg.provider === "codex" ? "codex" : "grok";
+        state.activeProvider = msg.provider === "codex" || msg.provider === "claude" ? msg.provider : "grok";
         syncProviderVoice();
         if (state.railTransition?.kind === "new") renderRail();
         state.isWorktree = !!msg.worktree; // gates the gear Apply/Remove worktree items

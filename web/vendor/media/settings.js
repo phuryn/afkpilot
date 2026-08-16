@@ -88,6 +88,10 @@
     return ((snapshot && snapshot.providers) || []).find((p) => p && p.id === "codex" && p.connected);
   }
 
+  function claudeProvider(snapshot) {
+    return ((snapshot && snapshot.providers) || []).find((p) => p && p.id === "claude" && p.connected);
+  }
+
   function legacyProviders(env) {
     return !env || env.providersKnown !== true;
   }
@@ -384,6 +388,22 @@
       },
     },
     {
+      id: "providerClaude",
+      category: "providers",
+      title: "Claude",
+      description: "",
+      kind: "action",
+      visible: (s, env) => !!(env && !env.isRemote && env.providersKnown),
+      describe: (s) => providerDescription(providerOf(s, "claude")),
+      actionLabel: (s) => providerAction(providerOf(s, "claude")),
+      message: (s) => {
+        const provider = providerOf(s, "claude");
+        return provider.connected && provider.needsLogin !== true
+          ? { type: "logout", provider: "claude" }
+          : { type: "runGrokLogin", provider: "claude" };
+      },
+    },
+    {
       id: "providerGrokStatus",
       category: "providers",
       title: "Grok",
@@ -400,6 +420,15 @@
       kind: "status",
       visible: (s, env) => !!(env && env.isRemote && env.providersKnown),
       describe: (s) => providerDescription(providerOf(s, "codex")),
+    },
+    {
+      id: "providerClaudeStatus",
+      category: "providers",
+      title: "Claude",
+      description: "",
+      kind: "status",
+      visible: (s, env) => !!(env && env.isRemote && env.providersKnown),
+      describe: (s) => providerDescription(providerOf(s, "claude")),
     },
     {
       id: "continueRemotely",
@@ -621,6 +650,28 @@
       visible: (s) => !!codexProvider(s),
       get: (s) => {
         const p = codexProvider(s);
+        return versionLabel(p && p.adapterVersion);
+      },
+    },
+    {
+      id: "aboutClaudeCli",
+      category: "about",
+      title: "Claude Code CLI",
+      kind: "value",
+      visible: (s) => !!claudeProvider(s),
+      get: (s) => {
+        const p = claudeProvider(s);
+        return versionLabel(p && p.cliVersion);
+      },
+    },
+    {
+      id: "aboutClaudeAdapter",
+      category: "about",
+      title: "Claude ACP adapter",
+      kind: "value",
+      visible: (s) => !!claudeProvider(s),
+      get: (s) => {
+        const p = claudeProvider(s);
         return versionLabel(p && p.adapterVersion);
       },
     },

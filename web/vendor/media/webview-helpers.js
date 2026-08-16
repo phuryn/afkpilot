@@ -456,6 +456,7 @@
     if (!payload || typeof payload !== "object") return false;
     const title = String(payload.title ?? "");
     if (provider === "codex") return payload.kind === "other" && title === "Image generation";
+    // claude falls through to the grok-shaped title/variant checks and typically matches nothing.
     if (/^imagine(-video|-edit)?:/i.test(title)) return true;
     if (/^(image_gen|image_edit|video_gen|image_to_video|reference_to_video)\b/i.test(title)) return true;
     if (/^(image-to-video:|reference-to-video:)/i.test(title)) return true;
