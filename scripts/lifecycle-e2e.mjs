@@ -36,11 +36,12 @@
 // until the host binds the new session. waitForChatUsable is already true
 // on that previous conversation and is not a bind signal.
 //
-// Queued-while-down is currently a product red. A send after the host dies
-// goes out on the still-open browser socket; the relay bounces Device
-// offline; grace swallows that error; the replacement snapshot wipes the
-// optimistic bubble; the outbox never held the send (identity restore was
-// already complete). Isolation still runs so one red does not hide the other.
+// Queued-while-down: a send after the host dies goes out on the still-open
+// browser socket; the relay bounces Device offline; grace still swallows the
+// banner (the usual reconnect race) but the client folds that send back into
+// the persisted outbox and re-opens the identity gate so the replacement
+// host's confirmation releases it. Isolation still runs so one red does not
+// hide the other.
 //
 // Locally, skip loudly (print why, exit 0) when the sibling checkout is
 // absent. CI sets LIFECYCLE_REQUIRE_HOST=1 so the same absence fails.

@@ -844,12 +844,15 @@ window.grokRemoteClient = true;
   function saveQueue() {
     try { sessionStorage.setItem(QKEY, JSON.stringify(queue)); } catch (_) { /* private mode */ }
   }
-  function persistOutboxMessage(raw, message) {
+  function isDeviceOfflineError(data) {
+    return !!(data && data.type === "error" && /^Device offline/.test(data.text || ""));
+  }
+  function outboxAfterPersist(current, raw, message) {
     // Only a host-issued queuedSendId identifies the same logical submission.
     // Ordinary sends deliberately have no id and must survive even when their
     // text is identical.
     if (message && message.type === "send" && typeof message.queuedSendId === "string") {
-      var duplicate = queue.some(function (queuedRaw) {
+      var duplicate = current.some(function (queuedRaw) {
         try {
           var queued = JSON.parse(queuedRaw);
           return queued.type === "send" && queued.queuedSendId === message.queuedSendId;
@@ -857,10 +860,42 @@ window.grokRemoteClient = true;
           return false;
         }
       });
-      if (duplicate) return;
+      if (duplicate) return current;
     }
-    queue.push(raw);
+    return current.concat([raw]);
+  }
+  function shouldReenterIdentityOnDeviceOffline(restoreComplete, mournableCount) {
+    // Identity already confirmed means the outbox flush gate will never run
+    // again unless we re-open it. An empty (or bookkeeping-only) outbox is
+    // the usual reconnect race — do not bounce a healthy session into restore
+    // for that.
+    return !!restoreComplete && mournableCount > 0;
+  }
+  function liveSendDisposition(opts) {
+    if (!opts || !opts.socketOpen) return "outbox";
+    if (opts.isRestoreMessage) return "send";
+    if (opts.identityRestoreComplete && !opts.deviceOffline && !opts.offlineHold) return "send";
+    if (opts.changesIdentity) return "abandon-and-send";
+    return "outbox";
+  }
+  function persistOutboxMessage(raw, message) {
+    var next = outboxAfterPersist(queue, raw, message);
+    if (next === queue) return;
+    queue = next;
     saveQueue();
+  }
+  var liveOutbound = [];
+  function rememberLiveOutbound(raw, message) {
+    liveOutbound.push({ raw: raw, message: message });
+  }
+  function clearLiveOutbound() {
+    liveOutbound = [];
+  }
+  function holdLiveOutboundInOutbox() {
+    for (var i = 0; i < liveOutbound.length; i++) {
+      persistOutboxMessage(liveOutbound[i].raw, liveOutbound[i].message);
+    }
+    liveOutbound = [];
   }
   saveQueue();
 
@@ -1641,8 +1676,12 @@ window.grokRemoteClient = true;
       );
       return;
     }
+    var held = mournableQueueCount();
+    var queuedNote = !held ? "" : held === 1
+      ? " Your unsent message is saved and will be sent when VS Code reconnects."
+      : " Your unsent messages are saved and will be sent when VS Code reconnects.";
     window.dispatchEvent(new MessageEvent("message", {
-      data: { type: "error", text: "Device offline — open VS Code on that machine and this page will connect by itself." },
+      data: { type: "error", text: "Device offline — open VS Code on that machine and this page will connect by itself." + queuedNote },
     }));
   }
 
@@ -1665,7 +1704,14 @@ window.grokRemoteClient = true;
     queue = [];
     saveQueue();
     finishIdentityRestore();
-    pending.forEach(function (raw) { ws.send(raw); });
+    pending.forEach(function (raw) {
+      ws.send(raw);
+      // Identity is complete again the moment we flush. If the host dies
+      // between this write and a non-offline frame, Device offline must be
+      // able to fold the same payload back into the outbox.
+      try { rememberLiveOutbound(raw, JSON.parse(raw)); }
+      catch (_) { rememberLiveOutbound(raw, null); }
+    });
   }
 
   function resumeFailedId(data) {
@@ -1832,10 +1878,23 @@ window.grokRemoteClient = true;
       // grace window the page keeps its "Connecting" welcome and quietly
       // re-syncs; only a PERSISTENT offline surfaces, with calmer wording.
       // (The text match is the relay's own fixed string — server.ts.)
-      if (data && data.type === "error" && /^Device offline/.test(data.text || "")) {
+      //
+      // Swallowing the banner must not swallow the send that provoked it.
+      // A live send already left the composer and the outbox (identity was
+      // confirmed). Fold it back into the outbox and, if we thought identity
+      // was settled, re-open the restore gate so the returning host's
+      // confirmation is what flushes it — not the first non-error frame,
+      // which can be a boot-gap snapshot of the wrong session.
+      if (isDeviceOfflineError(data)) {
+        holdLiveOutboundInOutbox();
+        var identityWasComplete = identityRestoreComplete;
         beginDeviceOfflineGrace();
+        if (shouldReenterIdentityOnDeviceOffline(identityWasComplete, mournableQueueCount())) {
+          beginIdentityRestore();
+        }
         return;
       }
+      clearLiveOutbound();
       // Anything that isn't an error means the device is alive — cancel any
       // pending offline notice from the race above.
       if (data && data.type !== "error") {
@@ -2248,18 +2307,24 @@ window.grokRemoteClient = true;
           }
         }
         var s = JSON.stringify(m);
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          if (identityRestoreComplete || isIdentityRestoreMessage(m)) {
-            ws.send(s);
-            if (m && m.type === "resumeSession" && isIdentityRestoreMessage(m)) {
-              armIdentityFailTimer();
-            }
-          } else if (explicitlyChangesIdentity(m)) {
-            abandonIdentityRestore("you chose a different repository or conversation.");
-            ws.send(s);
-          } else {
-            persistOutboxMessage(s, m);
+        var restoreMsg = isIdentityRestoreMessage(m);
+        var disposition = liveSendDisposition({
+          socketOpen: !!(ws && ws.readyState === WebSocket.OPEN),
+          identityRestoreComplete: identityRestoreComplete,
+          deviceOffline: deviceOffline,
+          offlineHold: !!offlineHold,
+          isRestoreMessage: restoreMsg,
+          changesIdentity: explicitlyChangesIdentity(m),
+        });
+        if (disposition === "send") {
+          ws.send(s);
+          if (!restoreMsg) rememberLiveOutbound(s, m);
+          if (m && m.type === "resumeSession" && restoreMsg) {
+            armIdentityFailTimer();
           }
+        } else if (disposition === "abandon-and-send") {
+          abandonIdentityRestore("you chose a different repository or conversation.");
+          ws.send(s);
         } else {
           persistOutboxMessage(s, m);
         }
