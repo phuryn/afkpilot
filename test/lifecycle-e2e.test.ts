@@ -6,21 +6,26 @@ import { describe, expect, it } from "vitest";
 import {
   classifyQueueRelease,
   describeIsolationMismatch,
-  errorAfterUserEcho,
+  errorMarksInterruptedSend,
   hostProcessGone,
   hostRequired,
   INTERRUPTED_SEND_CODE,
   isFollowUpNewSessionFrame,
+  isInterruptedSendPhrase,
   isReplacementHostFrameType,
   unselectedRepoPlusSettled,
   parseInvert,
   persistTurnForLoad,
+  queuedSendInterruptedAfterEcho,
   queuedTurnArrived,
   resolveExtensionRoot,
   sessionStoreDir,
   skipReason,
   waitFor,
 } from "../scripts/lifecycle-e2e.mjs";
+
+const INTERRUPT_PHRASE =
+  "The session restarted while this message was being sent, so delivery is uncertain. Check the conversation and send it again if needed.";
 
 describe("lifecycle e2e harness", () => {
   it("skips only when the sibling checkout or part-1 runner is absent", () => {
@@ -119,6 +124,30 @@ describe("lifecycle e2e harness", () => {
     )).toBe(false);
   });
 
+  it("arrival inspects only the newly added agent bubbles", () => {
+    const prompt = "lifecycle-queued-while-down";
+    expect(queuedTurnArrived(
+      { users: [prompt], agents: ["ok", "partial"] },
+      prompt,
+      1,
+    )).toBe(false);
+    expect(queuedTurnArrived(
+      { users: [prompt], agents: ["partial"] },
+      prompt,
+      0,
+    )).toBe(false);
+    expect(queuedTurnArrived(
+      { users: [prompt], agents: ["ok"] },
+      prompt,
+      0,
+    )).toBe(true);
+    expect(classifyQueueRelease(
+      { users: [prompt], agents: ["ok", "partial"] },
+      prompt,
+      1,
+    )).toBe(null);
+  });
+
   it("names queue-release outcomes instead of matching host copy", () => {
     const prompt = "lifecycle-queued-while-down";
     expect(classifyQueueRelease(
@@ -127,28 +156,34 @@ describe("lifecycle e2e harness", () => {
       1,
     )).toBe("arrived");
     expect(classifyQueueRelease(
-      { users: [prompt], agents: ["ok"], errors: ["unrelated restore banner"] },
+      { users: [prompt], agents: ["ok"] },
       prompt,
       1,
-      [{ type: "userMessage" }, { type: "error", text: "The session restarted while this message was being sent, so delivery is uncertain." }],
+      [
+        { type: "userMessage", text: prompt },
+        { type: "error", code: INTERRUPTED_SEND_CODE, text: INTERRUPT_PHRASE },
+      ],
     )).toBe("interrupted-after-echo");
     expect(classifyQueueRelease(
-      { users: [prompt], agents: ["ok"], errorCodes: [INTERRUPTED_SEND_CODE] },
+      { users: [prompt], agents: ["ok"] },
       prompt,
       1,
-      [],
+      [
+        { type: "userMessage", text: prompt },
+        { type: "error", text: INTERRUPT_PHRASE },
+      ],
     )).toBe("interrupted-after-echo");
     expect(classifyQueueRelease(
       { users: [prompt], agents: ["ok"], errors: ["Still restoring the previous conversation."] },
       prompt,
       1,
-      [{ type: "error", text: "Still restoring the previous conversation." }, { type: "userMessage" }],
+      [{ type: "error", text: "Still restoring the previous conversation." }, { type: "userMessage", text: prompt }],
     )).toBe(null);
     expect(classifyQueueRelease(
       { users: [prompt], agents: ["ok"], input: "" },
       prompt,
       1,
-      [{ type: "userMessage" }],
+      [{ type: "userMessage", text: prompt }],
     )).toBe(null);
     expect(classifyQueueRelease(
       { users: [], agents: ["ok"], input: prompt },
@@ -160,10 +195,83 @@ describe("lifecycle e2e harness", () => {
       prompt,
       0,
     )).toBe("failed-visibly-recoverable");
-    expect(errorAfterUserEcho([{ type: "error" }, { type: "userMessage" }])).toBe(false);
-    expect(errorAfterUserEcho([{ type: "userMessage" }, { type: "error" }])).toBe(true);
     expect(isFollowUpNewSessionFrame("clearMessages")).toBe(true);
     expect(isFollowUpNewSessionFrame("error")).toBe(false);
+  });
+
+  it("interrupted-after-echo stays red without a correlated post-echo interrupt", () => {
+    const prompt = "lifecycle-queued-while-down";
+    const echoed = { users: [prompt], agents: ["ok"] };
+
+    expect(classifyQueueRelease(
+      echoed,
+      prompt,
+      1,
+      [{ type: "userMessage", text: prompt }, { type: "error", text: "CLI failed to start" }],
+    )).toBe(null);
+    expect(queuedSendInterruptedAfterEcho(
+      [{ type: "userMessage", text: prompt }, { type: "error", text: "CLI failed to start" }],
+      prompt,
+    )).toBe(false);
+
+    expect(classifyQueueRelease(
+      { ...echoed, errorCodes: [INTERRUPTED_SEND_CODE] },
+      prompt,
+      1,
+      [],
+    )).toBe(null);
+    expect(classifyQueueRelease(
+      { ...echoed, errorCodes: [INTERRUPTED_SEND_CODE] },
+      prompt,
+      1,
+      [{ type: "error", code: INTERRUPTED_SEND_CODE }, { type: "userMessage", text: prompt }],
+    )).toBe(null);
+
+    expect(classifyQueueRelease(
+      echoed,
+      prompt,
+      1,
+      [{ type: "userMessage" }, { type: "error", text: INTERRUPT_PHRASE }],
+    )).toBe(null);
+    expect(classifyQueueRelease(
+      { ...echoed, errors: [INTERRUPT_PHRASE] },
+      prompt,
+      1,
+      [],
+    )).toBe(null);
+
+    expect(classifyQueueRelease(
+      echoed,
+      prompt,
+      1,
+      [
+        { type: "userMessage", text: "lifecycle-alpha-two" },
+        { type: "error", code: INTERRUPTED_SEND_CODE, text: INTERRUPT_PHRASE },
+      ],
+    )).toBe(null);
+
+    expect(classifyQueueRelease(
+      echoed,
+      prompt,
+      1,
+      [
+        { type: "userMessage", text: prompt, submissionId: "sub-queued" },
+        { type: "error", code: INTERRUPTED_SEND_CODE, submissionId: "sub-other" },
+      ],
+    )).toBe(null);
+
+    expect(queuedSendInterruptedAfterEcho(
+      [
+        { type: "userMessage", text: prompt, submissionId: "sub-queued" },
+        { type: "error", code: INTERRUPTED_SEND_CODE, submissionId: "sub-queued" },
+      ],
+      prompt,
+    )).toBe(true);
+    expect(errorMarksInterruptedSend({ type: "error", code: INTERRUPTED_SEND_CODE, text: "anything" })).toBe(true);
+    expect(errorMarksInterruptedSend({ type: "error", text: INTERRUPT_PHRASE })).toBe(true);
+    expect(errorMarksInterruptedSend({ type: "error", text: "CLI failed to start" })).toBe(false);
+    expect(isInterruptedSendPhrase(INTERRUPT_PHRASE)).toBe(true);
+    expect(isInterruptedSendPhrase("Still restoring the previous conversation.")).toBe(false);
   });
 
   it("treats a queued turn that landed during restore as arrival, not a silent drop", () => {
@@ -224,5 +332,8 @@ describe("lifecycle e2e harness", () => {
     expect(src).toMatch(/GROK_LIFECYCLE_HOST_SHUTDOWN/);
     expect(src).not.toMatch(/offline\|not sent\|returned to the input/);
     expect(src).toMatch(/INTERRUPTED_SEND_CODE/);
+    expect(src).toMatch(/queuedSendInterruptedAfterEcho/);
+    expect(src).not.toMatch(/coded \|\| errorAfterUserEcho/);
+    expect(src).not.toMatch(/agents\.some\(\(a\) => String\(a\)\.includes\(AGENT_OK\)\)/);
   });
 });

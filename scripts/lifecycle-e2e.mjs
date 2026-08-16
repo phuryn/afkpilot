@@ -76,6 +76,10 @@
 //   skip-kill — READY prints on the duplicate, then "timed out waiting for
 //     relay to admit the replacement host (not a 4002-rejected READY, not
 //     the old zombie)".
+//
+// Queue-release invert (unit, not LIFECYCLE_INVERT): interrupted-after-echo
+// is not exercised by arrived e2e runs. The harness unit suite stays red
+// on an unrelated post-echo error and on a stale interrupted-send code.
 
 import { spawn, spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
@@ -146,21 +150,66 @@ export function isReplacementHostFrameType(type) {
 export function queuedTurnArrived(transcript, prompt, agentsBefore) {
   const user = Array.isArray(transcript?.users) && transcript.users.some((u) => String(u).includes(prompt));
   const agents = Array.isArray(transcript?.agents) ? transcript.agents : [];
-  const newOk = agents.length > agentsBefore && agents.some((a) => String(a).includes(AGENT_OK));
-  return !!(user && newOk);
+  const before = Number.isFinite(agentsBefore) && agentsBefore > 0 ? agentsBefore : 0;
+  if (agents.length <= before) return false;
+  // Only the bubbles added after the snapshot. An earlier turn's "ok" must
+  // not satisfy a later send.
+  const added = agents.slice(before);
+  return !!(user && added.some((a) => String(a).includes(AGENT_OK)));
 }
 
-// Additive host marker for the post-echo restart bail. Phrase matching across
-// two repos is how a copy edit turns this gate the wrong colour; detect the
-// code (or an error frame after userMessage) instead of the sentence.
+// Additive host marker for the post-echo restart bail. New hosts stamp
+// `code: "interrupted-send"` on that error. Older hosts emit the sentence
+// and no code — the phrase is the compatibility path, never enough on its
+// own, and never enough on an unrelated error.
 export const INTERRUPTED_SEND_CODE = "interrupted-send";
+export const INTERRUPTED_SEND_PHRASE = /was being sent, so delivery is uncertain/;
 
-export function errorAfterUserEcho(frames) {
-  let sawUser = false;
-  for (const frame of Array.isArray(frames) ? frames : []) {
-    const type = frame && frame.type;
-    if (type === "userMessage") sawUser = true;
-    else if (sawUser && type === "error") return true;
+export function isInterruptedSendPhrase(text) {
+  return INTERRUPTED_SEND_PHRASE.test(String(text || ""));
+}
+
+export function errorMarksInterruptedSend(frame) {
+  if (!frame || frame.type !== "error") return false;
+  if (frame.code === INTERRUPTED_SEND_CODE) return true;
+  if (frame.code) return false;
+  return isInterruptedSendPhrase(frame.text);
+}
+
+function frameEchoesPrompt(frame, prompt) {
+  return !!(
+    frame &&
+    frame.type === "userMessage" &&
+    String(prompt || "") &&
+    String(frame.text || "").includes(prompt)
+  );
+}
+
+function errorMatchesEcho(error, echo) {
+  if (!error || !echo) return false;
+  if (typeof error.submissionId === "string" && error.submissionId) {
+    return echo.submissionId === error.submissionId;
+  }
+  return true;
+}
+
+// The named interrupt (or the old-host phrase) on the error that follows
+// THIS prompt's userMessage. A stale interrupted-send anywhere, or any
+// error after any userMessage, is not evidence.
+export function queuedSendInterruptedAfterEcho(frames, prompt) {
+  const list = Array.isArray(frames) ? frames : [];
+  let echoIndex = -1;
+  for (let i = 0; i < list.length; i++) {
+    if (frameEchoesPrompt(list[i], prompt)) echoIndex = i;
+  }
+  if (echoIndex < 0) return false;
+  const echo = list[echoIndex];
+  for (let i = echoIndex + 1; i < list.length; i++) {
+    const frame = list[i];
+    if (!frame) continue;
+    if (frame.type === "userMessage") break;
+    if (frame.type !== "error") continue;
+    if (errorMatchesEcho(frame, echo) && errorMarksInterruptedSend(frame)) return true;
   }
   return false;
 }
@@ -169,12 +218,7 @@ export function classifyQueueRelease(transcript, prompt, agentsBefore = 0, frame
   if (queuedTurnArrived(transcript, prompt, agentsBefore)) return "arrived";
   const users = Array.isArray(transcript?.users) ? transcript.users : [];
   const echoed = users.some((u) => String(u).includes(prompt));
-  const codes = [
-    ...(Array.isArray(transcript?.errorCodes) ? transcript.errorCodes : []),
-    ...(Array.isArray(frames) ? frames : []).map((f) => f && f.code).filter(Boolean),
-  ];
-  const coded = codes.includes(INTERRUPTED_SEND_CODE);
-  if (echoed && (coded || errorAfterUserEcho(frames))) return "interrupted-after-echo";
+  if (echoed && queuedSendInterruptedAfterEcho(frames, prompt)) return "interrupted-after-echo";
   const input = String(transcript?.input || "");
   const queued = Array.isArray(transcript?.queued) ? transcript.queued : [];
   if (input.includes(prompt) || queued.some((u) => String(u).includes(prompt))) {
@@ -646,9 +690,7 @@ async function waitForAnsweredTurn(page, prompt, where, agentsBefore = 0) {
   await waitFor(async () => {
     const t = await readTranscript(page);
     assertNotBurst(t, where);
-    const user = t.users.some((u) => u.includes(prompt));
-    const agentGrew = t.agents.length > agentsBefore && t.agents.some((a) => a.includes(AGENT_OK));
-    return user && agentGrew;
+    return queuedTurnArrived(t, prompt, agentsBefore);
   }, `${where}: user prompt ${JSON.stringify(prompt)} and a new agent ${JSON.stringify(AGENT_OK)}`, 45000);
 }
 
@@ -786,10 +828,11 @@ function installHostFrameTap() {
     const d = e.data;
     if (d && typeof d.type === "string") {
       const rec = { type: d.type, at: Date.now() };
-      if (d.type === "error") {
+      if (d.type === "error" || d.type === "userMessage") {
         if (typeof d.text === "string") rec.text = d.text;
-        if (typeof d.code === "string") rec.code = d.code;
+        if (typeof d.submissionId === "string" && d.submissionId) rec.submissionId = d.submissionId;
       }
+      if (d.type === "error" && typeof d.code === "string") rec.code = d.code;
       window.__lifecycleHostFrames.push(rec);
     }
   });
