@@ -17,8 +17,11 @@ const {
   isDeviceOfflineError,
   isNonRetryableRelayBounce,
   inboundFrameProvesDeviceAlive,
+  inboundFrameIsReplacementHostReturn,
+  inboundFrameClearsOfflineHold,
   errorCodeFromFrame,
   sendCorrelationId,
+  isUntaggedOfflineHoldExcluded,
   outboxAfterPersist,
   outboxAfterAck,
   shouldReenterIdentityOnDeviceOffline,
@@ -33,8 +36,11 @@ const {
     isDeviceOfflineError,
     isNonRetryableRelayBounce,
     inboundFrameProvesDeviceAlive,
+    inboundFrameIsReplacementHostReturn,
+    inboundFrameClearsOfflineHold,
     errorCodeFromFrame,
     sendCorrelationId,
+    isUntaggedOfflineHoldExcluded,
     outboxAfterPersist,
     outboxAfterAck,
     shouldReenterIdentityOnDeviceOffline,
@@ -49,8 +55,11 @@ const {
   isDeviceOfflineError: (data: unknown) => boolean;
   isNonRetryableRelayBounce: (data: unknown) => boolean;
   inboundFrameProvesDeviceAlive: (data: unknown) => boolean;
+  inboundFrameIsReplacementHostReturn: (data: unknown) => boolean;
+  inboundFrameClearsOfflineHold: (data: unknown, captureActive: boolean) => boolean;
   errorCodeFromFrame: (data: unknown) => string;
   sendCorrelationId: (message: unknown) => string;
+  isUntaggedOfflineHoldExcluded: (message: unknown) => boolean;
   outboxAfterPersist: (current: string[], raw: string, message: unknown) => string[];
   outboxAfterAck: (current: string[], data: unknown) => string[];
   shouldReenterIdentityOnDeviceOffline: (restoreComplete: boolean, mournableCount: number) => boolean;
@@ -336,23 +345,88 @@ describe("offline live-send hold", () => {
     expect(held.map((e) => e.raw)).toEqual([send]);
   });
 
+  it("an untagged bounce holds typed card answers, not only prompt shapes", () => {
+    const plan = JSON.stringify({
+      type: "exitPlanAnswer",
+      requestId: 1,
+      verdict: "rejected",
+      comment: "plan the auth part again",
+    });
+    const question = JSON.stringify({
+      type: "questionAnswer",
+      requestId: 2,
+      answers: ["the free-text answer"],
+    });
+    const permission = JSON.stringify({
+      type: "permissionAnswer",
+      requestId: 3,
+      optionId: "allow_once",
+    });
+    const unknown = JSON.stringify({ type: "futureAuthoredFrame", text: "typed" });
+    let live = liveOutboundAfterRemember([], plan, JSON.parse(plan));
+    live = liveOutboundAfterRemember(live, question, JSON.parse(question));
+    live = liveOutboundAfterRemember(live, permission, JSON.parse(permission));
+    live = liveOutboundAfterRemember(live, unknown, JSON.parse(unknown));
+    const held = liveOutboundHeldByOffline(live, DEVICE_OFFLINE);
+    expect(held.map((e) => e.raw)).toEqual([plan, question, permission, unknown]);
+    expect(isUntaggedOfflineHoldExcluded(JSON.parse(plan))).toBe(false);
+    expect(isUntaggedOfflineHoldExcluded({ type: "resumeSession", id: "s1" })).toBe(true);
+    expect(isUntaggedOfflineHoldExcluded({ type: "listSessions" })).toBe(true);
+    expect(isUntaggedOfflineHoldExcluded({ type: "selectRepo", cwd: "/work" })).toBe(true);
+  });
+
   it("an error-only returning host still clears grace and re-arms the fail timer", () => {
     expect(html).toContain("inboundFrameProvesDeviceAlive(data)");
     expect(html).toContain("A host error is still a live uplink");
     expect(html).not.toMatch(/if \(data && data\.type !== "error"\) \{\s*clearOfflineGrace/);
+    const applyFn = html.slice(
+      html.indexOf("function applyInboundDeviceAlive"),
+      html.indexOf("function applyRememberedHostReturnIfIdle"),
+    );
+    expect(applyFn).toContain("clearOfflineGrace()");
+    expect(applyFn).toContain("armIdentityFailTimer()");
+    expect(applyFn).toContain("data.type === \"error\"");
+    expect(applyFn).toContain("readyMessage()");
+    expect(applyFn.indexOf("data.type === \"error\""))
+      .toBeLessThan(applyFn.indexOf("readyMessage()"));
     const graceBlock = html.slice(
       html.indexOf("A host error is still a live uplink"),
       html.indexOf("Quota bounce: surface the wall"),
     );
-    expect(graceBlock).toContain("clearOfflineGrace()");
-    expect(graceBlock).toContain("armIdentityFailTimer()");
-    expect(graceBlock).toContain("data.type === \"error\"");
-    expect(graceBlock).toContain("readyMessage()");
-    expect(graceBlock.indexOf("data.type === \"error\""))
-      .toBeLessThan(graceBlock.indexOf("readyMessage()"));
+    expect(graceBlock).toContain("applyInboundDeviceAlive(data)");
     expect(graceBlock).toContain("voiceCaptureActive()");
-    expect(graceBlock.indexOf("inboundFrameProvesDeviceAlive(data) && !voiceCaptureActive()"))
-      .toBeGreaterThan(-1);
+    expect(graceBlock).toContain("inboundFrameClearsOfflineHold");
+    expect(graceBlock).toContain("inboundFrameIsReplacementHostReturn");
+    expect(graceBlock).toContain("hostReturnDuringCapture");
+    expect(graceBlock).not.toContain("inboundFrameProvesDeviceAlive(data) && !voiceCaptureActive()");
+  });
+
+  it("remembers a replacement-host snapshot during capture and applies it once the mic stops", () => {
+    expect(inboundFrameIsReplacementHostReturn({ type: "initialState", cwd: "/work" })).toBe(true);
+    expect(inboundFrameIsReplacementHostReturn({ type: "clearMessages" })).toBe(true);
+    expect(inboundFrameIsReplacementHostReturn({ type: "sessions", activeId: "s1" })).toBe(true);
+    expect(inboundFrameIsReplacementHostReturn({ type: "session" })).toBe(true);
+    expect(inboundFrameIsReplacementHostReturn({ type: "repos" })).toBe(true);
+    expect(inboundFrameIsReplacementHostReturn({ type: "setBusy", value: false })).toBe(false);
+    expect(inboundFrameIsReplacementHostReturn({ type: "error", text: "CLI failed to start" })).toBe(false);
+    expect(inboundFrameIsReplacementHostReturn(DEVICE_OFFLINE)).toBe(false);
+
+    expect(inboundFrameClearsOfflineHold({ type: "initialState" }, false)).toBe(true);
+    expect(inboundFrameClearsOfflineHold({ type: "initialState" }, true)).toBe(false);
+    expect(inboundFrameClearsOfflineHold({ type: "setBusy", value: false }, true)).toBe(false);
+    expect(inboundFrameClearsOfflineHold({ type: "setBusy", value: false }, false)).toBe(true);
+    expect(inboundFrameClearsOfflineHold(DEVICE_OFFLINE, false)).toBe(false);
+
+    const persistFn = html.slice(
+      html.indexOf("function handlePersistentDeviceOffline"),
+      html.indexOf("function beginDeviceOfflineGrace"),
+    );
+    expect(persistFn).toContain("applyRememberedHostReturnIfIdle()");
+    expect(persistFn).toContain("interruptRemoteVoice");
+    expect(persistFn.indexOf("interruptRemoteVoice"))
+      .toBeLessThan(persistFn.indexOf("applyRememberedHostReturnIfIdle()"));
+    expect(html).toContain("function applyRememberedHostReturnIfIdle");
+    expect(html).toContain("function applyInboundDeviceAlive");
   });
 
   it("probes a false-offline host once, not on a timer that races the flush", () => {

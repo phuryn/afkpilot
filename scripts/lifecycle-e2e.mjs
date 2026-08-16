@@ -193,23 +193,32 @@ function errorMatchesEcho(error, echo) {
   return true;
 }
 
+function isDifferentSubmission(frame, echo, prompt) {
+  if (!frame || frame.type !== "userMessage") return false;
+  if (!frameEchoesPrompt(frame, prompt)) return true;
+  const echoId = typeof echo.submissionId === "string" && echo.submissionId;
+  const frameId = typeof frame.submissionId === "string" && frame.submissionId;
+  if (echoId && frameId && echoId !== frameId) return true;
+  return false;
+}
+
 // The named interrupt (or the old-host phrase) on the error that follows
 // THIS prompt's userMessage. A stale interrupted-send anywhere, or any
-// error after any userMessage, is not evidence.
+// error after any userMessage, is not evidence. Restart can replay the
+// same buffered userMessage after a valid pair — accept any matching
+// echo followed by its interrupt before the next different submission.
 export function queuedSendInterruptedAfterEcho(frames, prompt) {
   const list = Array.isArray(frames) ? frames : [];
-  let echoIndex = -1;
   for (let i = 0; i < list.length; i++) {
-    if (frameEchoesPrompt(list[i], prompt)) echoIndex = i;
-  }
-  if (echoIndex < 0) return false;
-  const echo = list[echoIndex];
-  for (let i = echoIndex + 1; i < list.length; i++) {
-    const frame = list[i];
-    if (!frame) continue;
-    if (frame.type === "userMessage") break;
-    if (frame.type !== "error") continue;
-    if (errorMatchesEcho(frame, echo) && errorMarksInterruptedSend(frame)) return true;
+    if (!frameEchoesPrompt(list[i], prompt)) continue;
+    const echo = list[i];
+    for (let j = i + 1; j < list.length; j++) {
+      const frame = list[j];
+      if (!frame) continue;
+      if (isDifferentSubmission(frame, echo, prompt)) break;
+      if (frame.type !== "error") continue;
+      if (errorMatchesEcho(frame, echo) && errorMarksInterruptedSend(frame)) return true;
+    }
   }
   return false;
 }

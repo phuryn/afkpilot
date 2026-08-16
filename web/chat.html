@@ -859,6 +859,24 @@ window.grokRemoteClient = true;
     // snapshot — anything else crossed a reachable socket.
     return !isDeviceOfflineError(data);
   }
+  function inboundFrameIsReplacementHostReturn(data) {
+    // One-time attach burst from a host that just came online. Distinct
+    // from leftover setBusy/voiceState on a still-connected socket, and
+    // from the Device-offline bounce itself.
+    return !!(data && (
+      data.type === "initialState" ||
+      data.type === "clearMessages" ||
+      data.type === "sessions" ||
+      data.type === "session" ||
+      data.type === "repos"
+    ));
+  }
+  function inboundFrameClearsOfflineHold(data, captureActive) {
+    // A live capture must not cancel the persist timer. Probe-elicited
+    // snapshots are the same types as a real attach, so they cannot be
+    // applied here — they are remembered and applied once the mic stops.
+    return inboundFrameProvesDeviceAlive(data) && !captureActive;
+  }
   function errorCodeFromFrame(data) {
     return data && data.type === "error" && typeof data.code === "string" ? data.code : "";
   }
@@ -964,16 +982,45 @@ window.grokRemoteClient = true;
     }
     // Untagged bounce cannot name a prompt. Id-bearing entries wait for
     // their own bounce — sweeping them here replays a commit whose ack
-    // was lost. Restore/bookkeeping frames are not prompts: holding
-    // resumeSession re-opens identity and flushes it a second time.
+    // was lost. Exclude known bookkeeping / restore leftovers rather
+    // than allowlisting prompt shapes: exitPlanAnswer and questionAnswer
+    // carry typed text and have no submissionId, so an allowlist of
+    // send/queueSend/steerSend drops them.
     return current.filter(function (entry) {
       if (sendCorrelationId(entry.message)) return false;
-      var message = entry.message;
-      if (!message || typeof message.type !== "string") return true;
-      return message.type === "send" ||
-        message.type === "queueSend" ||
-        message.type === "steerSend";
+      return !isUntaggedOfflineHoldExcluded(entry.message);
     });
+  }
+  // Boot BOOKKEEPING the page re-issues by itself on a fresh load — the ONLY
+  // queue entries whose loss stays silent. Everything else is treated as user
+  // work and mourned. The polarity is deliberate and was learned the hard
+  // way: a first cut allowlisted the MOURNABLE types instead, and silently
+  // discarded queueSend/steerSend typed text the moment a new user-action
+  // type wasn't on the list (review find, 2026-08-15). Unknown or
+  // unparseable entries therefore count as mattering. Untagged offline
+  // hold uses the same denylist (plus restore leftovers below).
+  var BOOKKEEPING_QUEUE_TYPES = {
+    remotePreferences: true,
+    listSessions: true,
+    listRepoSessions: true, // auto-posted when the snapshot delivers repos
+    mentionQuery: true, // one per keystroke while typing @ during reconnect
+    // The two project-file reads are not perfectly re-issued (a browse view
+    // may need a re-tap, and a pending read shows its timeout notice), but
+    // they are read-only — nothing typed is ever in them — and mourning
+    // them would false-alarm on every refresh with the panel open.
+    listProjectDir: true,
+    readProjectFile: true,
+  };
+  function isUntaggedOfflineHoldExcluded(message) {
+    if (!message || typeof message.type !== "string") return false;
+    // Identity leftovers: holding resumeSession re-opens restore and
+    // can flush a snapshot-replayed resume a second time.
+    if (
+      message.type === "resumeSession" ||
+      message.type === "selectRepo" ||
+      message.type === "ready"
+    ) return true;
+    return !!BOOKKEEPING_QUEUE_TYPES[message.type];
   }
   function liveOutboundAfterOfflineHold(current, data) {
     var held = liveOutboundHeldByOffline(current, data);
@@ -1489,6 +1536,7 @@ window.grokRemoteClient = true;
   var resyncScrollTop = null;
   var restoreTimer = null;
   var offlineHold = null;
+  var hostReturnDuringCapture = null;
   var deviceOffline = false;
   var identityTimer = null;
   var identityFailTimer = null;
@@ -1639,26 +1687,6 @@ window.grokRemoteClient = true;
     return true;
   }
 
-  // Boot BOOKKEEPING the page re-issues by itself on a fresh load — the ONLY
-  // queue entries whose loss stays silent. Everything else is treated as user
-  // work and mourned. The polarity is deliberate and was learned the hard
-  // way: a first cut allowlisted the MOURNABLE types instead, and silently
-  // discarded queueSend/steerSend typed text the moment a new user-action
-  // type wasn't on the list (review find, 2026-08-15). Unknown or
-  // unparseable entries therefore count as mattering.
-  var BOOKKEEPING_QUEUE_TYPES = {
-    remotePreferences: true,
-    listSessions: true,
-    listRepoSessions: true, // auto-posted when the snapshot delivers repos
-    mentionQuery: true, // one per keystroke while typing @ during reconnect
-    // The two project-file reads are not perfectly re-issued (a browse view
-    // may need a re-tap, and a pending read shows its timeout notice), but
-    // they are read-only — nothing typed is ever in them — and mourning
-    // them would false-alarm on every refresh with the panel open.
-    listProjectDir: true,
-    readProjectFile: true,
-  };
-
   function mournableQueueCount() {
     var count = 0;
     for (var i = 0; i < queue.length; i++) {
@@ -1790,6 +1818,39 @@ window.grokRemoteClient = true;
     );
   }
 
+  function applyInboundDeviceAlive(data) {
+    var wasHeld = !!offlineHold || deviceOffline;
+    hostReturnDuringCapture = null;
+    clearOfflineGrace();
+    if (deviceOffline) {
+      deviceOffline = false;
+      if (identityRestoreComplete) setVoiceTransportReady(true);
+    }
+    if (identityTarget && !identityFailTimer) armIdentityFailTimer();
+    // A repos/sessions/initialState frame is already the handshake.
+    // Another ready here restarts the snapshot and can race a just-flushed
+    // send. Only an error-only return needs the poke.
+    if (
+      wasHeld &&
+      data && data.type === "error" &&
+      identityTarget &&
+      !identityRestoreComplete &&
+      ws &&
+      ws.readyState === WebSocket.OPEN
+    ) {
+      try { ws.send(JSON.stringify(readyMessage())); } catch (_) { /* socket raced */ }
+    }
+  }
+
+  function applyRememberedHostReturnIfIdle() {
+    if (!hostReturnDuringCapture || voiceCaptureActive()) return;
+    if (!offlineHold && !deviceOffline) {
+      hostReturnDuringCapture = null;
+      return;
+    }
+    applyInboundDeviceAlive(hostReturnDuringCapture);
+  }
+
   function handlePersistentDeviceOffline() {
     if (deviceOffline) return;
     clearOfflineGrace();
@@ -1811,12 +1872,20 @@ window.grokRemoteClient = true;
       !identityRestoreComplete &&
       mournableQueueCount() === 0
     ) finishIdentityRestore();
+    var stoppedCapture = false;
     if (voiceCaptureActive()) {
       interruptRemoteVoice(
         "Voice recording stopped because the device stayed offline. Start again after VS Code reconnects."
       );
-      return;
+      stoppedCapture = true;
     }
+    // Snapshot seen while the mic was up cannot cancel persist — but once
+    // the capture is idle, that unsolicited attach is still proof the
+    // host returned. Apply it now so later prompts do not take the
+    // outbox path with no further host frame to restore identity.
+    applyRememberedHostReturnIfIdle();
+    if (!deviceOffline) return;
+    if (stoppedCapture) return;
     var held = mournableQueueCount();
     var queuedNote = !held ? "" : held === 1
       ? " Your unsent message is saved and will be sent when VS Code reconnects."
@@ -1828,6 +1897,7 @@ window.grokRemoteClient = true;
 
   function beginDeviceOfflineGrace() {
     if (deviceOffline || offlineHold) return;
+    hostReturnDuringCapture = null;
     clearIdentityFailTimer();
     // One probe covers the false-offline case (host never detached).
     // Repeating it on a timer restarts attachUplink's snapshot over a
@@ -2042,31 +2112,15 @@ window.grokRemoteClient = true;
       // A host error is still a live uplink. Gating this on type !== "error"
       // left an error-only returning host in grace until persistent-offline
       // stopped resync, with the fail timer disarmed — queued work stranded.
-      // A live capture is the exception: frames elicited by our own ready
-      // probe (or a restore handshake that started because the bounce held
-      // unacked bookkeeping) are not proof the outage ended, and clearing
-      // grace here leaves the mic in a host-unconfirmed listening state.
-      if (inboundFrameProvesDeviceAlive(data) && !voiceCaptureActive()) {
-        var wasHeld = !!offlineHold || deviceOffline;
-        clearOfflineGrace();
-        if (deviceOffline) {
-          deviceOffline = false;
-          if (identityRestoreComplete) setVoiceTransportReady(true);
-        }
-        if (identityTarget && !identityFailTimer) armIdentityFailTimer();
-        // A repos/sessions/initialState frame is already the handshake.
-        // Another ready here restarts the snapshot and can race a just-flushed
-        // send. Only an error-only return needs the poke.
-        if (
-          wasHeld &&
-          data && data.type === "error" &&
-          identityTarget &&
-          !identityRestoreComplete &&
-          ws &&
-          ws.readyState === WebSocket.OPEN
-        ) {
-          try { ws.send(JSON.stringify(readyMessage())); } catch (_) { /* socket raced */ }
-        }
+      // A live capture still must not clear the hold: probe-elicited
+      // snapshots are the same types as a real attach. Remember an
+      // unsolicited replacement-host burst and apply it once the mic
+      // stops, so persist can still halt capture and the outbox is not
+      // gated after the one-time snapshot has already gone by.
+      if (inboundFrameClearsOfflineHold(data, voiceCaptureActive())) {
+        applyInboundDeviceAlive(data);
+      } else if (voiceCaptureActive() && inboundFrameIsReplacementHostReturn(data)) {
+        hostReturnDuringCapture = data;
       }
       // Quota bounce: surface the wall above the composer alongside the
       // in-chat error (the relay's fixed copy carries the reset countdown).
@@ -2089,6 +2143,7 @@ window.grokRemoteClient = true;
       // re-asserts its saved selectRepo/resumeSession through our shim first.
       // We still wait for the resulting host confirmations before flushing.
       maybeFinishIdentityRestore(data);
+      applyRememberedHostReturnIfIdle();
       if (resyncScrollTop !== null) {
         clearTimeout(restoreTimer);
         restoreTimer = setTimeout(function () {
