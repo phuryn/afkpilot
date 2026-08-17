@@ -5,3 +5,14 @@
 # checks out with different bytes than sync-ui hashed — which is invisible on
 # the machine that ran sync-ui and breaks every fresh clone (Railway).
 web/vendor/** -text
+
+# Hashbang scripts must check out with LF, even on Windows (core.autocrlf=true).
+# Vite strips a leading `#!...` with a regex that only matches a LF terminator,
+# so a CRLF checkout leaves the `#!` in the JS it hands the parser and the file
+# dies as `SyntaxError: Invalid or unexpected token` — reported against whatever
+# imported it, because the transformed module carries no usable source position
+# (vitejs/vite#23034). Node, `node --check` and esbuild all accept the same file,
+# and Linux CI checks out the LF blob and passes, so this reproduces ONLY on a
+# Windows working tree and looks like a corrupt dependency rather than an EOL.
+# Cost us a long hunt on scripts/lifecycle-e2e.mjs.
+*.mjs text eol=lf
