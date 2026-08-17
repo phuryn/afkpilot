@@ -69,12 +69,28 @@ body.desk .session-name-chip { padding-left: 0; }
 ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
+/* The fallback is the BROWSER's size, and only the browser's: VS Code and the
+   desktop app both define --vscode-font-size (13px), so they never reach it.
+   Without one the declaration is invalid in a browser and lands on the UA
+   default of 16px — nobody chose that, it is just what an absent token does,
+   and it made afkpilot.com on a monitor read a size larger than the same UI in
+   the editor beside it. 13px aligns the three surfaces. */
 html, body {
   margin: 0;
   font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size);
+  font-size: var(--vscode-font-size, 13px);
   color: var(--vscode-foreground);
   background: var(--vscode-sideBar-background);
+}
+
+/* Touch keeps 16px, which is the whole point of scoping this to the fallback:
+   the phone pass raised prose deliberately, and inputs want 16px because iOS
+   Safari zoom-lurches on focus below it. A host-defined token still wins here,
+   so a touch-screen VS Code is unaffected — only a phone browser sees this. */
+@media (hover: none), (pointer: coarse) {
+  html, body {
+    font-size: var(--vscode-font-size, 16px);
+  }
 }
 
 html {
