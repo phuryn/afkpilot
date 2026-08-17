@@ -819,6 +819,7 @@ window.grokRemoteClient = true;
   });
   try { initialRemoteTabToken = sessionStorage.getItem(REMOTE_TAB_TOKEN_KEY); } catch (_) { /* private mode */ }
   try { queue = JSON.parse(sessionStorage.getItem(QKEY) || "[]"); } catch (_) { queue = []; }
+  var pendingAuthoredRecovery = [];
   var restoredQueuedSendIds = new Set();
   queue = Array.isArray(queue) ? queue.filter(function (raw) {
     try {
@@ -862,13 +863,16 @@ window.grokRemoteClient = true;
   function inboundFrameIsReplacementHostReturn(data) {
     // One-time attach burst from a host that just came online. Distinct
     // from leftover setBusy/voiceState on a still-connected socket, and
-    // from the Device-offline bounce itself.
+    // from the Device-offline bounce itself. A live host that emits only
+    // an error is still a return — without this, capture remembers nothing
+    // and persist leaves the page offline until refresh.
     return !!(data && (
       data.type === "initialState" ||
       data.type === "clearMessages" ||
       data.type === "sessions" ||
       data.type === "session" ||
-      data.type === "repos"
+      data.type === "repos" ||
+      (data.type === "error" && inboundFrameProvesDeviceAlive(data))
     ));
   }
   function inboundFrameClearsOfflineHold(data, captureActive) {
@@ -950,6 +954,53 @@ window.grokRemoteClient = true;
     if (opts.changesIdentity) return "abandon-and-send";
     return "outbox";
   }
+  function isQueueReleaseMessage(message) {
+    // The only frames that may be held and flushed later. Correlated
+    // prompts (submissionId) are the queue-release feature; old hosts
+    // echo send/queueSend/steerSend without an id and still replay.
+    return !!(message && (
+      message.type === "send" ||
+      message.type === "queueSend" ||
+      message.type === "steerSend"
+    ));
+  }
+  function authoredTextFromAnswers(answers) {
+    if (typeof answers === "string") return answers;
+    if (Array.isArray(answers)) {
+      var fromList = [];
+      for (var i = 0; i < answers.length; i++) {
+        var item = answers[i];
+        if (typeof item === "string" && item) fromList.push(item);
+        else if (item && typeof item.text === "string" && item.text) fromList.push(item.text);
+      }
+      return fromList.join("\n");
+    }
+    if (answers && typeof answers === "object") {
+      var fromMap = [];
+      var keys = Object.keys(answers);
+      for (var k = 0; k < keys.length; k++) {
+        var value = answers[keys[k]];
+        if (typeof value === "string" && value) fromMap.push(value);
+      }
+      return fromMap.join("\n");
+    }
+    return "";
+  }
+  function authoredTextFromMessage(message) {
+    // Recover typed words from frames we will not replay. Prompt shapes
+    // stay on the queue-release path; this is the comment / free-text
+    // half of "text the user authored must never vanish silently".
+    if (!message || isQueueReleaseMessage(message)) return "";
+    if (typeof message.comment === "string" && message.comment) return message.comment;
+    if (message.type === "questionAnswer") return authoredTextFromAnswers(message.answers);
+    if (typeof message.text === "string" && message.text) return message.text;
+    return "";
+  }
+  function outboxDispositionForMessage(message) {
+    if (isQueueReleaseMessage(message)) return "persist";
+    if (authoredTextFromMessage(message)) return "recover";
+    return "drop";
+  }
   function liveOutboundAfterRemember(current, raw, message) {
     return current.concat([{ raw: raw, message: message }]);
   }
@@ -982,13 +1033,13 @@ window.grokRemoteClient = true;
     }
     // Untagged bounce cannot name a prompt. Id-bearing entries wait for
     // their own bounce — sweeping them here replays a commit whose ack
-    // was lost. Exclude known bookkeeping / restore leftovers rather
-    // than allowlisting prompt shapes: exitPlanAnswer and questionAnswer
-    // carry typed text and have no submissionId, so an allowlist of
-    // send/queueSend/steerSend drops them.
+    // was lost. Only queue-release shapes are held for a later flush.
+    // Card answers and other uncorrelated frames recover their text
+    // instead: replaying them is what lands an answer on the wrong session.
     return current.filter(function (entry) {
       if (sendCorrelationId(entry.message)) return false;
-      return !isUntaggedOfflineHoldExcluded(entry.message);
+      return isQueueReleaseMessage(entry.message) &&
+        !isUntaggedOfflineHoldExcluded(entry.message);
     });
   }
   // Boot BOOKKEEPING the page re-issues by itself on a fresh load — the ONLY
@@ -997,8 +1048,9 @@ window.grokRemoteClient = true;
   // way: a first cut allowlisted the MOURNABLE types instead, and silently
   // discarded queueSend/steerSend typed text the moment a new user-action
   // type wasn't on the list (review find, 2026-08-15). Unknown or
-  // unparseable entries therefore count as mattering. Untagged offline
-  // hold uses the same denylist (plus restore leftovers below).
+  // unparseable entries therefore count as mattering. Replay itself is
+  // the dangerous operation, so only queue-release shapes are held; any
+  // other authored text is recovered into the composer and the frame dropped.
   var BOOKKEEPING_QUEUE_TYPES = {
     remotePreferences: true,
     listSessions: true,
@@ -1024,10 +1076,48 @@ window.grokRemoteClient = true;
   }
   function liveOutboundAfterOfflineHold(current, data) {
     var held = liveOutboundHeldByOffline(current, data);
-    if (!held.length) return current;
     return current.filter(function (entry) {
-      return held.indexOf(entry) === -1;
+      if (held.indexOf(entry) !== -1) return false;
+      // Other named prompts wait for their own bounce. Uncorrelated
+      // leftovers are recovered or discarded — never replayed later.
+      return !!sendCorrelationId(entry.message);
     });
+  }
+  function liveOutboundRecoveredByOffline(current, data) {
+    var held = liveOutboundHeldByOffline(current, data);
+    var texts = [];
+    for (var i = 0; i < current.length; i++) {
+      if (held.indexOf(current[i]) !== -1) continue;
+      var text = authoredTextFromMessage(current[i].message);
+      if (text) texts.push(text);
+    }
+    return texts;
+  }
+  function authoredTextsFromLiveOutbound(current) {
+    var texts = [];
+    for (var i = 0; i < current.length; i++) {
+      var authored = authoredTextFromMessage(current[i] && current[i].message);
+      if (authored) texts.push(authored);
+    }
+    return texts;
+  }
+  function queueAfterDropUnreplayable(current) {
+    var kept = [];
+    var recovered = [];
+    for (var i = 0; i < current.length; i++) {
+      try {
+        var message = JSON.parse(current[i]);
+        if (isQueueReleaseMessage(message) || BOOKKEEPING_QUEUE_TYPES[message.type]) {
+          kept.push(current[i]);
+          continue;
+        }
+        var authored = authoredTextFromMessage(message);
+        if (authored) recovered.push(authored);
+      } catch (_) {
+        kept.push(current[i]);
+      }
+    }
+    return { kept: kept, recovered: recovered };
   }
   function liveOutboundAfterNamedDrop(current, data) {
     var id = sendCorrelationId(data);
@@ -1037,6 +1127,11 @@ window.grokRemoteClient = true;
     });
   }
   function persistOutboxMessage(raw, message) {
+    if (outboxDispositionForMessage(message) !== "persist") {
+      var text = authoredTextFromMessage(message);
+      if (text) recoverAuthoredTexts([text]);
+      return;
+    }
     var next = outboxAfterPersist(queue, raw, message);
     if (next === queue) return;
     queue = next;
@@ -1064,12 +1159,24 @@ window.grokRemoteClient = true;
     for (var i = 0; i < held.length; i++) {
       persistOutboxMessage(held[i].raw, held[i].message);
     }
+    recoverAuthoredTexts(liveOutboundRecoveredByOffline(liveOutbound, data));
     liveOutbound = liveOutboundAfterOfflineHold(liveOutbound, data);
+  }
+  function recoverAuthoredFromLiveOutbound() {
+    recoverAuthoredTexts(authoredTextsFromLiveOutbound(liveOutbound));
   }
   function forgetUnbouncedLiveOutbound() {
     // Unbounced entries were not refused. After a confirmed restore,
     // replaying them would duplicate a commit whose ack was lost.
     liveOutbound = [];
+  }
+  var strippedQueue = queueAfterDropUnreplayable(queue);
+  if (strippedQueue.kept.length !== queue.length) {
+    queue = strippedQueue.kept;
+    saveQueue();
+  }
+  for (var recoveredAtLoad = 0; recoveredAtLoad < strippedQueue.recovered.length; recoveredAtLoad++) {
+    pendingAuthoredRecovery.push(strippedQueue.recovered[recoveredAtLoad]);
   }
   saveQueue();
 
@@ -1657,12 +1764,17 @@ window.grokRemoteClient = true;
         // All three submission shapes carry the user's typed words: plain
         // send, and the busy-turn queueSend/steerSend pair (pre-existing
         // gap — only "send" was recovered, so text queued mid-turn vanished
-        // on a refused restore; review find, 2026-08-15).
+        // on a refused restore; review find, 2026-08-15). Card comments
+        // should never be in the queue after the recover-not-replay split;
+        // still extract them if an older tab persisted one.
         if (queued &&
             (queued.type === "send" || queued.type === "queueSend" || queued.type === "steerSend") &&
             typeof queued.text === "string" && queued.text) {
           texts.push(queued.text);
+          continue;
         }
+        var authored = authoredTextFromMessage(queued);
+        if (authored) texts.push(authored);
       } catch (_) { /* keep scanning */ }
     }
     return texts;
@@ -1687,6 +1799,26 @@ window.grokRemoteClient = true;
     return true;
   }
 
+  function recoverAuthoredTexts(texts) {
+    if (!texts || !texts.length) return false;
+    if (!returnQueuedSendsToComposer(texts)) {
+      for (var i = 0; i < texts.length; i++) pendingAuthoredRecovery.push(texts[i]);
+      return false;
+    }
+    window.dispatchEvent(new MessageEvent("message", {
+      data: {
+        type: "error",
+        text: "Your unsent text was returned to the input. Send it again if you still want it.",
+      },
+    }));
+    return true;
+  }
+
+  function flushPendingAuthoredRecovery() {
+    if (!pendingAuthoredRecovery.length) return;
+    recoverAuthoredTexts(pendingAuthoredRecovery.splice(0, pendingAuthoredRecovery.length));
+  }
+
   function mournableQueueCount() {
     var count = 0;
     for (var i = 0; i < queue.length; i++) {
@@ -1699,6 +1831,7 @@ window.grokRemoteClient = true;
   }
 
   function reportOutboxFailure(text) {
+    flushPendingAuthoredRecovery();
     if (!queue.length) return;
     var count = mournableQueueCount();
     var handedBack = returnQueuedSendsToComposer(queuedSendTexts());
@@ -1805,6 +1938,7 @@ window.grokRemoteClient = true;
   }
 
   function abandonIdentityRestore(outboxReason) {
+    recoverAuthoredFromLiveOutbound();
     reportOutboxFailure(outboxReason);
     finishIdentityRestore();
   }
@@ -1896,8 +2030,12 @@ window.grokRemoteClient = true;
   }
 
   function beginDeviceOfflineGrace() {
-    if (deviceOffline || offlineHold) return;
+    // A newer offline bounce invalidates a snapshot remembered during
+    // capture. Clearing only when opening a fresh window left that
+    // snapshot to be applied as proof of life after the host was gone
+    // again (review find).
     hostReturnDuringCapture = null;
+    if (deviceOffline || offlineHold) return;
     clearIdentityFailTimer();
     // One probe covers the false-offline case (host never detached).
     // Repeating it on a timer restarts attachUplink's snapshot over a
@@ -1913,6 +2051,8 @@ window.grokRemoteClient = true;
   }
 
   function flushRestoredOutbox() {
+    // Authored leftovers from an older tab are visible again, not replayed.
+    flushPendingAuthoredRecovery();
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     var pending = queue.slice();
     queue = [];
@@ -1979,6 +2119,7 @@ window.grokRemoteClient = true;
     identityRepoConfirmed = false;
     identitySessionConfirmed = false;
     if (!identityTarget) {
+      recoverAuthoredFromLiveOutbound();
       reportOutboxFailure("this tab had no remembered conversation to restore.");
       finishIdentityRestore();
       return;
@@ -2540,7 +2681,7 @@ window.grokRemoteClient = true;
         });
         if (disposition === "send") {
           ws.send(s);
-          if (!restoreMsg) rememberLiveOutbound(s, m);
+          if (!restoreMsg && outboxDispositionForMessage(m) !== "drop") rememberLiveOutbound(s, m);
           if (m && m.type === "resumeSession" && restoreMsg) {
             armIdentityFailTimer();
           }

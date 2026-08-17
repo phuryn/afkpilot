@@ -202,11 +202,28 @@ function isDifferentSubmission(frame, echo, prompt) {
   return false;
 }
 
+function sameSubmissionRepeatedAfter(list, start, echo, prompt) {
+  for (let k = start; k < list.length; k++) {
+    const frame = list[k];
+    if (!frame) continue;
+    // Restart can replay a buffered userMessage after a valid pair.
+    // That replay is a replacement-host burst, not a second delivery.
+    if (isReplacementHostFrameType(frame.type)) return false;
+    if (isDifferentSubmission(frame, echo, prompt)) return false;
+    if (!frameEchoesPrompt(frame, prompt)) continue;
+    const echoId = typeof echo.submissionId === "string" && echo.submissionId;
+    const frameId = typeof frame.submissionId === "string" && frame.submissionId;
+    if (echoId && frameId) return echoId === frameId;
+    return true;
+  }
+  return false;
+}
+
 // The named interrupt (or the old-host phrase) on the error that follows
 // THIS prompt's userMessage. A stale interrupted-send anywhere, or any
-// error after any userMessage, is not evidence. Restart can replay the
-// same buffered userMessage after a valid pair — accept any matching
-// echo followed by its interrupt before the next different submission.
+// error after any userMessage, is not evidence. A later echo of the same
+// submission without a replacement-host boundary is a duplicate delivery
+// and must not count as this outcome.
 export function queuedSendInterruptedAfterEcho(frames, prompt) {
   const list = Array.isArray(frames) ? frames : [];
   for (let i = 0; i < list.length; i++) {
@@ -217,7 +234,10 @@ export function queuedSendInterruptedAfterEcho(frames, prompt) {
       if (!frame) continue;
       if (isDifferentSubmission(frame, echo, prompt)) break;
       if (frame.type !== "error") continue;
-      if (errorMatchesEcho(frame, echo) && errorMarksInterruptedSend(frame)) return true;
+      if (errorMatchesEcho(frame, echo) && errorMarksInterruptedSend(frame)) {
+        if (sameSubmissionRepeatedAfter(list, j + 1, echo, prompt)) return false;
+        return true;
+      }
     }
   }
   return false;

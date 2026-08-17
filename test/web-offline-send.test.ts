@@ -26,10 +26,16 @@ const {
   outboxAfterAck,
   shouldReenterIdentityOnDeviceOffline,
   liveSendDisposition,
+  isQueueReleaseMessage,
+  authoredTextFromMessage,
+  outboxDispositionForMessage,
   liveOutboundAfterRemember,
   liveOutboundAfterAck,
   liveOutboundHeldByOffline,
   liveOutboundAfterOfflineHold,
+  liveOutboundRecoveredByOffline,
+  authoredTextsFromLiveOutbound,
+  queueAfterDropUnreplayable,
   liveOutboundAfterNamedDrop,
 } = new Function(
   `${helpers}; return {
@@ -45,10 +51,16 @@ const {
     outboxAfterAck,
     shouldReenterIdentityOnDeviceOffline,
     liveSendDisposition,
+    isQueueReleaseMessage,
+    authoredTextFromMessage,
+    outboxDispositionForMessage,
     liveOutboundAfterRemember,
     liveOutboundAfterAck,
     liveOutboundHeldByOffline,
     liveOutboundAfterOfflineHold,
+    liveOutboundRecoveredByOffline,
+    authoredTextsFromLiveOutbound,
+    queueAfterDropUnreplayable,
     liveOutboundAfterNamedDrop,
   };`,
 )() as {
@@ -71,6 +83,9 @@ const {
     isRestoreMessage?: boolean;
     changesIdentity?: boolean;
   }) => "send" | "outbox" | "abandon-and-send";
+  isQueueReleaseMessage: (message: unknown) => boolean;
+  authoredTextFromMessage: (message: unknown) => string;
+  outboxDispositionForMessage: (message: unknown) => "persist" | "recover" | "drop";
   liveOutboundAfterRemember: (
     current: Array<{ raw: string; message: unknown }>,
     raw: string,
@@ -88,6 +103,14 @@ const {
     current: Array<{ raw: string; message: unknown }>,
     data: unknown,
   ) => Array<{ raw: string; message: unknown }>;
+  liveOutboundRecoveredByOffline: (
+    current: Array<{ raw: string; message: unknown }>,
+    data: unknown,
+  ) => string[];
+  authoredTextsFromLiveOutbound: (
+    current: Array<{ raw: string; message: unknown }>,
+  ) => string[];
+  queueAfterDropUnreplayable: (current: string[]) => { kept: string[]; recovered: string[] };
   liveOutboundAfterNamedDrop: (
     current: Array<{ raw: string; message: unknown }>,
     data: unknown,
@@ -345,7 +368,8 @@ describe("offline live-send hold", () => {
     expect(held.map((e) => e.raw)).toEqual([send]);
   });
 
-  it("an untagged bounce holds typed card answers, not only prompt shapes", () => {
+  it("recovers authored card text instead of holding the frame for replay", () => {
+    const created = JSON.stringify({ type: "newSession" });
     const plan = JSON.stringify({
       type: "exitPlanAnswer",
       requestId: 1,
@@ -357,22 +381,69 @@ describe("offline live-send hold", () => {
       requestId: 2,
       answers: ["the free-text answer"],
     });
+    const questionMap = JSON.stringify({
+      type: "questionAnswer",
+      requestId: 4,
+      answers: { "What next?": "do the auth part" },
+    });
     const permission = JSON.stringify({
       type: "permissionAnswer",
       requestId: 3,
       optionId: "allow_once",
     });
     const unknown = JSON.stringify({ type: "futureAuthoredFrame", text: "typed" });
-    let live = liveOutboundAfterRemember([], plan, JSON.parse(plan));
+    const prompt = sendRaw("later prompt", "sub-later");
+    let live = liveOutboundAfterRemember([], created, JSON.parse(created));
+    live = liveOutboundAfterRemember(live, plan, JSON.parse(plan));
     live = liveOutboundAfterRemember(live, question, JSON.parse(question));
+    live = liveOutboundAfterRemember(live, questionMap, JSON.parse(questionMap));
     live = liveOutboundAfterRemember(live, permission, JSON.parse(permission));
     live = liveOutboundAfterRemember(live, unknown, JSON.parse(unknown));
+    live = liveOutboundAfterRemember(live, prompt, JSON.parse(prompt));
+
+    expect(isQueueReleaseMessage(JSON.parse(plan))).toBe(false);
+    expect(isQueueReleaseMessage(JSON.parse(prompt))).toBe(true);
+    expect(outboxDispositionForMessage(JSON.parse(plan))).toBe("recover");
+    expect(outboxDispositionForMessage(JSON.parse(permission))).toBe("drop");
+    expect(outboxDispositionForMessage(JSON.parse(created))).toBe("drop");
+    expect(outboxDispositionForMessage(JSON.parse(prompt))).toBe("persist");
+    expect(authoredTextFromMessage(JSON.parse(plan))).toBe("plan the auth part again");
+    expect(authoredTextFromMessage(JSON.parse(question))).toBe("the free-text answer");
+    expect(authoredTextFromMessage(JSON.parse(questionMap))).toBe("do the auth part");
+    expect(authoredTextFromMessage(JSON.parse(permission))).toBe("");
+    expect(authoredTextFromMessage(JSON.parse(unknown))).toBe("typed");
+
     const held = liveOutboundHeldByOffline(live, DEVICE_OFFLINE);
-    expect(held.map((e) => e.raw)).toEqual([plan, question, permission, unknown]);
+    expect(held.map((e) => e.raw)).toEqual([]);
+    expect(liveOutboundRecoveredByOffline(live, DEVICE_OFFLINE)).toEqual([
+      "plan the auth part again",
+      "the free-text answer",
+      "do the auth part",
+      "typed",
+    ]);
+    live = liveOutboundAfterOfflineHold(live, DEVICE_OFFLINE);
+    expect(live.map((e) => sendCorrelationId(e.message))).toEqual(["sub-later"]);
     expect(isUntaggedOfflineHoldExcluded(JSON.parse(plan))).toBe(false);
     expect(isUntaggedOfflineHoldExcluded({ type: "resumeSession", id: "s1" })).toBe(true);
     expect(isUntaggedOfflineHoldExcluded({ type: "listSessions" })).toBe(true);
     expect(isUntaggedOfflineHoldExcluded({ type: "selectRepo", cwd: "/work" })).toBe(true);
+  });
+
+  it("strips unreplayable authored frames from a restored queue and keeps prompts", () => {
+    const send = sendRaw("keep me", "sub-keep");
+    const plan = JSON.stringify({
+      type: "exitPlanAnswer",
+      requestId: 1,
+      verdict: "rejected",
+      comment: "plan the auth part again",
+    });
+    const prefs = JSON.stringify({ type: "remotePreferences", showThinking: true });
+    const stripped = queueAfterDropUnreplayable([send, plan, prefs]);
+    expect(stripped.kept).toEqual([send, prefs]);
+    expect(stripped.recovered).toEqual(["plan the auth part again"]);
+    expect(authoredTextsFromLiveOutbound([
+      { raw: plan, message: JSON.parse(plan) },
+    ])).toEqual(["plan the auth part again"]);
   });
 
   it("an error-only returning host still clears grace and re-arms the fail timer", () => {
@@ -408,8 +479,9 @@ describe("offline live-send hold", () => {
     expect(inboundFrameIsReplacementHostReturn({ type: "session" })).toBe(true);
     expect(inboundFrameIsReplacementHostReturn({ type: "repos" })).toBe(true);
     expect(inboundFrameIsReplacementHostReturn({ type: "setBusy", value: false })).toBe(false);
-    expect(inboundFrameIsReplacementHostReturn({ type: "error", text: "CLI failed to start" })).toBe(false);
+    expect(inboundFrameIsReplacementHostReturn({ type: "error", text: "CLI failed to start" })).toBe(true);
     expect(inboundFrameIsReplacementHostReturn(DEVICE_OFFLINE)).toBe(false);
+    expect(inboundFrameClearsOfflineHold({ type: "error", text: "CLI failed to start" }, true)).toBe(false);
 
     expect(inboundFrameClearsOfflineHold({ type: "initialState" }, false)).toBe(true);
     expect(inboundFrameClearsOfflineHold({ type: "initialState" }, true)).toBe(false);
@@ -437,6 +509,21 @@ describe("offline live-send hold", () => {
     expect(graceFn).toContain("readyMessage()");
     expect(graceFn).not.toContain("setInterval");
     expect(graceFn).not.toContain("3000");
+    expect(graceFn.indexOf("hostReturnDuringCapture = null"))
+      .toBeLessThan(graceFn.indexOf("if (deviceOffline || offlineHold) return"));
+  });
+
+  it("does not persist uncorrelated frames into the outbox for later replay", () => {
+    const persistFn = html.slice(
+      html.indexOf("function persistOutboxMessage"),
+      html.indexOf("var liveOutbound = []"),
+    );
+    expect(persistFn).toContain("outboxDispositionForMessage(message)");
+    expect(persistFn).toContain("recoverAuthoredTexts");
+    expect(html).toContain("liveOutboundRecoveredByOffline");
+    expect(html).toContain("recoverAuthoredFromLiveOutbound()");
+    expect(html).toContain("queueAfterDropUnreplayable");
+    expect(sendPath).toContain("outboxDispositionForMessage(m) !== \"drop\"");
   });
 
   it("does not let a live capture's ready-probe snapshot cancel the persist timer", () => {

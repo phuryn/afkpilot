@@ -275,6 +275,25 @@ describe("lifecycle e2e harness", () => {
         { type: "userMessage", text: prompt, submissionId: "sub-queued" },
       ],
       prompt,
+    )).toBe(false);
+    expect(classifyQueueRelease(
+      echoed,
+      prompt,
+      1,
+      [
+        { type: "userMessage", text: prompt, submissionId: "sub-queued" },
+        { type: "error", code: INTERRUPTED_SEND_CODE, submissionId: "sub-queued" },
+        { type: "userMessage", text: prompt, submissionId: "sub-queued" },
+      ],
+    )).toBe(null);
+    expect(queuedSendInterruptedAfterEcho(
+      [
+        { type: "userMessage", text: prompt, submissionId: "sub-queued" },
+        { type: "error", code: INTERRUPTED_SEND_CODE, submissionId: "sub-queued" },
+        { type: "initialState" },
+        { type: "userMessage", text: prompt, submissionId: "sub-queued" },
+      ],
+      prompt,
     )).toBe(true);
     expect(classifyQueueRelease(
       echoed,
@@ -283,6 +302,7 @@ describe("lifecycle e2e harness", () => {
       [
         { type: "userMessage", text: prompt, submissionId: "sub-queued" },
         { type: "error", code: INTERRUPTED_SEND_CODE, submissionId: "sub-queued" },
+        { type: "initialState" },
         { type: "userMessage", text: prompt, submissionId: "sub-queued" },
       ],
     )).toBe("interrupted-after-echo");
@@ -293,7 +313,7 @@ describe("lifecycle e2e harness", () => {
         { type: "userMessage", text: prompt },
       ],
       prompt,
-    )).toBe(true);
+    )).toBe(false);
     expect(queuedSendInterruptedAfterEcho(
       [
         { type: "userMessage", text: prompt, submissionId: "sub-queued" },

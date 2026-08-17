@@ -503,6 +503,41 @@ try {
   await queuedTypePage.close();
   log("a refused restore hands queueSend text back to the composer");
 
+  // Card-authored text must not depend on the outbox surviving restore.
+  // An older tab may have persisted an exitPlanAnswer; recover the comment
+  // and drop the frame rather than flushing it onto whatever session lands.
+  const planCommentPage = await context.newPage();
+  await planCommentPage.addInitScript(({ deviceId, cwd }) => {
+    sessionStorage.setItem(
+      `grok.remote.tabSession:${deviceId}`,
+      JSON.stringify({ id: "refused-with-field", repoCwd: cwd, cwd }),
+    );
+    sessionStorage.setItem(
+      `afk-outbox:${deviceId}`,
+      JSON.stringify([JSON.stringify({
+        type: "exitPlanAnswer",
+        requestId: 1,
+        verdict: "rejected",
+        comment: "plan the auth part again",
+      })]),
+    );
+  }, { deviceId, cwd });
+  await planCommentPage.goto(`${BASE}/chat?device=${encodeURIComponent(deviceId)}`);
+  await planCommentPage.locator(".msg.error", { hasText: "returned to the input" })
+    .waitFor({ timeout: 10000 });
+  assert.equal(
+    await planCommentPage.locator("#input").inputValue(),
+    "plan the auth part again",
+    "a persisted plan comment must return to the composer instead of being replayed",
+  );
+  assert.equal(
+    await planCommentPage.evaluate((deviceId) => sessionStorage.getItem(`afk-outbox:${deviceId}`), deviceId),
+    "[]",
+    "a persisted plan answer must be dropped from the outbox, not flushed later",
+  );
+  await planCommentPage.close();
+  log("a persisted plan comment returns to the composer and leaves the outbox");
+
   // RED without chat.js forgetting empty conversations: the host reaps an
   // untouched session the moment a tab disconnects (#24), so REMEMBERING one
   // turns every refresh of a new tab into a refusal banner over a healthy
