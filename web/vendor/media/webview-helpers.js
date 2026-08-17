@@ -61,6 +61,77 @@
     return HOST_MESSAGE_TYPE_SET.has(type);
   }
 
+  /**
+   * One pending user write. Paint immediately; the next frame that names
+   * `key` is the authority and the overlay dies. Not a store — confirm,
+   * contradict, and refuse all look like "a frame for this entity" from
+   * here. A silent host cannot leave a lie: `timeoutMs` (default 8s)
+   * clears the overlay and calls `onExpire`.
+   */
+  function createPendingOverlay(opts) {
+    const onExpire = opts && typeof opts.onExpire === "function" ? opts.onExpire : null;
+    let pending = null;
+    let timer = null;
+    function resolveTimeout() {
+      if (opts && typeof opts.timeoutMs === "function") {
+        const n = Number(opts.timeoutMs());
+        return n > 0 ? n : 8000;
+      }
+      if (opts && Number(opts.timeoutMs) > 0) return Number(opts.timeoutMs);
+      return 8000;
+    }
+    function clearTimer() {
+      if (timer != null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    }
+    function expire() {
+      timer = null;
+      if (!pending) return;
+      pending = null;
+      if (onExpire) onExpire();
+    }
+    return {
+      paint(key, value) {
+        clearTimer();
+        pending = { key: String(key), value };
+        timer = setTimeout(expire, resolveTimeout());
+      },
+      valueFor(key) {
+        if (key == null || !pending || pending.key !== String(key)) return undefined;
+        return pending.value;
+      },
+      has(key) {
+        return !!(pending && key != null && pending.key === String(key));
+      },
+      peek() {
+        return pending;
+      },
+      settle(key) {
+        if (!pending || key == null || pending.key !== String(key)) return false;
+        clearTimer();
+        pending = null;
+        return true;
+      },
+      settleAny(keys) {
+        if (!pending) return false;
+        for (const key of keys || []) {
+          if (key != null && pending.key === String(key)) {
+            clearTimer();
+            pending = null;
+            return true;
+          }
+        }
+        return false;
+      },
+      clear() {
+        clearTimer();
+        pending = null;
+      },
+    };
+  }
+
   // ---- "@" file mention (composer autocomplete) ----
 
   /** The `@token` under the caret, or null when no mention popover applies. `@`
@@ -1371,7 +1442,7 @@
     return header.join("\n") + (body ? body + "\n" : "");
   }
 
-  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, commandProgramLabel, commandTextPreview, extractToolResultOutput, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents };
+  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, createPendingOverlay, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, commandProgramLabel, commandTextPreview, extractToolResultOutput, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents };
 
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;

@@ -382,9 +382,11 @@
     closePanel.title = "Close";
     closePanel.setAttribute("aria-label", "Close file panel");
     closePanel.innerHTML = ICON.close;
-    // Desktop-only: the phone overlay already goes full-viewport at the 899
-    // dock breakpoint, so a second maximize would fight that layout. The
-    // mount opts in; remote/phone leave this unset.
+    // Content-area maximize. The mount opts in (desktop and the wide browser);
+    // the phone overlay already goes full-viewport at the 899 dock breakpoint,
+    // so applyPresentation hides the control there rather than fighting that
+    // layout. Remote used to omit the flag entirely, which also hid it on a
+    // desktop monitor where the panel docks beside the chat.
     const canMaximize = !!mount.maximize;
     let maximized = false;
     const maximizeBtn = canMaximize ? doc.createElement("button") : null;
@@ -484,6 +486,16 @@
       rootEl.style.setProperty("--gfp-overlay-top", top + "px");
       resizer.hidden = !open || overlay || maximized;
       closePanel.hidden = !overlay;
+      // Overlay is already the full remaining viewport (phone / <900). A second
+      // maximize would fight that layout, so drop it and hide the control.
+      if (overlay && maximized) {
+        maximized = false;
+        rootEl.classList.toggle("gfp-maximized", false);
+        paintMaximize();
+        applyMaximizedBodyClass();
+        if (typeof options.onMaximizedChanged === "function") options.onMaximizedChanged(false);
+      }
+      if (maximizeBtn) maximizeBtn.hidden = overlay;
       if (!overlay && mount.dockHost && rootEl.parentElement !== mount.dockHost) {
         mount.dockHost.appendChild(resizer);
         mount.dockHost.appendChild(rootEl);
@@ -513,16 +525,26 @@
       maximizeBtn.setAttribute("aria-pressed", String(maximized));
     }
 
+    function applyMaximizedBodyClass() {
+      // Shared key for desktop (.desk-ft-chat) and the browser (#chat-stack).
+      // Owned here so chat.js never has to mention a desk-ft- class.
+      if (doc.body) doc.body.classList.toggle("desk-ft-maximized", maximized);
+    }
+
     function setMaximized(next) {
       if (!canMaximize) return false;
-      const value = !!next && open;
+      const overlay = isOverlay();
+      // Overlay is already full-viewport; refuse rather than fight that layout.
+      const value = !!next && open && !overlay;
       if (maximized === value) {
         paintMaximize();
+        if (maximizeBtn) maximizeBtn.hidden = overlay;
         return maximized;
       }
       maximized = value;
       rootEl.classList.toggle("gfp-maximized", maximized);
       paintMaximize();
+      applyMaximizedBodyClass();
       applyPresentation();
       applyStripShrink();
       if (typeof options.onMaximizedChanged === "function") options.onMaximizedChanged(maximized);

@@ -188,6 +188,9 @@
     if (saved.repoCwd && saved.repoCwd !== state.cwd) {
       vscode.postMessage({ type: "selectRepo", cwd: saved.repoCwd });
     }
+    // Startup restore has no display name in the remembered payload, and the
+    // page is already on the welcome/"Starting" hold. Treating it like a
+    // user click would invent a title we do not have.
     vscode.postMessage({ type: "resumeSession", id: saved.id, cwd: saved.cwd || undefined });
   }
   const ttsAvailable = !!window.speechSynthesis && typeof window.SpeechSynthesisUtterance === "function";
@@ -1020,7 +1023,7 @@
 
   // ---------- markdown ----------
 
-  const { looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, commandProgramLabel, commandTextPreview, extractToolResultOutput, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage, getMentionQuery, applyMentionPick, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents } = globalThis.GrokWebviewHelpers;
+  const { looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, commandProgramLabel, commandTextPreview, extractToolResultOutput, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage, createPendingOverlay, getMentionQuery, applyMentionPick, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents } = globalThis.GrokWebviewHelpers;
 
   function escapeAttr(s) {
     return String(s == null ? "" : s)
@@ -3603,6 +3606,68 @@
     return raw.replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
   };
   const sameCwd = (a, b) => cwdKey(a) === cwdKey(b);
+
+  // Optimistic writes. Local overlays only — the next frame that names the
+  // entity is the authority (confirm, contradict, or refuse). A silent host
+  // cannot leave a lie: the overlay expires and the last frame re-renders.
+  const pendingRepoColor = createPendingOverlay({
+    onExpire() { renderRail(); },
+  });
+  const pendingRename = createPendingOverlay({
+    onExpire() { paintSessionSurfaces(); },
+  });
+
+  function repoColorOf(repo) {
+    const painted = pendingRepoColor.valueFor(cwdKey(repo && repo.cwd));
+    if (painted !== undefined) return painted;
+    return typeof repo?.color === "string" ? repo.color : "";
+  }
+
+  function sessionRowName(s) {
+    const painted = s && pendingRename.valueFor(s.id);
+    if (painted !== undefined) return painted || "Untitled";
+    return (s && s.displayName) || "Untitled";
+  }
+
+  function paintSessionSurfaces() {
+    if (!historyPopover.hidden) renderSessionRows();
+    renderSessionName();
+    renderSessionHead();
+    renderRail();
+  }
+
+  function paintPendingRepoColor(cwd, color) {
+    pendingRepoColor.paint(cwdKey(cwd), color);
+    renderRail();
+  }
+
+  function paintPendingRename(id, name) {
+    if (!id) return;
+    pendingRename.paint(id, name);
+    paintSessionSurfaces();
+  }
+
+  function settlePendingRepoColor(entries) {
+    pendingRepoColor.settleAny((entries || []).map((r) => r && cwdKey(r.cwd)).filter(Boolean));
+  }
+
+  function settlePendingRename(entries) {
+    const pending = pendingRename.peek();
+    if (!pending) return false;
+    const hit = (entries || []).find((e) => e && e.id === pending.key);
+    if (!hit) return false;
+    pendingRename.settle(pending.key);
+    // The list frame is the authority we just accepted. If the header is
+    // still holding a pre-rename sessionName for this id, adopt the row so
+    // a late name frame cannot snap the title back for a beat.
+    if (state.sessionName && state.sessionName.sessionId === hit.id) {
+      state.sessionName = {
+        ...state.sessionName,
+        name: String(hit.displayName || "New session"),
+      };
+    }
+    return true;
+  }
   const uniqueSessionRows = (entries) => {
     const byId = new Map();
     for (const entry of Array.isArray(entries) ? entries : []) {
@@ -3874,7 +3939,8 @@
 
   function renderSessionRow(s) {
       const row = document.createElement("div");
-      const active = s.id === state.activeSessionId;
+      const displayId = (railDisplayTarget() && railDisplayTarget().id) || state.activeSessionId;
+      const active = s.id === displayId;
       row.className = "history-row" + (active ? " active" : "");
       row.dataset.sessionId = s.id || "";
 
@@ -3905,6 +3971,7 @@
           // deliberate act.
           if (next !== s.displayName) {
             vscode.postMessage({ type: "renameSession", id: s.id, name: next });
+            paintPendingRename(s.id, next);
           }
           state.renamingSessionId = null;
           renderSessionRows();
@@ -3928,11 +3995,11 @@
         name.className = "history-row-name";
         // Tooltip is the name the USER sees/gave — never a legacy primer-derived
         // summary (rawSummary), which is internal compatibility data.
-        name.title = s.displayName || "";
+        name.title = sessionRowName(s);
         // A worktree session gets a branch icon (a TYPE marker in muted gray,
         // off the status-dot palette), not a "(WT)" text prefix like a fork's
         // "(Fork)" — it's an isolated checkout, not a renamed conversation.
-        let displayName = s.displayName || "Untitled";
+        let displayName = sessionRowName(s);
         if (s.worktreeLabel) {
           if (displayName.startsWith("(WT)")) displayName = displayName.slice(4).trim() || "Worktree";
           const branch = document.createElement("span");
@@ -3959,6 +4026,7 @@
         // stopPropagation so they don't also trigger a resume.
         row.onclick = () => {
           if (active) { closePopovers(); return; }
+          startRailResumeTransition(s.id, s.cwd, s.cwd, s.displayName);
           vscode.postMessage({ type: "resumeSession", id: s.id, cwd: s.cwd });
           closePopovers();
         };
@@ -4266,7 +4334,7 @@
     closeRailColorPicker();
     if (!anchor || !repo) return;
     railColorPickerAnchorEl = anchor;
-    const current = typeof repo.color === "string" ? repo.color : "";
+    const current = repoColorOf(repo);
     const picker = document.createElement("div");
     picker.className = "rail-color-picker";
     picker.setAttribute("role", "listbox");
@@ -4291,6 +4359,9 @@
         // the catalog (and a remote round-trip for nothing).
         if (sw.id === current) return;
         vscode.postMessage({ type: "setRepoColor", cwd: repo.cwd, color: sw.id });
+        // Paint now. The next `repos` frame that names this cwd is the
+        // authority — confirm, contradict, or a silent host's expiry.
+        paintPendingRepoColor(repo.cwd, sw.id);
       };
       picker.appendChild(btn);
       swatches.push(btn);
@@ -4836,7 +4907,12 @@
       };
     // Highlight without a veil would claim conversation X while Y is still on
     // screen and fully actionable. Pair them so the click is visibly owned.
+    veilTranscriptForPendingOpen();
     setConversationLoading(true);
+    if (fields.kind === "resume") {
+      renderSessionName();
+      renderSessionHead();
+    }
     const ms = Number(window.__grokRailTransitionTimeoutMs) > 0
       ? Number(window.__grokRailTransitionTimeoutMs)
       : RAIL_TRANSITION_TIMEOUT_MS;
@@ -4849,12 +4925,13 @@
     renderRail();
   }
 
-  function startRailResumeTransition(sessionId, sessionCwd, repoCwd) {
+  function startRailResumeTransition(sessionId, sessionCwd, repoCwd, displayName) {
     startRailTransition({
       kind: "resume",
       sessionId,
       sessionCwd: sessionCwd || repoCwd,
       repoCwd,
+      displayName: displayName || "",
     });
   }
 
@@ -4880,8 +4957,13 @@
     // historyReplay owns the veil while a transcript is materialising; leave
     // it up if we are mid-replay so aborting a superseded click cannot blank a
     // real load still in progress.
-    if (!state.replaying) setConversationLoading(false);
+    if (!state.replaying) {
+      unveilTranscriptAfterFailedOpen();
+      setConversationLoading(false);
+    }
     renderRail();
+    renderSessionName();
+    renderSessionHead();
   }
 
   function completeRailTransition(token) {
@@ -5153,7 +5235,12 @@
     // panel on every rail rebuild, and a session load produces a burst of those.
     const filesBtn = document.getElementById("files-browse-btn");
     if (filesBtn) placeRemoteFilesButton(filesBtn);
-    if (!on) { renderSessionHead(); return; }
+    if (!on) {
+      const openMenuKey = railMenuEl ? railMenuEl.dataset.anchorId || "" : "";
+      renderSessionHead();
+      reanchorOpenRailMenu(openMenuKey);
+      return;
+    }
     wireRailSearch();
     // The rail rebuilds itself wholesale, and a session load produces a burst of
     // frames that each trigger one. Closing the menu here meant an open ⋯ was
@@ -5294,20 +5381,14 @@
       }
     }
 
-    // Re-anchor an open ⋯ to its rebuilt button, or close it if the row it
-    // belonged to is gone (deleted, filtered out, its project collapsed).
-    if (openMenuKey) {
-      const esc = window.CSS && CSS.escape ? CSS.escape(openMenuKey) : openMenuKey;
-      const anchor = root.querySelector('[data-rail-menu-key="' + esc + '"]');
-      if (anchor) {
-        railMenuAnchorEl = anchor;
-        // Re-place it. Keeping the menu open but leaving it at the old fixed
-        // coordinates is worse than closing it: rows insert and reorder as
-        // frames arrive, so the menu would end up beside whichever row moved
-        // into that spot while still acting on the one it was opened from.
-        if (railMenuEl) placeRailPopover(railMenuEl, anchor);
-      } else closeRailMenu();
-    }
+    // Re-anchor AFTER renderSessionHead: the top-right ⋯ lives in
+    // #session-head-actions (key "session-head"), which fillSessionHeadActions
+    // rebuilds. Searching only `root` here used to miss that button and slam
+    // the menu shut on every catalog frame — the thing the owner hit while
+    // projects were still loading. Search the document so both a rail-row
+    // menu and the header menu survive the wipe.
+    renderSessionHead();
+    reanchorOpenRailMenu(openMenuKey);
     // Colour picker is one-shot and short-lived — the rebuild destroys its
     // anchor button, and re-opening it mid-catalog-refresh is not worth the
     // bookkeeping. Closing avoids a fixed popover stranded over a gone row.
@@ -5320,7 +5401,23 @@
     } else {
       root.classList.remove("rail-rebuilding");
     }
-    renderSessionHead();
+  }
+
+  /** Re-hang an open ⋯ on the button that replaced its anchor, or close it
+   *  if that row/header is gone. Searches the whole document, not just the
+   *  rail: the conversation overflow is outside `#projects-rail`. */
+  function reanchorOpenRailMenu(openMenuKey) {
+    if (!openMenuKey) return;
+    const esc = window.CSS && CSS.escape ? CSS.escape(openMenuKey) : openMenuKey;
+    const anchor = document.querySelector('[data-rail-menu-key="' + esc + '"]');
+    if (anchor) {
+      railMenuAnchorEl = anchor;
+      // Re-place it. Keeping the menu open but leaving it at the old fixed
+      // coordinates is worse than closing it: rows insert and reorder as
+      // frames arrive, so the menu would end up beside whichever row moved
+      // into that spot while still acting on the one it was opened from.
+      if (railMenuEl) placeRailPopover(railMenuEl, anchor);
+    } else closeRailMenu();
   }
 
   /** Non-collapsible group label (PINNED). */
@@ -5503,8 +5600,22 @@
   }
 
   function displayedSessionName(record) {
-    const data = activeSessionName();
-    let name = data?.name || record?.displayName || "New session";
+    const t = state.railTransition;
+    const displayId = (t && t.kind === "resume" && t.sessionId)
+      || record?.id
+      || activeSessionName()?.sessionId
+      || state.activeSessionId;
+    const renamed = displayId ? pendingRename.valueFor(displayId) : undefined;
+    let name;
+    // Overlay wins until a catalog frame names this id. sessionName can
+    // arrive first carrying the pre-rename title, and treating it as
+    // authority would snap the header back for a beat.
+    if (renamed !== undefined) name = renamed || "Untitled";
+    else if (t && t.kind === "resume" && t.displayName) name = t.displayName;
+    else {
+      const data = activeSessionName();
+      name = data?.name || record?.displayName || "New session";
+    }
     if (record?.worktreeLabel && name.startsWith("(WT)")) name = name.slice(4).trim() || "Worktree";
     return name;
   }
@@ -5573,7 +5684,9 @@
     if (edit.input.isConnected) edit.input.replaceWith(edit.label);
     edit.editBtn.classList.remove("session-name-edit-editing");
     edit.editBtn.hidden = false;
-    if (edit.surface === "local") renderSessionName();
+    // After the input is gone — paintSessionSurfaces rebuilds the label.
+    if (commit && next !== edit.original) paintPendingRename(edit.id, next);
+    else if (edit.surface === "local") renderSessionName();
     else renderSessionHead();
   }
 
@@ -5771,15 +5884,19 @@
     const editBtn = $("session-name-edit");
     if (!chip || !label || !editBtn) return;
     const data = activeSessionName();
-    chip.hidden = !data;
+    const pendingOpen = !!(state.railTransition && state.railTransition.kind === "resume" && state.railTransition.displayName);
+    chip.hidden = !data && !pendingOpen;
     // Desktop rail hosts: overflow lives in the top-right cluster (after History).
     fillSessionHeadActions();
     renderSessionNameRepo();
-    if (!data || state.sessionNameEditing?.surface === "local") return;
+    if ((!data && !pendingOpen) || state.sessionNameEditing?.surface === "local") return;
     const name = displayedSessionName(activeSessionRecord());
     label.textContent = name;
     label.title = name;
-    editBtn.hidden = false;
+    // Pending open paints the title only. Rename stays gated on sessionName
+    // (the host confirmation), same as an older host that never sent the frame.
+    editBtn.hidden = !data;
+    if (!data) return;
     label.setAttribute("aria-label", `Conversation: ${name}. Activate to rename.`);
     editBtn.title = "Rename conversation";
     editBtn.setAttribute("aria-label", "Rename conversation");
@@ -5952,9 +6069,8 @@
     twisty.className = "rail-twisty";
     twisty.innerHTML = expanded ? ICON.folderOpen : ICON.folderClosed;
     twisty.setAttribute("aria-hidden", "true");
-    if (typeof repo.color === "string" && repo.color) {
-      twisty.dataset.repoColor = repo.color;
-    }
+    const repoColor = repoColorOf(repo);
+    if (repoColor) twisty.dataset.repoColor = repoColor;
     head.appendChild(twisty);
 
     const name = document.createElement("span");
@@ -6245,7 +6361,7 @@
     const hostActive = railIdlessActionsAllowed() && active;
     row.className = "rail-session" + (active ? " active" : "");
     row.dataset.sessionId = s.id || "";
-    row.title = s.displayName || "";
+    row.title = sessionRowName(s);
     // The row is the primary control, so it has to behave like one: reachable by
     // Tab and openable with Enter/Space. The repo names and pin buttons around it
     // are real <button>s; without this the conversations themselves — the whole
@@ -6284,7 +6400,7 @@
       branch.title = "Worktree: " + s.worktreeLabel;
       row.appendChild(branch);
     }
-    let name = s.displayName || "Untitled";
+    let name = sessionRowName(s);
     if (s.worktreeLabel && name.startsWith("(WT)")) name = name.slice(4).trim() || "Worktree";
     label.textContent = name;
     row.appendChild(label);
@@ -6522,6 +6638,7 @@
       const next = (name || "").trim();
       if (!next || next === s.displayName) return;
       vscode.postMessage({ type: "renameSession", id: s.id, name: next, ...(cwd ? { cwd } : {}) });
+      paintPendingRename(s.id, next);
     });
   }
 
@@ -6537,7 +6654,7 @@
       if (active || isRailPendingRow(s)) return;
       // Optimistic highlight + veil before the host answers. activeSessionId is
       // left alone until sessionName / sessions.activeId confirm this id.
-      startRailResumeTransition(s.id, s.cwd || repo.cwd, repo.cwd);
+      startRailResumeTransition(s.id, s.cwd || repo.cwd, repo.cwd, s.displayName);
       // `cwd` rides along so a session in another repo reopens in ITS checkout —
       // the host resolves sessions by cwd, and omitting it would look the id up
       // under the repo we happen to be in.
@@ -6614,6 +6731,40 @@
     const label = document.createElement("span");
     label.textContent = text;
     ver.appendChild(label);
+  }
+
+  /**
+   * Hide the current transcript without deleting it. Opening B must not leave
+   * A's messages under B's title; aborting B must be able to put A's messages
+   * back. Host `clearMessages` still destroys the nodes when the open is real.
+   */
+  function veilTranscriptForPendingOpen() {
+    const welcome = $("welcome");
+    for (const child of Array.from(messagesEl.children)) {
+      if (child.id === "welcome") continue;
+      if (child.hasAttribute("data-pending-open-hide")) continue;
+      child.setAttribute("data-pending-open-hide", "1");
+      child.hidden = true;
+    }
+    if (welcome) {
+      welcome.hidden = false;
+      state.welcomeVisible = true;
+    }
+  }
+
+  function unveilTranscriptAfterFailedOpen() {
+    let restored = 0;
+    for (const child of Array.from(messagesEl.children)) {
+      if (child.getAttribute("data-pending-open-hide") !== "1") continue;
+      child.removeAttribute("data-pending-open-hide");
+      child.hidden = false;
+      restored++;
+    }
+    const welcome = $("welcome");
+    if (welcome && restored > 0) {
+      welcome.hidden = true;
+      state.welcomeVisible = false;
+    }
   }
 
   function setConversationLoading(active) {
@@ -13182,6 +13333,7 @@
           state.sessionQuery = msg.query || "";
           state.sessionLastAutoPageKey = "";
         }
+        settlePendingRename(state.sessions);
         if (msg.activeId !== undefined) {
           // Host-confirmed only — never an optimistic rail-transition id.
           // noteHostIdentityKnown is deliberately NOT here — this handler's
@@ -13278,6 +13430,10 @@
         state.pinnedSessionsKnown = true;
         state.pinnedSessions = uniqueSessionRows(msg.entries);
         state.dots = Object.assign({}, state.dots, msg.dots || {});
+        if (settlePendingRename(state.pinnedSessions)) {
+          renderSessionName();
+          renderSessionHead();
+        }
         renderRail();
         break;
       }
@@ -13293,6 +13449,10 @@
           total: typeof msg.total === "number" ? msg.total : (msg.entries || []).length,
         };
         state.dots = Object.assign({}, state.dots, msg.dots || {});
+        if (settlePendingRename(state.repoPreviews[cwdKey(msg.cwd)].entries)) {
+          renderSessionName();
+          renderSessionHead();
+        }
         // First answer: the probe only asked about one repo, so now ask for the rest.
         if (!known) requestRailPreviews();
         renderRail();
@@ -13301,6 +13461,7 @@
       case "repos": {
         state.reposKnown = true;
         state.repos = Array.isArray(msg.entries) ? msg.entries : [];
+        settlePendingRepoColor(state.repos);
         const wasSelected = state.selectedRepoCwd;
         state.selectedRepoCwd = msg.selectedCwd || "";
         state.activeRepoCwd = msg.activeCwd || "";
@@ -13616,6 +13777,10 @@
           toggleHost: remoteFilesButtonHost(),
           presentation: "responsive",
           id: "files-browse-panel",
+          // Same content-area maximize as desktop. The panel hides the control
+          // while it is an overlay (phone / <900) and toggles the shared body
+          // class itself.
+          maximize: true,
         },
         ui: {
           confirm: uiChoice,

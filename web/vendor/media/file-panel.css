@@ -408,8 +408,8 @@ body.desk-rail-collapsed .desk-rail-open-btn { display: inline-flex; }
 .gfp-close { align-self: center; margin: 0 8px 0 auto; }
 .gfp-close[hidden] { display: none !important; }
 
-/* Bar-icon primitive via .gfp-icon-button. Desktop mount opts in via
-   mount.maximize; the control is absent on remote/phone. */
+/* Bar-icon primitive via .gfp-icon-button. Desktop and wide-browser mounts
+   opt in via mount.maximize; applyPresentation hides the control in overlay. */
 .gfp-maximize {
   align-self: center;
   /* Pinned to the strip's RIGHT edge (owner): margin-left auto keeps it there
@@ -426,6 +426,15 @@ body.desk-rail-collapsed .desk-rail-open-btn { display: inline-flex; }
   min-width: 0;
 }
 body.desk-ft-maximized .desk-ft-chat { display: none !important; }
+/* Remote chat.html: #chat-stack is the transcript+composer column (desktop's
+   .desk-ft-chat). Hide it the same way so the docked panel can take the row.
+   Do not hide #chat-column — that also wraps the dock and the session header. */
+body.desk-ft-maximized #chat-stack { display: none !important; }
+body.desk-ft-maximized #file-panel-dock {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
 body.desk-ft-maximized .gfp-resizer,
 body.desk-ft-maximized #desk-ft-resizer { display: none !important; }
 body.desk-ft-maximized .gfp-panel {
