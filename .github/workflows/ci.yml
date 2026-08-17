@@ -68,56 +68,24 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # DRAFT for review — real relay + real Chromium + the sibling's real desktop
-  # host, including a host restart. This cannot live in the `gate` job above:
-  # that job is a bare clone of THIS repo only, and a loud skip there would
-  # look like coverage while testing nothing (the e2e:repo-switch rot).
+  # NO REAL HOSTS HERE — `e2e:lifecycle` is a LOCAL gate, and deliberately so.
   #
-  # Both repositories are public. This job needs NO secrets. That is the
-  # opposite of `e2e:browser`, which is excluded from gate:ci precisely
-  # because it needs Clerk + Supabase credentials. This suite blanks those
-  # (keyless mock mode) and talks only to 127.0.0.1.
+  # It ran here as a `lifecycle` job from 2026-08-16 and never passed once: four
+  # runs, four failures, ending on Electron aborting because a CI runner's
+  # `chrome-sandbox` is not root-owned mode 4755. A job that has never been green
+  # reports nothing about the commit under test — and it did active harm. `main`
+  # read red continuously, so when the `gate` job genuinely broke (a Windows-only
+  # path assertion, fixed in 874819d) the new failure was indistinguishable from
+  # the standing one, and a release nearly shipped against it.
   #
-  # Linux host boot has precedent in phuryn/grok-build-vscode: its integration
-  # job is `xvfb-run -a npm run test:integration` on ubuntu-latest.
+  # Two things made it unfixable-in-place rather than merely broken. It boots the
+  # sibling repo's real Electron desktop host, which needs runner-level sandbox
+  # setup to launch at all. And it checked out that sibling's DEFAULT BRANCH TIP
+  # rather than a pinned SHA, so this repo's CI could turn red because somebody
+  # pushed to the other repo — redness that says nothing about the commit being
+  # tested is worse than no test.
   #
-  # Release-order: this job checks out the sibling's DEFAULT BRANCH tip, not
-  # a SHA. Same rule as relay-before-extension: it cannot pass until the
-  # host-side contract the suite depends on is on that branch (unique fake
-  # session ids + stdin shutdown, sibling commit 357a300). A local sibling
-  # checkout can run against an unpushed commit; CI cannot.
-  lifecycle:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check out sibling host repo
-        uses: actions/checkout@v4
-        with:
-          repository: phuryn/grok-build-vscode
-          path: grok-build-vscode
-          # Default branch tip. Do not pin a SHA that is not on that branch
-          # yet — the job stays red until 357a300 (or its successor) is pushed.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-      - name: Install sibling (Electron + compile)
-        working-directory: grok-build-vscode
-        run: npm ci && npm run compile
-      - name: Install Chromium for Playwright
-        run: npx playwright install --with-deps chromium
-      - name: npm run e2e:lifecycle
-        run: xvfb-run -a npm run e2e:lifecycle
-        env:
-          GROK_BUILD_VSCODE: ${{ github.workspace }}/grok-build-vscode
-          LIFECYCLE_REQUIRE_HOST: "1"
-      - name: Upload lifecycle artifacts on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: lifecycle
-          path: e2e-artifacts/lifecycle/
-          if-no-files-found: ignore
-          retention-days: 7
+  # The coverage is not lost: `npm run gate` runs `e2e:lifecycle` against the real
+  # sibling checkout on a developer machine, and stays mandatory before promoting
+  # to production. That is the right home for it — a real host belongs where a
+  # real host exists.
