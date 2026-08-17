@@ -485,24 +485,37 @@ async function main() {
     "div",
     "the conversation title is a label, not a hidden dropdown",
   );
-  // New moved INTO the conversation's overflow menu on rail hosts, beside
-  // Delete and Continue in a new chat. The top bar previously carried it as a
-  // third similar icon next to the rail's own + and the project row's +; one
-  // pointer, three New buttons. So the assertion is no longer "New is beside
-  // the title" but "New is reachable, from the menu that owns the
-  // conversation" — which is what a user actually needs to be true.
+  // REVERSED 2026-08-17 (owner). New used to live INSIDE the conversation's
+  // overflow menu on rail hosts, because the top bar's New read as a third
+  // similar icon beside the rail's own + and the project row's +: one pointer,
+  // three New buttons.
+  //
+  // That argument assumed the rail is on screen. It can be closed or
+  // minimised, and when it is, neither the rail + nor the project row + is
+  // reachable — so the top bar's New is not a third button, it is the only one
+  // left. It is also scoped differently: a new session in the SAME project,
+  // rather than "create one in whatever project I am pointing at".
+  //
+  // So New sits beside Session history and is no longer in the overflow. Two
+  // places, not three, and not one that vanishes with the rail.
   assert.equal(
     await chatPage.locator("#session-new").isVisible(),
-    false,
-    "the top bar drops its own New where the conversation menu carries it",
-  );
-  await chatPage.locator("#session-head-actions button").first().click();
-  assert.equal(
-    await chatPage.locator(".rail-menu-item", { hasText: /New session/ }).isVisible(),
     true,
-    "New session is reachable from the conversation's overflow menu",
+    "New sits in the top bar beside Session history, reachable with the rail closed",
   );
-  await chatPage.keyboard.press("Escape");
+  // The other half of that reversal — New is no longer in the conversation
+  // overflow — is NOT asserted here, deliberately. That menu's host returns
+  // early without a session record (`if (!record) return`), and at this point
+  // in the flow there is no active conversation, so the button legitimately
+  // does not exist. The old assertion only worked because New itself was the
+  // thing rendering it.
+  //
+  // Writing `if the menu exists, check it` would be the fallback shape this
+  // suite has already been bitten by twice today: a branch that passes when the
+  // thing under test is absent. The menu's contents are asserted in the
+  // extension repo's DOM tests instead, where a record exists — desktop and
+  // remote keep Continue and Delete, VS Code keeps Continue and Export, and New
+  // is in none of them.
   await chatPage.locator("#session-history").click();
   assert.equal(
     await chatPage.locator("#history-popover").isVisible(),

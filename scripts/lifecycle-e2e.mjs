@@ -697,18 +697,22 @@ async function waitForChatUsable(page, description = "chat composer to become us
   }, description, 45000);
 }
 
+// New sits in the top bar beside Session history as of 2026-08-17, and is no
+// longer in the conversation overflow — the rail can be closed, and with it the
+// rail's own + and the project row's +, so this button is the only one left in
+// that state.
+//
+// There is deliberately NO overflow fallback. It looked like host-version
+// tolerance and is not: `#session-new` is created by the vendored chat.js the
+// RELAY serves (ensureVisibleNewSession injects it after History when the page
+// omits it), so it tracks the deploy, never the extension the user installed.
+// A fallback could therefore only fire if that injection broke — and it would
+// click the menu, pass, and hide the breakage. Same shape as e2e:legacy masking
+// a stuck offline hold on 2026-08-17. Fail loudly instead.
 async function clickNewSession(page) {
   const sessionNew = page.locator("#session-new");
-  if (await sessionNew.isVisible().catch(() => false)) {
-    await sessionNew.click();
-    return;
-  }
-  const overflow = page.locator("#session-head-actions .rail-menu-btn");
-  await overflow.waitFor({ state: "visible", timeout: 20000 });
-  await overflow.click();
-  const item = page.locator(".rail-menu-item", { hasText: "New session" });
-  await item.waitFor({ state: "visible", timeout: 10000 });
-  await item.click();
+  await sessionNew.waitFor({ state: "visible", timeout: 20000 });
+  await sessionNew.click();
 }
 
 async function sendPrompt(page, text) {

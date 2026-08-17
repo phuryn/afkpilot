@@ -629,11 +629,11 @@ body.rail-resizing * {
     var(--vscode-list-activeSelectionBackground) 28%
   );
 }
-/* Conversation overflow (Ôő») in the top-right cluster: Remote, History, Ôő»,
-   then (desktop only) a separator + Panel. Only rail hosts render the slot ÔÇö
+/* Conversation overflow (⋯) in the top-right cluster: Remote, History, New, ⋯,
+   then (desktop only) a separator + Panel. Only rail hosts render the slot —
    VS Code has no session header, so its gear still carries the Session group.
    The separator lives on the Panel toggle (desktop inject), not here: a remote
-   client has no panel, so a trailing rule after Ôő» would be a dangling divider. */
+   client has no panel, so a trailing rule after ⋯ would be a dangling divider. */
 #session-head-actions {
   display: flex;
   flex: 0 0 auto;
@@ -1110,6 +1110,14 @@ a:hover {
   box-shadow: 0 -4px 12px var(--vscode-widget-shadow);
   z-index: 50;
 }
+/* Shrink-to-fit otherwise takes the fineprint as one line (Claude/Codex
+   "Last prompt" copy is long). 350px still reads on the phone profile. */
+#context-popover {
+  max-width: 350px;
+  box-sizing: border-box;
+}
+#context-popover .popover-fineprint,
+#context-popover .popover-info { white-space: normal; }
 /* .history-popover sets display:flex, which would otherwise beat the UA
    [hidden]{display:none} rule (author styles win), so it could never hide. */
 .toolbar-popover[hidden] { display: none; }
@@ -1400,6 +1408,8 @@ a:hover {
 .provider-status-badge.dot-unread { background: var(--vscode-charts-green); }
 .provider-status-badge.dot-error { background: var(--vscode-errorForeground); }
 .gear-lead .provider-glyph { margin-right: 1px; }
+.model-picker-row .gear-lead { min-width: 0; }
+.model-picker-row .model-picker-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .model-provider-heading { margin-top: 4px; }
 
 .msg {

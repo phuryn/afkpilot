@@ -126,13 +126,29 @@
     return new Date(ts).toLocaleDateString();
   }
 
+  // Prefer the description's versioned lead when the advertised name is only a
+  // family label (Claude: "Sonnet" + "Sonnet 5 · …" → "Sonnet 5"). Grok and
+  // Codex already bake the generation into `name`, so this is a no-op there.
+  function modelPickerLabel(model) {
+    const name = String((model && (model.name || model.modelId)) || "").trim();
+    const lead = String((model && model.description) || "").split("·")[0].trim();
+    if (!lead) return name;
+    if (!name) return lead;
+    const family = name.replace(/\s*\([^)]*\)\s*$/, "").trim();
+    if (family && lead.toLowerCase().startsWith(family.toLowerCase()) && lead.length > name.length) {
+      return lead;
+    }
+    return name;
+  }
+
   // Resolve a model ID to its user-facing name (e.g. "grok-build" → "Grok Build")
   // using the availableModels list from session/new. Falls back to the ID when
   // the model isn't in the list or has no name, so the label is never blank.
   function modelDisplayName(modelId, availableModels) {
     if (!modelId) return "";
     const m = (availableModels || []).find((x) => x && x.modelId === modelId);
-    return (m && m.name) || modelId;
+    if (!m) return modelId;
+    return modelPickerLabel(m) || modelId;
   }
 
   // Mic button state machine for voice control:
@@ -1355,7 +1371,7 @@
     return header.join("\n") + (body ? body + "\n" : "");
   }
 
-  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, commandProgramLabel, commandTextPreview, extractToolResultOutput, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents };
+  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, commandProgramLabel, commandTextPreview, extractToolResultOutput, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents };
 
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;

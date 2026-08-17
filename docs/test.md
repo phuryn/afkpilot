@@ -55,6 +55,24 @@ Second-order traps worth knowing, both of which have bitten:
 - **A green run is not a passing suite if it flakes.** `e2e:lifecycle` was
   green two runs in three while a real bug was live. Judge it on a series, not
   on one result.
+- **A fallback in a test is usually a bug in disguise.** A branch that says "try
+  the new way, else the old way" passes when the thing under test is *absent*,
+  which is the one case worth failing on. Both instances on 2026-08-16/17 were
+  in this suite: `e2e:legacy` sent a `setBusy` after the mic stopped and so
+  papered over an `offlineHold` that never cleared — a green run there was not
+  evidence the defect was fixed; and `clickNewSession` fell back to the overflow
+  menu, which looked like host-version tolerance but was not, because
+  `#session-new` comes from the vendored `chat.js` the **relay** serves and
+  therefore tracks the deploy, never the installed extension. That fallback
+  could only have fired if the injection broke, and it would have clicked the
+  menu and passed. Both removed; assert the one true path and let it fail loudly.
+- **Don't assert a control that only exists in some states.** The conversation
+  overflow renders `if (record)`, so with no active conversation it is correctly
+  absent. An assertion that opened it passed only while New was itself the thing
+  rendering it. When coverage needs a state the suite is not in, move the
+  coverage to a harness that has that state — the extension's DOM tests here —
+  rather than guarding it with a conditional, which reintroduces the fallback
+  above.
 
 ## Relay tests
 

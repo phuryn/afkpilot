@@ -304,10 +304,12 @@ try {
   const layout = await page.evaluate(() => {
     const bar = document.querySelector(".top-bar").getBoundingClientRect();
     const brand = document.querySelector(".top-bar .afk-brand").getBoundingClientRect();
-    // The LAST VISIBLE icon, not #new-btn specifically. New moved into the
-    // conversation's overflow menu, so the top bar's own New is hidden and its
-    // rect is 0 — measuring it asserted nothing. What matters is that whatever
-    // icons remain still end at the right edge.
+    // The LAST VISIBLE icon, not #new-btn specifically. This deliberately does
+    // not care WHICH icons the header carries — New was in the overflow menu,
+    // moved back to the top bar on 2026-08-17, and a legacy host may show a
+    // different set again. Measuring a named button asserted nothing the day it
+    // was hidden and its rect was 0. What matters is that whatever icons remain
+    // still end at the right edge.
     const icons = [...document.querySelectorAll(".top-bar button, .top-bar #session-head-actions button")]
       .filter((el) => el.getBoundingClientRect().width > 0);
     const last = icons[icons.length - 1];
