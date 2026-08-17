@@ -969,6 +969,10 @@
       voiceKeyterms: [],
       telemetryEnabled: true,
       providers: [],
+      // Host-owned, never latched locally: an older host that ignores
+      // refreshProviders leaves this false and the button stays idle rather
+      // than spinning on a refresh that is never coming.
+      providersChecking: false,
       extVersion: "",
       cliVersion: "",
       hostKind: "",
@@ -1228,6 +1232,7 @@
     let query = "";
     let pendingRestore = null;
     let aboutChecked = false;
+    let providersChecked = false;
     const post = typeof opts.post === "function" ? opts.post : () => {};
     const apply = typeof opts.apply === "function" ? opts.apply : null;
     const onLocal = typeof opts.onLocal === "function" ? opts.onLocal : null;
@@ -1315,6 +1320,33 @@
       post({ type: "checkGrokUpdate" });
     }
 
+    /** Whether this surface may ask the desk to re-observe its accounts. Remote
+     *  clients see the answer — `providerState` is mirrored — but must not spawn
+     *  the desk's CLIs to get it, which is why the rows there are status-only. */
+    function canRefreshProviders() {
+      return !env.isRemote && env.providersKnown === true;
+    }
+
+    function requestProvidersRefresh() {
+      if (!canRefreshProviders()) return;
+      post({ type: "refreshProviders" });
+    }
+
+    /**
+     * Opening the page is itself the request. What the rows claim comes from a
+     * persisted flag and a cached CLI path, so arriving here without asking is
+     * the most common way to read something that stopped being true.
+     *
+     * Latched like maybeCheckAbout: paint() runs on every repaint and every
+     * host update, and this must fire once per visit, not once per frame.
+     */
+    function maybeRefreshProviders() {
+      if (providersChecked || categoryId !== "providers" || query.trim()) return;
+      if (!canRefreshProviders()) return;
+      providersChecked = true;
+      requestProvidersRefresh();
+    }
+
     function runAction(row) {
       if (row.local) {
         if (onClose && !opts.standalone) onClose();
@@ -1334,6 +1366,7 @@
       const focus = describeFocus(container, container.ownerDocument && container.ownerDocument.activeElement);
       ensureCategory();
       maybeCheckAbout();
+      maybeRefreshProviders();
       const searching = !!query.trim();
       const shownCats = cats();
       const page = CATEGORIES.find((c) => c.id === categoryId) || shownCats[0];
@@ -1422,6 +1455,19 @@
       head.appendChild(crumb);
       const headActions = document.createElement("div");
       headActions.className = "settings-head-actions";
+      // Above the rows, beside the breadcrumb — the strip "Restore defaults"
+      // already owns, which Providers leaves empty (restore: false).
+      if (!searching && page && page.id === "providers" && canRefreshProviders()) {
+        const checking = snapshot.providersChecking === true;
+        const refresh = document.createElement("button");
+        refresh.type = "button";
+        refresh.className = "settings-refresh";
+        refresh.textContent = checking ? "Checking…" : "Refresh";
+        refresh.disabled = checking;
+        if (checking) refresh.setAttribute("aria-busy", "true");
+        refresh.onclick = (e) => { e.stopPropagation(); requestProvidersRefresh(); };
+        headActions.appendChild(refresh);
+      }
       const changes = !searching && page && page.restore
         ? restoreChanges(page.id, snapshot, env)
         : [];
@@ -1515,6 +1561,7 @@
       function selectCategory(next) {
         if (!next) return;
         if (next !== "about") aboutChecked = false;
+        if (next !== "providers") providersChecked = false;
         categoryId = next;
         query = "";
         dismissRestoreConfirm();
@@ -1668,6 +1715,7 @@
       },
       setCategory(id) {
         if (id !== "about") aboutChecked = false;
+        if (id !== "providers") providersChecked = false;
         categoryId = id || "general";
         query = "";
         dismissRestoreConfirm();

@@ -307,6 +307,9 @@
     activeProvider: "grok",
     providersKnown: false,
     providers: [],
+    // Settings → Providers re-observation in flight. Host-owned; see the
+    // `providerState` case for why the client never sets it on its own.
+    providersChecking: false,
     onboardingMode: null,
     onboardingInfo: {},
     codexInstall: { phase: "idle", receivedBytes: 0, totalBytes: 0, reason: "" },
@@ -377,6 +380,10 @@
     // whether it works — we offer it and let the host latch this off the first
     // time the CLI answers -32601 (the text falls back to the queue, never lost).
     steerSupported: true,
+    // Claude Code has no mid-turn interject, so a message typed while it is
+    // working is always SCHEDULED, never steered — whatever the steer-by-default
+    // setting says (owner, 2026-08-17). Offering Steer there would promise the
+    // running turn hears you now, and it does not. See steerableProvider().
     lastTurnUsage: null, // last prompt's billing split (#53), for the donut popover
     sessionUsage: null, // session-cumulative billing — summed by the host, not grok
     activeAgentEl: null,
@@ -2258,6 +2265,7 @@
       voiceKeyterms: Array.isArray(state.voiceKeyterms) ? state.voiceKeyterms : [],
       telemetryEnabled: state.telemetryEnabled,
       providers: state.providers || [],
+      providersChecking: !!state.providersChecking,
       extVersion: state.extVersion,
       cliVersion: state.cliVersion,
       hostKind: state.hostKind,
@@ -2596,7 +2604,14 @@
 
     // Model + effort both restart or race the session, so they are locked while
     // a turn or session startup is in flight (the same busy signal as Send).
-    const settingsLocked = state.busy;
+    //
+    // Also locked when NOTHING can answer: with no usable agent there is no
+    // model to choose between, and an enabled picker offering a list you cannot
+    // act on is worse than one that plainly says not yet. Connect an agent and
+    // it unlocks with that agent's own default selected (owner, 2026-08-17).
+    const anyUsableProvider = !state.providersKnown
+      || (state.providers || []).some((p) => p.connected && p.needsLogin !== true);
+    const settingsLocked = state.busy || !anyUsableProvider;
 
     // Until the session's model info arrives (its name + advertised effort menu),
     // don't show a guessed model or a stale effort ladder — show a Loading state.
@@ -2605,12 +2620,19 @@
     const nameBtn = document.createElement("button");
     nameBtn.className = "toolbar-btn model-name-btn" + (settingsLocked || !modelLoaded ? " disabled" : "");
     const ownModels = state.availableModels.filter((model) => !model.provider || model.provider === state.activeProvider);
-    const modelName = modelLoaded ? (modelDisplayName(state.currentModelId, ownModels) || "Grok Build") : "Loading…";
-    nameBtn.innerHTML = `<span class="btn-label">${escapeHtml(truncate(modelName, 16))}</span>`;
+    // With no agent able to answer, show that rather than the last model a
+    // session happened to remember. "GPT-5.6 Sol" sitting under the composer
+    // reads as a working selection when nothing can run at all.
+    const modelName = !anyUsableProvider
+      ? "Models unavailable"
+      : (modelLoaded ? (modelDisplayName(state.currentModelId, ownModels) || "Grok Build") : "Loading…");
+    nameBtn.innerHTML = `<span class="btn-label">${escapeHtml(truncate(modelName, 18))}</span>`;
     nameBtn.disabled = settingsLocked || !modelLoaded;
-    nameBtn.title = !modelLoaded
-      ? "Loading the session…"
-      : (settingsLocked ? `${modelName} — available once the session is ready` : `${modelName} — click to change`);
+    nameBtn.title = !anyUsableProvider
+      ? "Connect an agent to choose a model"
+      : (!modelLoaded
+        ? "Loading the session…"
+        : (settingsLocked ? `${modelName} — available once the session is ready` : `${modelName} — click to change`));
     if (!settingsLocked && modelLoaded) nameBtn.onclick = (e) => { e.stopPropagation(); renderModelPicker(); };
     row.appendChild(nameBtn);
 
@@ -2740,14 +2762,24 @@
     }
   }
 
-  /** Gear account rows: only when nothing is connected, or a connected
-   *  account needs sign-in. Healthy connected accounts live in Settings. */
+  /**
+   * Gear account rows: ONLY while nothing can answer. Once any agent is usable
+   * the gear stops carrying accounts entirely and Settings → Providers owns
+   * them (owner, 2026-08-17).
+   *
+   * This used to stay visible whenever any connected account needed a sign-in,
+   * which meant a working setup with one lapsed extra account kept a
+   * half-broken Accounts list in the quick menu forever. The gear's job is to
+   * get someone unstuck; a second account that needs attention is management,
+   * not a blocker.
+   *
+   * "Usable", not "connected" — a linked account whose credentials lapsed
+   * cannot answer, so it must not count as the thing that hides this.
+   */
   function gearShowsProviderAccounts() {
     if (IS_REMOTE || !state.providersKnown) return false;
     const list = state.providers || [];
-    const anyConnected = list.some((p) => p.connected);
-    const needsAttention = list.some((p) => p.connected && p.needsLogin === true);
-    return !anyConnected || needsAttention;
+    return !list.some((p) => p.connected && p.needsLogin !== true);
   }
 
   function renderProviderAccounts() {
@@ -3489,6 +3521,21 @@
     // Four-point sparkle — distinct from the Grok/Codex marks, currentColor.
     claude: "M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z",
   };
+
+  /**
+   * Whether the agent running this session can hear a mid-turn message.
+   *
+   * Steer is `_x.ai/interject`, an xAI extension to ACP — so it is a GROK
+   * capability, not an ACP one. Codex's adapter answers -32601 and the text
+   * falls back to the queue, and Claude Code has no interject at all. Both
+   * therefore schedule instead, and neither is offered a button that describes
+   * something its agent cannot do.
+   *
+   * An absent provider means an older host that only ever ran Grok.
+   */
+  function steerableProvider() {
+    return state.activeProvider !== "claude" && state.activeProvider !== "codex";
+  }
 
   function providerDisplayName(provider) {
     if (provider === "codex") return "Codex";
@@ -6682,7 +6729,12 @@
     if (welcome) {
       welcome.hidden = false;
       const onb = $("welcome-onboarding");
-      if (onb) onb.innerHTML = "";
+      // Keep a just-shown "Connected" confirmation. Connecting an agent starts a
+      // fresh session for it, and that session swap arrives as clearMessages —
+      // so wiping the panel here erased the very confirmation the swap was
+      // announcing, which is why Codex and Claude never showed one. Any other
+      // panel is genuinely stale at this point and still goes.
+      if (onb && state.onboardingMode !== "provider-connected") onb.innerHTML = "";
       // A host clearMessages during an optimistic new-session transition must
       // not replace the paired "Loading conversation" veil with Starting — the
       // click already owns that wait. Otherwise the rail highlights the
@@ -6761,10 +6813,98 @@
     closePreviewOverlay();
   }
 
-  function showOnboarding(mode, info) {
+  /** Acts that open a terminal we cannot observe finishing. */
+  const LAUNCH_ACTS = ["runInstall", "runLogin", "connectProvider"];
+  const launchKey = (act, provider) => act + ":" + (provider || "");
+
+  /**
+   * Remember that a terminal was launched, and re-apply that on every render.
+   *
+   * Clicking one of these re-posts the onboarding state from the host, so the
+   * panel is rebuilt immediately — a mark written straight onto the DOM node
+   * vanished on the very next frame, which is why it looked like nothing had
+   * happened even after pressing the button twice.
+   *
+   * Keyed per mode, so moving to a different panel starts clean; a re-render of
+   * the SAME panel (a failed re-check) keeps it, because the terminal really was
+   * opened and pressing it again just stacks another login on top.
+   */
+  function markOnboardingLaunched(act, provider) {
+    if (state.onboardingRanMode !== state.onboardingMode) {
+      state.onboardingRanMode = state.onboardingMode;
+      state.onboardingRan = [];
+      state.onboardingLaunched = [];
+    }
+    const key = launchKey(act, provider);
+    if (!state.onboardingRan.includes(key)) state.onboardingRan.push(key);
+    applyOnboardingLaunchState();
+  }
+
+  /**
+   * The HOST opened a login terminal — from a Settings → Providers connect, or
+   * from a connect tile it handled itself. A click in this webview is not the
+   * only way one gets opened, and marking only on click meant an automatically
+   * launched terminal left the button looking untouched.
+   *
+   * Recorded per provider rather than per button, because the same launch is
+   * spelled `runLogin` on Grok's panel and `connectProvider` on the adapters'.
+   */
+  function markOnboardingLaunchedByHost(provider) {
+    if (state.onboardingRanMode !== state.onboardingMode) {
+      state.onboardingRanMode = state.onboardingMode;
+      state.onboardingRan = [];
+      state.onboardingLaunched = [];
+    }
+    const list = state.onboardingLaunched || (state.onboardingLaunched = []);
+    if (provider && !list.includes(provider)) list.push(provider);
+    if (!provider && !list.includes("*")) list.push("*");
+  }
+
+  /**
+   * Once a terminal has been opened, the next thing to press is the re-check —
+   * so it takes the primary styling and the launch button steps back to a dim
+   * secondary with a done mark. The launch button stays clickable: re-running a
+   * login is legitimate if the terminal was closed by accident.
+   */
+  function applyOnboardingLaunchState() {
+    const onb = $("welcome-onboarding");
+    if (!onb) return;
+    if (state.onboardingRanMode !== state.onboardingMode) return;
+    const ran = state.onboardingRan || [];
+    const launched = state.onboardingLaunched || [];
+    if (!ran.length && !launched.length) return;
+    // The panel's own provider, for Grok's `runLogin` button which carries none.
+    const panelProvider = (state.onboardingInfo && state.onboardingInfo.provider)
+      || (state.onboardingMode === "codex-login" ? "codex"
+        : state.onboardingMode === "claude-login" ? "claude"
+        : state.onboardingMode === "auth-required" ? "grok" : undefined);
+    let anyRan = false;
+    for (const btn of onb.querySelectorAll(".onb-action")) {
+      const act = btn.dataset.act;
+      if (!LAUNCH_ACTS.includes(act)) continue;
+      const forProvider = btn.dataset.provider || panelProvider;
+      const hostLaunched = launched.includes("*")
+        || (forProvider && launched.includes(forProvider));
+      if (!ran.includes(launchKey(act, btn.dataset.provider)) && !hostLaunched) continue;
+      anyRan = true;
+      btn.classList.add("onb-ran", "onb-secondary");
+      if (!btn.querySelector(".onb-ran-mark")) {
+        btn.insertAdjacentHTML("afterbegin", `<span class="onb-ran-mark">${ICON.check}</span>`);
+      }
+    }
+    if (!anyRan) return;
+    for (const btn of onb.querySelectorAll('.onb-action[data-act="recheckProvider"], .onb-action[data-act="recheck"]')) {
+      btn.classList.remove("onb-secondary");
+    }
+  }
+
+  /** `beforeRender` runs after the mode is set and before markup is built, so a
+   *  host-launched terminal can be recorded against the panel it belongs to. */
+  function showOnboarding(mode, info, beforeRender) {
     info = info || {};
     state.onboardingMode = mode;
     state.onboardingInfo = info;
+    if (beforeRender) beforeRender();
     const welcome = $("welcome");
     if (welcome) welcome.hidden = false;
     state.welcomeVisible = true;
@@ -6781,6 +6921,24 @@
         `</div>`;
       return;
     }
+    if (mode === "provider-connected") {
+      // A successful re-check used to leave a bare empty session, which reads
+      // identically to "nothing happened" — the one moment someone most wants
+      // to be told it worked. It clears itself the instant a message is added
+      // (addMessage calls clearWelcome), so it never survives into a real
+      // conversation and does not need dismissing.
+      const id = info.provider || "grok";
+      const done = id === "codex"
+        ? "You can start working with OpenAI!"
+        : id === "claude" ? "You can start clauding!" : "You can start grokking!";
+      if (ver) setWelcomeStatus("Connected", false);
+      onb.innerHTML =
+        `<div class="onb onb-connected">` +
+          `<p class="onb-heading"><span class="onb-ok">${ICON.check}</span>Connected</p>` +
+          `<p class="onb-desc">${done}</p>` +
+        `</div>`;
+      return;
+    }
     if (mode === "connect-agent") {
       if (ver) setWelcomeStatus("Connect an agent", false);
       onb.innerHTML =
@@ -6788,14 +6946,21 @@
           `<p class="onb-heading">Connect an agent</p>` +
           `<p class="onb-desc">Choose the command-line agent that will own this conversation.</p>` +
           `<div class="onb-agent-grid">` +
+            // One row each, not a grid: three side-by-side tiles squeezed the
+            // name and the CLI into a column too narrow to read either, and the
+            // list is short enough that stacking costs nothing. Each row names
+            // the agent and the CLI it will install — "Recommended default"
+            // used to describe our ranking where the others described what the
+            // thing IS, so the row a newcomer reads first was the only one not
+            // saying what it would put on their machine.
             `<button class="onb-agent-tile primary onb-action" type="button" data-act="connectProvider" data-provider="grok">` +
-              `<span class="onb-agent-mark">${providerLogoMarkup("grok")}</span><span><strong>Grok</strong><small>Recommended default</small></span>` +
+              `<span class="onb-agent-mark">${providerLogoMarkup("grok")}</span><span><strong>Grok Build (Recommended)</strong><small>Grok Build CLI</small></span>` +
             `</button>` +
             `<button class="onb-agent-tile onb-action" type="button" data-act="connectProvider" data-provider="codex">` +
               `<span class="onb-agent-mark">${providerLogoMarkup("codex")}</span><span><strong>Codex</strong><small>OpenAI Codex CLI</small></span>` +
             `</button>` +
             `<button class="onb-agent-tile onb-action" type="button" data-act="connectProvider" data-provider="claude">` +
-              `<span class="onb-agent-mark">${providerLogoMarkup("claude")}</span><span><strong>Claude</strong><small>Claude Code CLI</small></span>` +
+              `<span class="onb-agent-mark">${providerLogoMarkup("claude")}</span><span><strong>Claude Code</strong><small>Claude Code CLI</small></span>` +
             `</button>` +
           `</div>` +
         `</div>`;
@@ -6902,6 +7067,9 @@
     } else {
       onb.innerHTML = "";
     }
+    // Every branch above rebuilds innerHTML, so the launched-terminal state has
+    // to be re-applied here rather than living on the node.
+    applyOnboardingLaunchState();
   }
 
   function makeCollapsible(el, container) {
@@ -7766,6 +7934,54 @@
     // cursor/Composer path); command lets the terminal commandOutput attach by
     // string (the grok-build path). Both reference the same `details` node.
     state.pendingCommandDetails.push({ command, details, done: false, toolCallId });
+  }
+
+  /**
+   * Fold a `tool_call_update` back into its row's label and detail.
+   *
+   * Grok puts the arguments on the FIRST `tool_call`, so its rows read correctly
+   * the moment they appear. Claude does not: the first call is a generic
+   * `{title:"Read File", rawInput:{}}` and the real `{title:"Read package.json",
+   * rawInput:{file_path:…}}` arrives on an update — which nothing was applying,
+   * so a Claude turn rendered as a flat list of bare verbs: Run, Read, Search,
+   * with no argument, input or output.
+   *
+   * Applies to every provider, not just Claude — it is simply a no-op where the
+   * first call was already complete, which is the Grok case. That is also why
+   * the merge is field by field and skips null: Grok's updates frequently carry
+   * `title: null`, and a wholesale replace would blank a good label. Claude also
+   * sends an update carrying ONLY a toolCallId and `_meta` (the tool response),
+   * which would erase everything gathered so far.
+   */
+  function refreshToolRowFromUpdate(update) {
+    const id = update && update.toolCallId;
+    if (!id) return;
+    const item = state.toolItemsByToolCallId.get(id);
+    if (!item || !item._call) return;
+    const merged = { ...item._call };
+    for (const key of ["title", "kind", "status", "locations", "rawOutput"]) {
+      if (update[key] !== undefined && update[key] !== null) merged[key] = update[key];
+    }
+    // Arguments accumulate across updates (`{}` → `{file_path}` → `{file_path,
+    // limit}`), so merge rather than replace or a later, sparser update would
+    // drop the path.
+    for (const key of ["rawInput", "input"]) {
+      if (update[key] && typeof update[key] === "object") {
+        merged[key] = { ...(item._call[key] || {}), ...update[key] };
+      }
+    }
+    item._call = merged;
+    const labelEl = item.querySelector(".tool-item-label");
+    if (labelEl) {
+      const next = toolLabel(merged);
+      if (next && next !== labelEl.textContent) labelEl.textContent = next;
+    }
+    // A shell command that only shows up on the update still earns its IN/OUT
+    // box; attachCommandDetails is a no-op once the row already has one.
+    const args = merged.rawInput || merged.input || {};
+    const cmd = typeof args.command === "string" ? args.command.trim()
+      : typeof args.cmd === "string" ? args.cmd.trim() : "";
+    if (cmd && !item.querySelector(".cmd-block")) attachCommandDetails(item, cmd, id);
   }
 
   function attachCommandOutput(details, msg) {
@@ -11530,7 +11746,7 @@
   // can't interject, and (defensively) not being busy at all. Any of those fall
   // back to the queue, which is the safe home for the text either way.
   function queueOutgoing(text) {
-    if (state.steerByDefault && state.steerSupported && state.busy && !state.busyLocked) {
+    if (state.steerByDefault && state.steerSupported && steerableProvider() && state.busy && !state.busyLocked) {
       vscode.postMessage({ type: "steerSend", text });
       return;
     }
@@ -11632,7 +11848,9 @@
     // Rendered whenever the CLI supports it; `body.turn-busy` (updateSendButton)
     // does the show/hide, so a replay that delivers queuedSends before agentStart
     // still ends up with the button once busy lands.
-    if (state.steerSupported) {
+    // Not for Claude Code: it has no mid-turn interject, so the button would
+    // offer to do something the agent cannot do. Its messages stay scheduled.
+    if (state.steerSupported && steerableProvider()) {
       const steerBtn = document.createElement("button");
       steerBtn.className = "queued-action queued-steer";
       steerBtn.title = "Steer — submit now without interrupting Grok";
@@ -11749,6 +11967,10 @@
         state.providersKnown = true;
         state.providers = Array.isArray(msg.providers) ? msg.providers.filter((provider) =>
           provider && (provider.id === "grok" || provider.id === "codex" || provider.id === "claude")) : [];
+        // Read, never latched on click: a host too old to know `refreshProviders`
+        // sends no frame at all, and a locally-set flag would spin forever.
+        // Absent means idle, which is also what every pre-refresh host means.
+        state.providersChecking = msg.checking === true;
         // Connecting an additional account happens from the gear while the
         // current transcript stays mounted. The login/recovery view temporarily
         // borrows the welcome overlay; dismiss it when the provider it was
@@ -12445,6 +12667,9 @@
           markToolFailed(id, hint ? failure + "\n" + hint : failure);
           break;
         }
+        // Fold the refined title and arguments into the row before the diff
+        // pass — for Claude this is where a row stops being a bare verb.
+        refreshToolRowFromUpdate(msg.call);
         applyToolDiffs(msg.call);
         break;
       }
@@ -12862,7 +13087,12 @@
         resetForNewSession();
         break;
       case "onboarding":
-          showOnboarding(msg.state, { platform: msg.platform, reason: msg.reason, provider: msg.provider });
+          // Record the host-launched terminal BEFORE rendering, so the panel is
+          // painted with the done mark already on rather than flashing an
+          // untouched button first.
+          showOnboarding(msg.state, { platform: msg.platform, reason: msg.reason, provider: msg.provider }, () => {
+            if (msg.launched) markOnboardingLaunchedByHost(msg.provider);
+          });
         break;
       case "error":
         if (state.repoSwitchPending) {
@@ -13522,6 +13752,7 @@
       e.preventDefault();
       e.stopPropagation();
       const act = onbAction.dataset.act;
+      if (LAUNCH_ACTS.includes(act)) markOnboardingLaunched(act, onbAction.dataset.provider);
       if (act === "runInstall") vscode.postMessage({ type: "runInstallCmd" });
       else if (act === "installCodex") vscode.postMessage({ type: "installCodex" });
       else if (act === "cancelCodexInstall") vscode.postMessage({ type: "cancelCodexInstall" });

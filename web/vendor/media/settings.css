@@ -200,6 +200,7 @@ body.settings-page .settings-surface {
 }
 
 .settings-restore,
+.settings-refresh,
 .settings-action {
   border: 1px solid var(--vscode-button-border, var(--vscode-editorWidget-border));
   border-radius: 4px;
@@ -211,8 +212,14 @@ body.settings-page .settings-surface {
 }
 
 .settings-restore:hover,
+.settings-refresh:hover,
 .settings-action:hover {
   background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
+}
+
+.settings-refresh[disabled] {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .settings-restore-confirm {
