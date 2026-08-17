@@ -1039,6 +1039,7 @@
                       <ul>
                         <li>Dragging a file onto the composer</li>
                         <li>Adding a project folder — that opens a file picker on the machine itself</li>
+                        <li>Connecting or signing out of an agent account — Grok, Codex and Claude Code all sign in through their own CLI on the machine, so the browser shows you which are connected but cannot change it</li>
                         <li>Linking a new machine — that starts in the extension or Desktop app</li>
                         <li>Video — images cross the wire, video never does</li>
                         <li>Photos attached before you installed this version — their previews were not kept</li>
@@ -1049,10 +1050,10 @@
               </details>
 
               <details class="faq-item" name="faq">
-                <summary>Does it work with OpenAI models?</summary>
+                <summary>Does it work with Codex and Claude Code?</summary>
                 <div class="faq-body">
-                  <p>Yes. Grok Build — the VS Code extension and the desktop app — can connect <b>OpenAI Codex</b> alongside Grok: models from both providers appear in one picker, and every conversation keeps the provider it started with. Connect or sign out inside the app (the gear in VS Code, Settings on the desktop); if the Codex CLI isn't installed, the app offers to install it for you.</p>
-                  <p>From the browser, AFK Pilot shows which providers are connected and drives conversations on either one. Signing in and out stays at the desk.</p>
+                  <p>Yes — both. Grok Build — the VS Code extension and the desktop app — connects <b>OpenAI Codex</b> and <b>Claude Code</b> alongside Grok. Models from every connected agent appear in one picker, and each conversation keeps the agent it started with, so you can run all three side by side. Connect or sign out in Settings → Providers; if the Codex CLI isn't installed, the app offers to install it for you.</p>
+                  <p>From the browser, AFK Pilot shows which agents are connected and drives conversations on any of them. Signing in and out stays at the desk, since each agent authenticates through its own CLI on that machine.</p>
                 </div>
               </details>
 

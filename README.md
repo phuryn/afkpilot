@@ -1,6 +1,6 @@
 # AFK Pilot
 
-[![License: FSL-1.1-MIT](https://img.shields.io/badge/License-FSL--1.1--MIT-blue.svg)](LICENSE) [![Agents](https://img.shields.io/badge/Agents-Grok%20Build%20%C2%B7%20Codex-000000)](https://github.com/phuryn/grok-build-vscode) [![Remote Control](https://img.shields.io/badge/Remote%20Control-afkpilot.com-0E639C)](https://afkpilot.com) [![Companion](https://img.shields.io/badge/Companion-grok--build--vscode-24292E?logo=github&logoColor=white)](https://github.com/phuryn/grok-build-vscode)
+[![License: FSL-1.1-MIT](https://img.shields.io/badge/License-FSL--1.1--MIT-blue.svg)](LICENSE) [![Agents](https://img.shields.io/badge/Agents-Grok%20Build%20%C2%B7%20Codex%20%C2%B7%20Claude%20Code-000000)](https://github.com/phuryn/grok-build-vscode) [![Remote Control](https://img.shields.io/badge/Remote%20Control-afkpilot.com-0E639C)](https://afkpilot.com) [![Companion](https://img.shields.io/badge/Companion-grok--build--vscode-24292E?logo=github&logoColor=white)](https://github.com/phuryn/grok-build-vscode)
 
 **Watch, approve and steer your coding agent from your phone.** AFK Pilot pairs
 the [Grok Build for VS Code (Community)](https://github.com/phuryn/grok-build-vscode)
