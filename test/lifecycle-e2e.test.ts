@@ -46,7 +46,13 @@ describe("lifecycle e2e harness", () => {
   it("resolves the sibling next to this repo unless GROK_BUILD_VSCODE is set", () => {
     const fromEnv = resolveExtensionRoot({ GROK_BUILD_VSCODE: "D:\\other\\ext" }, "C:\\relay");
     expect(fromEnv.replace(/\\/g, "/")).toMatch(/other\/ext$/);
-    const sibling = resolveExtensionRoot({}, "C:\\work\\grok-remote");
+    // Built with join, never a backslash literal. resolve() has no idea that a
+    // backslash separates anything on POSIX, so "C:\\work\\grok-remote" arrives
+    // as ONE relative segment there and the sibling resolves against cwd —
+    // /home/runner/work/afkpilot/afkpilot/grok-build-vscode on the runner. The
+    // assertion could never pass on Linux and only looked green because it was
+    // written on Windows.
+    const sibling = resolveExtensionRoot({}, join("C:", "work", "grok-remote"));
     expect(sibling.replace(/\\/g, "/")).toMatch(/work\/grok-build-vscode$/);
   });
 
