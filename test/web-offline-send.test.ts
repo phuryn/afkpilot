@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 const html = readFileSync(new URL("../web/chat.html", import.meta.url), "utf8");
 
 const helpersStart = html.indexOf("function isDeviceOfflineError(data)");
-const helpersEnd = html.indexOf("function persistOutboxMessage(raw, message)");
+const helpersEnd = html.indexOf("function persistOutboxMessage(raw, message, authored)");
 const helpers = html.slice(helpersStart, helpersEnd);
 
 const {
@@ -27,7 +27,11 @@ const {
   shouldReenterIdentityOnDeviceOffline,
   liveSendDisposition,
   isQueueReleaseMessage,
-  authoredTextFromMessage,
+  legacyOutboxAuthoredText,
+  authoredTextFromAuthoringSurface,
+  authoredStoreAfterPersist,
+  authoredStoreAfterRemoveOne,
+  authoredStoreAfterRemoveAll,
   outboxDispositionForMessage,
   liveOutboundAfterRemember,
   liveOutboundAfterAck,
@@ -37,6 +41,8 @@ const {
   authoredTextsFromLiveOutbound,
   queueAfterDropUnreplayable,
   liveOutboundAfterNamedDrop,
+  liveOutboundRecoveredByNonRetryable,
+  liveOutboundAfterNonRetryable,
 } = new Function(
   `${helpers}; return {
     isDeviceOfflineError,
@@ -52,7 +58,11 @@ const {
     shouldReenterIdentityOnDeviceOffline,
     liveSendDisposition,
     isQueueReleaseMessage,
-    authoredTextFromMessage,
+    legacyOutboxAuthoredText,
+    authoredTextFromAuthoringSurface,
+    authoredStoreAfterPersist,
+    authoredStoreAfterRemoveOne,
+    authoredStoreAfterRemoveAll,
     outboxDispositionForMessage,
     liveOutboundAfterRemember,
     liveOutboundAfterAck,
@@ -62,6 +72,8 @@ const {
     authoredTextsFromLiveOutbound,
     queueAfterDropUnreplayable,
     liveOutboundAfterNamedDrop,
+    liveOutboundRecoveredByNonRetryable,
+    liveOutboundAfterNonRetryable,
   };`,
 )() as {
   isDeviceOfflineError: (data: unknown) => boolean;
@@ -84,38 +96,64 @@ const {
     changesIdentity?: boolean;
   }) => "send" | "outbox" | "abandon-and-send";
   isQueueReleaseMessage: (message: unknown) => boolean;
-  authoredTextFromMessage: (message: unknown) => string;
-  outboxDispositionForMessage: (message: unknown) => "persist" | "recover" | "drop";
+  legacyOutboxAuthoredText: (message: unknown) => string;
+  authoredTextFromAuthoringSurface: (el: unknown) => string;
+  authoredStoreAfterPersist: (store: string[], text: string) => string[];
+  authoredStoreAfterRemoveOne: (store: string[], text: string) => string[];
+  authoredStoreAfterRemoveAll: (store: string[], texts: string[]) => string[];
+  outboxDispositionForMessage: (message: unknown, authored?: string) => "persist" | "recover" | "drop";
   liveOutboundAfterRemember: (
-    current: Array<{ raw: string; message: unknown }>,
+    current: Array<{ raw: string; message: unknown; authored?: string }>,
     raw: string,
     message: unknown,
-  ) => Array<{ raw: string; message: unknown }>;
+    authored?: string,
+  ) => Array<{ raw: string; message: unknown; authored?: string }>;
   liveOutboundAfterAck: (
-    current: Array<{ raw: string; message: unknown }>,
+    current: Array<{ raw: string; message: unknown; authored?: string }>,
     data: unknown,
-  ) => Array<{ raw: string; message: unknown }>;
+  ) => Array<{ raw: string; message: unknown; authored?: string }>;
   liveOutboundHeldByOffline: (
-    current: Array<{ raw: string; message: unknown }>,
+    current: Array<{ raw: string; message: unknown; authored?: string }>,
     data: unknown,
-  ) => Array<{ raw: string; message: unknown }>;
+  ) => Array<{ raw: string; message: unknown; authored?: string }>;
   liveOutboundAfterOfflineHold: (
-    current: Array<{ raw: string; message: unknown }>,
+    current: Array<{ raw: string; message: unknown; authored?: string }>,
     data: unknown,
-  ) => Array<{ raw: string; message: unknown }>;
+  ) => Array<{ raw: string; message: unknown; authored?: string }>;
   liveOutboundRecoveredByOffline: (
-    current: Array<{ raw: string; message: unknown }>,
+    current: Array<{ raw: string; message: unknown; authored?: string }>,
     data: unknown,
   ) => string[];
   authoredTextsFromLiveOutbound: (
-    current: Array<{ raw: string; message: unknown }>,
+    current: Array<{ raw: string; message: unknown; authored?: string }>,
   ) => string[];
   queueAfterDropUnreplayable: (current: string[]) => { kept: string[]; recovered: string[] };
   liveOutboundAfterNamedDrop: (
-    current: Array<{ raw: string; message: unknown }>,
+    current: Array<{ raw: string; message: unknown; authored?: string }>,
     data: unknown,
-  ) => Array<{ raw: string; message: unknown }>;
+  ) => Array<{ raw: string; message: unknown; authored?: string }>;
+  liveOutboundRecoveredByNonRetryable: (
+    current: Array<{ raw: string; message: unknown; authored?: string }>,
+    data: unknown,
+  ) => string[];
+  liveOutboundAfterNonRetryable: (
+    current: Array<{ raw: string; message: unknown; authored?: string }>,
+    data: unknown,
+  ) => Array<{ raw: string; message: unknown; authored?: string }>;
 };
+
+type SurfaceNode = {
+  classList?: { contains: (name: string) => boolean };
+  value?: string;
+  hidden?: boolean;
+  closest: (selector: string) => SurfaceNode | null;
+  querySelector?: (selector: string) => SurfaceNode | null;
+  querySelectorAll?: (selector: string) => SurfaceNode[];
+};
+
+function classListOf(...names: string[]) {
+  return { contains: (name: string) => names.includes(name) };
+}
 
 const deviceOfflineHandler = html.slice(
   html.indexOf("Swallowing the banner must not swallow the send"),
@@ -123,7 +161,7 @@ const deviceOfflineHandler = html.slice(
 );
 
 const sendPath = html.slice(
-  html.indexOf("var disposition = liveSendDisposition"),
+  html.indexOf("var authored = takePendingUiAuthored"),
   html.indexOf("getState: function ()"),
 );
 
@@ -263,9 +301,9 @@ describe("offline live-send hold", () => {
   });
 
   it("remembers a live send so Device offline can put it back in the outbox", () => {
-    expect(sendPath).toContain("rememberLiveOutbound(s, m)");
+    expect(sendPath).toContain("rememberLiveOutbound(s, m, authored)");
     expect(sendPath.indexOf('disposition === "send"'))
-      .toBeLessThan(sendPath.indexOf("rememberLiveOutbound(s, m)"));
+      .toBeLessThan(sendPath.indexOf("rememberLiveOutbound(s, m, authored)"));
     expect(html).toContain("rememberLiveOutbound(raw, JSON.parse(raw))");
     expect(html).toContain("acknowledgeLiveOutbound(data)");
     expect(html).toContain("forgetUnbouncedLiveOutbound()");
@@ -391,27 +429,32 @@ describe("offline live-send hold", () => {
       requestId: 3,
       optionId: "allow_once",
     });
+    const speech = JSON.stringify({ type: "summarizeSpeech", requestId: 9, text: "an agent reply" });
     const unknown = JSON.stringify({ type: "futureAuthoredFrame", text: "typed" });
     const prompt = sendRaw("later prompt", "sub-later");
     let live = liveOutboundAfterRemember([], created, JSON.parse(created));
-    live = liveOutboundAfterRemember(live, plan, JSON.parse(plan));
-    live = liveOutboundAfterRemember(live, question, JSON.parse(question));
-    live = liveOutboundAfterRemember(live, questionMap, JSON.parse(questionMap));
+    live = liveOutboundAfterRemember(live, plan, JSON.parse(plan), "plan the auth part again");
+    live = liveOutboundAfterRemember(live, question, JSON.parse(question), "the free-text answer");
+    live = liveOutboundAfterRemember(live, questionMap, JSON.parse(questionMap), "do the auth part");
     live = liveOutboundAfterRemember(live, permission, JSON.parse(permission));
+    live = liveOutboundAfterRemember(live, speech, JSON.parse(speech));
     live = liveOutboundAfterRemember(live, unknown, JSON.parse(unknown));
     live = liveOutboundAfterRemember(live, prompt, JSON.parse(prompt));
 
     expect(isQueueReleaseMessage(JSON.parse(plan))).toBe(false);
     expect(isQueueReleaseMessage(JSON.parse(prompt))).toBe(true);
-    expect(outboxDispositionForMessage(JSON.parse(plan))).toBe("recover");
+    expect(outboxDispositionForMessage(JSON.parse(plan))).toBe("drop");
+    expect(outboxDispositionForMessage(JSON.parse(plan), "plan the auth part again")).toBe("recover");
     expect(outboxDispositionForMessage(JSON.parse(permission))).toBe("drop");
     expect(outboxDispositionForMessage(JSON.parse(created))).toBe("drop");
+    expect(outboxDispositionForMessage(JSON.parse(speech), "")).toBe("drop");
     expect(outboxDispositionForMessage(JSON.parse(prompt))).toBe("persist");
-    expect(authoredTextFromMessage(JSON.parse(plan))).toBe("plan the auth part again");
-    expect(authoredTextFromMessage(JSON.parse(question))).toBe("the free-text answer");
-    expect(authoredTextFromMessage(JSON.parse(questionMap))).toBe("do the auth part");
-    expect(authoredTextFromMessage(JSON.parse(permission))).toBe("");
-    expect(authoredTextFromMessage(JSON.parse(unknown))).toBe("typed");
+    expect(legacyOutboxAuthoredText(JSON.parse(plan))).toBe("plan the auth part again");
+    expect(legacyOutboxAuthoredText(JSON.parse(question))).toBe("the free-text answer");
+    expect(legacyOutboxAuthoredText(JSON.parse(questionMap))).toBe("do the auth part");
+    expect(legacyOutboxAuthoredText(JSON.parse(permission))).toBe("");
+    expect(legacyOutboxAuthoredText(JSON.parse(speech))).toBe("");
+    expect(legacyOutboxAuthoredText(JSON.parse(unknown))).toBe("");
 
     const held = liveOutboundHeldByOffline(live, DEVICE_OFFLINE);
     expect(held.map((e) => e.raw)).toEqual([]);
@@ -419,7 +462,6 @@ describe("offline live-send hold", () => {
       "plan the auth part again",
       "the free-text answer",
       "do the auth part",
-      "typed",
     ]);
     live = liveOutboundAfterOfflineHold(live, DEVICE_OFFLINE);
     expect(live.map((e) => sendCorrelationId(e.message))).toEqual(["sub-later"]);
@@ -437,13 +479,116 @@ describe("offline live-send hold", () => {
       verdict: "rejected",
       comment: "plan the auth part again",
     });
+    const speech = JSON.stringify({ type: "summarizeSpeech", requestId: 9, text: "an agent reply" });
     const prefs = JSON.stringify({ type: "remotePreferences", showThinking: true });
-    const stripped = queueAfterDropUnreplayable([send, plan, prefs]);
+    const stripped = queueAfterDropUnreplayable([send, plan, speech, prefs]);
     expect(stripped.kept).toEqual([send, prefs]);
     expect(stripped.recovered).toEqual(["plan the auth part again"]);
     expect(authoredTextsFromLiveOutbound([
-      { raw: plan, message: JSON.parse(plan) },
+      { raw: plan, message: JSON.parse(plan), authored: "plan the auth part again" },
     ])).toEqual(["plan the auth part again"]);
+    expect(authoredTextsFromLiveOutbound([
+      { raw: speech, message: JSON.parse(speech) },
+    ])).toEqual([]);
+  });
+
+  it("captures typed text from the authoring control, not from frame fields", () => {
+    const feedback: SurfaceNode = { value: "plan the auth part again", closest: () => null };
+    const plan: SurfaceNode = {
+      classList: classListOf("card", "plan"),
+      closest: (sel) => sel === ".card.plan" ? plan : null,
+      querySelector: (sel) => sel === ".plan-feedback" ? feedback : null,
+    };
+    const planBtn: SurfaceNode = {
+      classList: classListOf(),
+      closest: (sel) => {
+        if (sel === ".card.plan") return plan;
+        if (sel === ".card-actions") return plan;
+        return null;
+      },
+    };
+    expect(authoredTextFromAuthoringSurface(planBtn)).toBe("plan the auth part again");
+
+    const other: SurfaceNode = { value: "do the auth part", hidden: false, closest: () => null };
+    const question: SurfaceNode = {
+      classList: classListOf("card", "question"),
+      closest: (sel) => sel === ".card.question" ? question : null,
+      querySelectorAll: (sel) => sel === ".question-other-input" ? [other] : [],
+    };
+    const submit: SurfaceNode = {
+      classList: classListOf(),
+      closest: (sel) => {
+        if (sel === ".card.question") return question;
+        if (sel === ".card-actions") return question;
+        return null;
+      },
+    };
+    expect(authoredTextFromAuthoringSurface(submit)).toBe("do the auth part");
+
+    const name: SurfaceNode = {
+      classList: classListOf("session-name-input"),
+      value: "Sprint planning",
+      closest: () => null,
+    };
+    expect(authoredTextFromAuthoringSurface(name)).toBe("Sprint planning");
+
+    const phrase: SurfaceNode = {
+      classList: classListOf("settings-text"),
+      value: "okay grok",
+      closest: () => null,
+    };
+    expect(authoredTextFromAuthoringSurface(phrase)).toBe("okay grok");
+
+    const overlay = {
+      classList: classListOf("confirm-overlay"),
+      closest(sel: string) { return sel === ".confirm-overlay" ? this : null; },
+      querySelector(sel: string) { return sel === ".confirm-input" ? confirmInput : null; },
+    } as SurfaceNode;
+    const confirmInput: SurfaceNode = {
+      classList: classListOf("confirm-input"),
+      value: "Rail title",
+      closest: () => overlay,
+    };
+    const ok: SurfaceNode = {
+      classList: classListOf("confirm-primary"),
+      closest: (sel) => sel === ".confirm-overlay" ? overlay : null,
+    };
+    expect(authoredTextFromAuthoringSurface(ok)).toBe("Rail title");
+    expect(authoredTextFromAuthoringSurface({
+      classList: classListOf(),
+      closest: () => null,
+    })).toBe("");
+  });
+
+  it("keeps authored drafts in a durable store until they are removed", () => {
+    let store = authoredStoreAfterPersist([], "plan the auth part again");
+    store = authoredStoreAfterPersist(store, "Sprint planning");
+    expect(store).toEqual(["plan the auth part again", "Sprint planning"]);
+    store = authoredStoreAfterRemoveOne(store, "plan the auth part again");
+    expect(store).toEqual(["Sprint planning"]);
+    store = authoredStoreAfterRemoveAll(store, ["Sprint planning", "missing"]);
+    expect(store).toEqual([]);
+  });
+
+  it("returns an untagged quota bounce's captured text instead of dropping it", () => {
+    const plan = JSON.stringify({
+      type: "exitPlanAnswer",
+      requestId: 1,
+      verdict: "rejected",
+      comment: "plan the auth part again",
+    });
+    const prompt = sendRaw("over quota", "sub-q");
+    let live = liveOutboundAfterRemember([], plan, JSON.parse(plan), "plan the auth part again");
+    live = liveOutboundAfterRemember(live, prompt, JSON.parse(prompt));
+    const quota = {
+      type: "error",
+      text: "Slow down — at most 20 messages per minute.",
+    };
+    expect(liveOutboundRecoveredByNonRetryable(live, quota)).toEqual([
+      "plan the auth part again",
+    ]);
+    live = liveOutboundAfterNonRetryable(live, quota);
+    expect(live.map((e) => sendCorrelationId(e.message))).toEqual(["sub-q"]);
   });
 
   it("an error-only returning host still clears grace and re-arms the fail timer", () => {
@@ -518,12 +663,23 @@ describe("offline live-send hold", () => {
       html.indexOf("function persistOutboxMessage"),
       html.indexOf("var liveOutbound = []"),
     );
-    expect(persistFn).toContain("outboxDispositionForMessage(message)");
+    expect(persistFn).toContain("outboxDispositionForMessage(message, authored)");
     expect(persistFn).toContain("recoverAuthoredTexts");
     expect(html).toContain("liveOutboundRecoveredByOffline");
     expect(html).toContain("recoverAuthoredFromLiveOutbound()");
     expect(html).toContain("queueAfterDropUnreplayable");
-    expect(sendPath).toContain("outboxDispositionForMessage(m) !== \"drop\"");
+    expect(html).toContain("authoredTextFromAuthoringSurface");
+    expect(html).toContain("takePendingUiAuthored");
+    expect(html).toContain("afk-authored:");
+    expect(html).toContain("authoredStoreAfterPersist(authoredDrafts");
+    expect(html).not.toContain("pendingAuthoredRecovery");
+    expect(html).not.toMatch(/if \(typeof message\.text === "string" && message\.text\) return message\.text/);
+    expect(html.slice(
+      html.indexOf("function handlePersistentDeviceOffline"),
+      html.indexOf("function beginDeviceOfflineGrace"),
+    )).toContain("flushPendingAuthoredRecovery()");
+    expect(sendPath).toContain("takePendingUiAuthored()");
+    expect(sendPath).toContain("isQueueReleaseMessage(m) || authored");
   });
 
   it("does not let a live capture's ready-probe snapshot cancel the persist timer", () => {

@@ -535,6 +535,14 @@ try {
     "[]",
     "a persisted plan answer must be dropped from the outbox, not flushed later",
   );
+  const authoredAfter = await planCommentPage.evaluate(
+    (deviceId) => sessionStorage.getItem(`afk-authored:${deviceId}`),
+    deviceId,
+  );
+  assert.ok(
+    authoredAfter === null || authoredAfter === "[]",
+    "a returned plan comment must leave the durable authored store",
+  );
   await planCommentPage.close();
   log("a persisted plan comment returns to the composer and leaves the outbox");
 

@@ -322,6 +322,26 @@ describe("lifecycle e2e harness", () => {
       ],
       prompt,
     )).toBe(false);
+    expect(queuedSendInterruptedAfterEcho(
+      [
+        { type: "userMessage", text: prompt, submissionId: "sub-queued" },
+        { type: "error", code: INTERRUPTED_SEND_CODE, submissionId: "sub-queued" },
+        { type: "userMessage", text: "lifecycle-alpha-two", submissionId: "sub-other" },
+        { type: "userMessage", text: prompt, submissionId: "sub-queued" },
+      ],
+      prompt,
+    )).toBe(false);
+    expect(classifyQueueRelease(
+      echoed,
+      prompt,
+      1,
+      [
+        { type: "userMessage", text: prompt, submissionId: "sub-queued" },
+        { type: "error", code: INTERRUPTED_SEND_CODE, submissionId: "sub-queued" },
+        { type: "userMessage", text: "lifecycle-alpha-two", submissionId: "sub-other" },
+        { type: "userMessage", text: prompt, submissionId: "sub-queued" },
+      ],
+    )).toBe(null);
     expect(errorMarksInterruptedSend({ type: "error", code: INTERRUPTED_SEND_CODE, text: "anything" })).toBe(true);
     expect(errorMarksInterruptedSend({ type: "error", text: INTERRUPT_PHRASE })).toBe(true);
     expect(errorMarksInterruptedSend({ type: "error", text: "CLI failed to start" })).toBe(false);

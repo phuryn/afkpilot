@@ -206,14 +206,17 @@ function sameSubmissionRepeatedAfter(list, start, echo, prompt) {
   for (let k = start; k < list.length; k++) {
     const frame = list[k];
     if (!frame) continue;
-    // Restart can replay a buffered userMessage after a valid pair.
-    // That replay is a replacement-host burst, not a second delivery.
+    // The only safe boundary is a replacement-host frame. A later
+    // different userMessage is another turn, not proof this one
+    // was not delivered twice.
     if (isReplacementHostFrameType(frame.type)) return false;
-    if (isDifferentSubmission(frame, echo, prompt)) return false;
     if (!frameEchoesPrompt(frame, prompt)) continue;
     const echoId = typeof echo.submissionId === "string" && echo.submissionId;
     const frameId = typeof frame.submissionId === "string" && frame.submissionId;
-    if (echoId && frameId) return echoId === frameId;
+    if (echoId && frameId) {
+      if (echoId === frameId) return true;
+      continue;
+    }
     return true;
   }
   return false;
