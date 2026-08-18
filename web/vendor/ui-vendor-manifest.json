@@ -15,7 +15,7 @@
     {
       "source": "media/chat.js",
       "destination": "media/chat.js",
-      "sha256": "c5270aca7be9374a1609da7be0f8c83aa7063505d0973727944ca10c2ca90291"
+      "sha256": "06c3e954b21d775cf6dedc115fc516cbeadaad00dbda6281e3cb8a6d982da989"
     },
     {
       "source": "media/file-panel.css",

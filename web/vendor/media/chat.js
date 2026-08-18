@@ -12487,6 +12487,26 @@
     setStickToBottom(false);
     updateScrollBtn();
     const range = rangeForFindMatch(m);
+    // Centre the MATCH, not the element containing it. scrollIntoView centres
+    // the BLOCK, and a message body wraps to well over a screen on a phone —
+    // measured at 1017px inside a 727px viewport. Centring that block puts the
+    // phrase off the TOP when it sits near the block's start and off the BOTTOM
+    // when it sits near the end, so stepping next/prev showed some hits and
+    // scrolled past others. Both directions reproduced under Pixel-5 emulation.
+    const scroller = messagesEl;
+    const rect = range && typeof range.getBoundingClientRect === "function"
+      ? range.getBoundingClientRect()
+      : null;
+    if (scroller && rect && (rect.height > 0 || rect.width > 0)
+        && typeof scroller.getBoundingClientRect === "function") {
+      const box = scroller.getBoundingClientRect();
+      const centred = (scroller.clientHeight - rect.height) / 2;
+      const delta = (rect.top - box.top) - centred;
+      if (delta) scroller.scrollTop += delta;
+      return;
+    }
+    // No usable Range geometry (jsdom, or a detached node): the block is still
+    // a better answer than nothing.
     const target = (range && range.startContainer && range.startContainer.parentElement) || m.node.parentElement;
     if (!target || typeof target.scrollIntoView !== "function") return;
     try {
