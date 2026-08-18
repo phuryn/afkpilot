@@ -12245,6 +12245,22 @@
     return false;
   }
 
+  /**
+   * Payload bodies find deliberately does NOT search (owner, 2026-08-19).
+   * `.tool-item-details` is the one container every expandable payload renders
+   * into — tool IN/OUT, command IN/OUT, MCP IN/OUT, and the file-edit diffs
+   * (`.tool-item-details.tool-item-diff`, whose content is `.tool-diff-region`).
+   *
+   * The issue asked for the opposite ("including text inside collapsed tool and
+   * command rows"), and that is what shipped first. In use it made results
+   * chaotic: a search for an ordinary word matched dozens of times inside
+   * command output and diff hunks, burying the prose hits, and a diff match is
+   * not much use anyway because the full diff is not on screen. Row LABELS stay
+   * searchable, so "find the command I ran" and "find that file path" still
+   * work — it is only the payload bodies that drop out.
+   */
+  const FIND_SKIP_SEL = ".tool-item-details, .tool-diff-region";
+
   function findCollectNodes() {
     const nodes = [];
     const root = messagesEl;
@@ -12261,6 +12277,7 @@
           const tag = parent.tagName;
           if (tag === "SCRIPT" || tag === "STYLE") return REJECT;
           if (parent.closest("#welcome, .welcome")) return REJECT;
+          if (parent.closest(FIND_SKIP_SEL)) return REJECT;
           return ACCEPT;
         },
       });
@@ -12283,6 +12300,7 @@
       const tag = el.tagName;
       if (tag === "SCRIPT" || tag === "STYLE") continue;
       if (el.id === "welcome" || el.classList.contains("welcome")) continue;
+      if (typeof el.matches === "function" && el.matches(FIND_SKIP_SEL)) continue;
       for (let i = el.childNodes.length - 1; i >= 0; i--) stack.push(el.childNodes[i]);
     }
     return nodes;
