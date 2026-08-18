@@ -728,6 +728,7 @@
     check: `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`,
     chevronRight: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>`,
     chevronDown: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`,
+    chevronUp: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>`,
     ellipsis: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>`,
     search: `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>`,
     clock: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
@@ -5829,6 +5830,11 @@
           icon: ICON.download,
           onSelect: () => exportCurrentSession(),
         },
+        {
+          label: "Find in conversation",
+          icon: ICON.search,
+          onSelect: () => openFind(),
+        },
       ],
       "vscode-session-head",
     ));
@@ -6532,6 +6538,11 @@
         icon: ICON.download,
         onSelect: () => exportCurrentSession(),
       });
+      items.push({
+        label: "Find in conversation",
+        icon: ICON.search,
+        onSelect: () => openFind(),
+      });
       // Worktree upkeep rides along for the same reason, and only while you are
       // in one — you cannot apply a checkout you are not standing in.
       //
@@ -6976,6 +6987,7 @@
     // (confirm-overlay / uiPrompt are action-scoped and remove themselves.)
     closeImagePreview();
     closePreviewOverlay();
+    onFindSessionReset();
   }
 
   /** Acts that open a terminal we cannot observe finishing. */
@@ -10015,9 +10027,11 @@
   // `.msg.thinking` block at once — so it covers replayed/old sessions too and
   // toggling is instant with no reload — and turning traces back on drops the
   // stand-in indicator.
+  let onFindPreferenceChange = () => {};
   function applyThinkingVisibility() {
     document.body.classList.toggle("thinking-hidden", !effectiveShowThinking());
     if (effectiveShowThinking()) hideThinkingIndicator();
+    onFindPreferenceChange();
   }
 
   // True when *something* already tells the user grok is mid-work or awaiting
@@ -12124,6 +12138,789 @@
     scrollToBottom();
   }
 
+  // ---------- find in conversation (#99) ----------
+  // One in-webview find serves VS Code, desktop, and the browser client.
+  // VS Code's enableFindWidget is a createWebviewPanel API and does not exist
+  // on WebviewView; even if it did it would do nothing for desktop or AFK Pilot.
+  //
+  // Paint uses CSS.highlights + Range. Wrapping matches in <mark> would force
+  // a full re-layout of a multi-megabyte transcript and detach the click
+  // handlers tool rows, diffs, and images depend on.
+  //
+  // Collapsed tool / command / subagent rows stay in the DOM (`hidden` / class),
+  // so a TreeWalker reaches them. A match inside one expands that row. Content
+  // hidden by a standing preference (`body.thinking-hidden` — "Show thinking
+  // traces" off, or Knowledge work forcing that off) is counted but kept out
+  // of next/prev until the user clicks the hint. Expanding a collapsed row is
+  // fine; silently flipping a preference is not.
+  //
+  // Navigation scrolls the match without calling forceScrollToBottom or
+  // noteUserScrollIntent. Programmatic scroll then cannot re-arm stick-to-bottom,
+  // so a live turn arriving while find is open cannot yank the view off the hit.
+
+  const FIND_DEBOUNCE_MS = 80;
+  const FIND_SLICE_MS = 8;
+  const FIND_QUERY_MAX = 200;
+  const FIND_MAX_MATCHES = 10000;
+  const FIND_HL = "grok-find";
+  const FIND_HL_CUR = "grok-find-current";
+
+  const find = {
+    open: false,
+    bar: null,
+    input: null,
+    countEl: null,
+    hiddenBtn: null,
+    caseBtn: null,
+    regexBtn: null,
+    prevBtn: null,
+    nextBtn: null,
+    query: "",
+    caseSensitive: false,
+    regex: false,
+    includeHidden: false,
+    invalid: false,
+    matches: [],
+    nav: [],
+    hiddenCount: 0,
+    index: -1,
+    timer: 0,
+    sliceTimer: 0,
+    gen: 0,
+    lastFocus: null,
+    memoryBySession: new Map(),
+    lastHaystackKey: "",
+    lastNodes: null,
+    lastQuery: "",
+    lastFlags: "",
+    lastComplete: false,
+    lastCapped: false,
+  };
+
+  function findHasHighlightApi() {
+    return !!(typeof CSS !== "undefined" && CSS.highlights && typeof Highlight === "function");
+  }
+
+  function findSessionKey() {
+    return state.activeSessionId || "";
+  }
+
+  function rememberFindQuery() {
+    find.memoryBySession.set(findSessionKey(), {
+      query: find.query,
+      caseSensitive: find.caseSensitive,
+      regex: find.regex,
+    });
+  }
+
+  function recalledFindQuery() {
+    return find.memoryBySession.get(findSessionKey()) || null;
+  }
+
+  function transcriptSelectionText() {
+    const sel = typeof window.getSelection === "function" ? window.getSelection() : null;
+    if (!sel || sel.isCollapsed || !sel.anchorNode) return "";
+    if (!messagesEl.contains(sel.anchorNode)) return "";
+    const text = String(sel.toString() || "").replace(/\s+/g, " ").trim();
+    if (!text || text.length > FIND_QUERY_MAX) return "";
+    return text;
+  }
+
+  function isMacPlatform() {
+    const plat = typeof navigator !== "undefined" ? (navigator.platform || "") : "";
+    if (/Mac|iPhone|iPad|iPod/.test(plat)) return true;
+    const ua = typeof navigator !== "undefined" ? (navigator.userAgent || "") : "";
+    return /Mac OS X/.test(ua);
+  }
+
+  function isFindHotkey(e) {
+    // Remote: the browser owns Ctrl/Cmd+F (and the primary device is a phone).
+    if (IS_REMOTE) return false;
+    if (e.altKey || e.shiftKey) return false;
+    if (String(e.key).toLowerCase() !== "f") return false;
+    // Cmd+F is find on every desk. Ctrl+F is find except on Mac, where it is
+    // grok.composerForward (package.json, composer-focused). Do not steal it.
+    if (e.metaKey && !e.ctrlKey) return true;
+    if (e.ctrlKey && !e.metaKey) return !isMacPlatform();
+    return false;
+  }
+
+  function findCollectNodes() {
+    const nodes = [];
+    const root = messagesEl;
+    if (!root) return nodes;
+    const SHOW_TEXT = (typeof NodeFilter !== "undefined" && NodeFilter.SHOW_TEXT) || 4;
+    const REJECT = (typeof NodeFilter !== "undefined" && NodeFilter.FILTER_REJECT) || 2;
+    const ACCEPT = (typeof NodeFilter !== "undefined" && NodeFilter.FILTER_ACCEPT) || 1;
+    if (typeof document.createTreeWalker === "function") {
+      const walker = document.createTreeWalker(root, SHOW_TEXT, {
+        acceptNode(node) {
+          if (!node || !node.data) return REJECT;
+          const parent = node.parentElement;
+          if (!parent) return REJECT;
+          const tag = parent.tagName;
+          if (tag === "SCRIPT" || tag === "STYLE") return REJECT;
+          if (parent.closest("#welcome, .welcome")) return REJECT;
+          return ACCEPT;
+        },
+      });
+      let n = walker.nextNode();
+      while (n) {
+        nodes.push(n);
+        n = walker.nextNode();
+      }
+      return nodes;
+    }
+    const stack = [root];
+    while (stack.length) {
+      const el = stack.pop();
+      if (!el) continue;
+      if (el.nodeType === 3) {
+        if (el.data) nodes.push(el);
+        continue;
+      }
+      if (el.nodeType !== 1) continue;
+      const tag = el.tagName;
+      if (tag === "SCRIPT" || tag === "STYLE") continue;
+      if (el.id === "welcome" || el.classList.contains("welcome")) continue;
+      for (let i = el.childNodes.length - 1; i >= 0; i--) stack.push(el.childNodes[i]);
+    }
+    return nodes;
+  }
+
+  function findMatchIsHidden(node) {
+    // Preference-hidden, not collapsed. Collapsed tool rows stay in the
+    // navigation set; thinking traces with body.thinking-hidden do not.
+    if (!document.body.classList.contains("thinking-hidden")) return false;
+    const el = node.nodeType === 3 ? node.parentElement : node;
+    return !!(el && el.closest(".msg.thinking"));
+  }
+
+  function compileFindRegex(source, caseSensitive) {
+    if (source.length > FIND_QUERY_MAX) return { error: "long" };
+    // Nested quantifiers are the usual catastrophic-backtracking shape.
+    // Treat as no-match rather than hanging the UI on a 5 MB haystack.
+    if (/\([^()]*[+*][^()]*\)[+*{]/.test(source)) return { error: "unsafe" };
+    try {
+      // `m` so ^ / $ mean line (the issue's `^_+build$` example), not the
+      // whole concatenated transcript.
+      return { re: new RegExp(source, caseSensitive ? "gm" : "gim") };
+    } catch {
+      return { error: "invalid" };
+    }
+  }
+
+  function searchNodeLiteral(node, query, caseSensitive, into) {
+    const raw = node.data;
+    const text = caseSensitive ? raw : raw.toLowerCase();
+    const q = caseSensitive ? query : query.toLowerCase();
+    if (!q) return;
+    let i = 0;
+    while (i <= text.length - q.length) {
+      const found = text.indexOf(q, i);
+      if (found < 0) break;
+      into.push({ node, start: found, end: found + q.length });
+      if (into.length >= FIND_MAX_MATCHES) return;
+      i = found + q.length;
+    }
+  }
+
+  function searchNodeRegex(node, re, into) {
+    const text = node.data;
+    re.lastIndex = 0;
+    let m = re.exec(text);
+    while (m) {
+      if (!m[0]) {
+        re.lastIndex += 1;
+        if (re.lastIndex > text.length) break;
+        m = re.exec(text);
+        continue;
+      }
+      into.push({ node, start: m.index, end: m.index + m[0].length });
+      if (into.length >= FIND_MAX_MATCHES) return;
+      m = re.exec(text);
+    }
+  }
+
+  function canNarrowFind(nodes, query) {
+    if (find.regex || !find.lastComplete || find.invalid) return false;
+    if (!find.lastQuery || !query.startsWith(find.lastQuery)) return false;
+    if (find.lastFlags !== findFlagsKey()) return false;
+    if (find.lastNodes !== nodes) return false;
+    return true;
+  }
+
+  function findFlagsKey() {
+    return (find.caseSensitive ? "c" : "") + (find.regex ? "r" : "") + (find.includeHidden ? "h" : "");
+  }
+
+  function rangeForFindMatch(m) {
+    if (!m || !m.node || !m.node.parentNode) return null;
+    try {
+      const r = document.createRange();
+      const len = m.node.data ? m.node.data.length : 0;
+      r.setStart(m.node, Math.max(0, Math.min(m.start, len)));
+      r.setEnd(m.node, Math.max(0, Math.min(m.end, len)));
+      return r;
+    } catch {
+      return null;
+    }
+  }
+
+  function clearFindHighlights() {
+    if (findHasHighlightApi()) {
+      try {
+        CSS.highlights.delete(FIND_HL);
+        CSS.highlights.delete(FIND_HL_CUR);
+      } catch { /* ignore */ }
+    }
+    for (const el of messagesEl.querySelectorAll(".msg.thinking.find-reveal")) {
+      el.classList.remove("find-reveal");
+    }
+  }
+
+  function paintFindHighlights() {
+    clearFindHighlights();
+    if (!find.open || !find.nav.length) return;
+    if (!findHasHighlightApi()) return;
+    const others = new Highlight();
+    const current = new Highlight();
+    for (let i = 0; i < find.nav.length; i++) {
+      const range = rangeForFindMatch(find.nav[i]);
+      if (!range) continue;
+      if (i === find.index) current.add(range);
+      else others.add(range);
+    }
+    try {
+      CSS.highlights.set(FIND_HL, others);
+      CSS.highlights.set(FIND_HL_CUR, current);
+    } catch { /* older Highlight impl */ }
+  }
+
+  function updateFindChrome() {
+    if (!find.bar) return;
+    const q = find.query;
+    const n = find.nav.length;
+    const hidden = find.hiddenCount;
+    if (find.input) {
+      find.input.classList.toggle("find-input-invalid", !!find.invalid);
+      find.input.setAttribute("aria-invalid", find.invalid ? "true" : "false");
+    }
+    if (find.countEl) {
+      if (!q) find.countEl.textContent = "";
+      else if (find.invalid) find.countEl.textContent = "—";
+      else if (!n) find.countEl.textContent = find.lastCapped ? "0/" + FIND_MAX_MATCHES + "+" : "0/0";
+      else {
+        const cap = find.lastCapped ? "+" : "";
+        find.countEl.textContent = (find.index + 1) + "/" + n + cap;
+      }
+    }
+    if (find.hiddenBtn) {
+      if (!q || find.invalid || hidden <= 0) {
+        find.hiddenBtn.hidden = true;
+      } else {
+        find.hiddenBtn.hidden = false;
+        find.hiddenBtn.setAttribute("aria-pressed", find.includeHidden ? "true" : "false");
+        find.hiddenBtn.textContent = find.includeHidden
+          ? "Including " + hidden + " in hidden thinking traces"
+          : hidden + " in hidden thinking traces";
+        find.hiddenBtn.title = find.includeHidden
+          ? "Stop navigating matches inside hidden thinking traces"
+          : "Include matches inside hidden thinking traces";
+      }
+    }
+    if (find.caseBtn) find.caseBtn.setAttribute("aria-pressed", find.caseSensitive ? "true" : "false");
+    if (find.regexBtn) find.regexBtn.setAttribute("aria-pressed", find.regex ? "true" : "false");
+    const dead = !n;
+    if (find.prevBtn) find.prevBtn.disabled = dead;
+    if (find.nextBtn) find.nextBtn.disabled = dead;
+  }
+
+  function rebuildFindNav() {
+    const nav = [];
+    let hidden = 0;
+    for (const m of find.matches) {
+      const isHidden = findMatchIsHidden(m.node);
+      if (isHidden) hidden += 1;
+      if (!isHidden || find.includeHidden) nav.push(m);
+    }
+    find.nav = nav;
+    find.hiddenCount = hidden;
+    if (!nav.length) find.index = -1;
+    else if (find.index < 0 || find.index >= nav.length) find.index = 0;
+  }
+
+  function revealFindMatch(m) {
+    if (!m || !m.node) return;
+    const el = m.node.parentElement;
+    if (!el) return;
+    const thinking = el.closest(".msg.thinking");
+    if (thinking) {
+      thinking.classList.add("find-reveal");
+      const body = thinking.querySelector(".thinking-body");
+      if (body && body.hidden) {
+        body.hidden = false;
+        thinking.classList.add("expanded");
+      }
+    }
+    const group = el.closest(".tool-group");
+    if (group) setGroupExpanded(group, true);
+    const details = el.closest(".tool-item-details");
+    if (details) {
+      const row = details.closest(".has-details");
+      if (row) setDetailExpanded(row, true);
+    }
+    const sub = el.closest(".subagent-card");
+    if (sub) {
+      const stream = sub.querySelector(".subagent-stream");
+      const result = sub.querySelector(".subagent-result");
+      if (stream && stream.contains(el)) stream.hidden = false;
+      if (result && result.contains(el)) result.hidden = false;
+    }
+  }
+
+  function scrollToFindMatch(m) {
+    // Unpin first. A programmatic scrollTop fires `scroll`, but that handler
+    // only recomputes stick after a user gesture (wheel/touch/keys). If stick
+    // stayed true, the content MutationObserver / ResizeObserver would yank
+    // back to the bottom the moment we expand a tool row or a chunk arrives.
+    setStickToBottom(false);
+    updateScrollBtn();
+    const range = rangeForFindMatch(m);
+    const target = (range && range.startContainer && range.startContainer.parentElement) || m.node.parentElement;
+    if (!target || typeof target.scrollIntoView !== "function") return;
+    try {
+      target.scrollIntoView({ block: "center", inline: "nearest" });
+    } catch {
+      try { target.scrollIntoView(true); } catch { /* ignore */ }
+    }
+  }
+
+  function goToFindMatch(index, opts) {
+    if (!find.nav.length) {
+      find.index = -1;
+      paintFindHighlights();
+      updateFindChrome();
+      return;
+    }
+    const n = find.nav.length;
+    find.index = ((index % n) + n) % n;
+    const m = find.nav[find.index];
+    revealFindMatch(m);
+    if (!opts || opts.scroll !== false) {
+      // Unpin synchronously. The actual scroll waits a frame so a just-expanded
+      // [hidden] row can layout; if stick stayed true until then, the content
+      // MutationObserver would yank back to the bottom first.
+      setStickToBottom(false);
+      updateScrollBtn();
+      requestAnimationFrame(() => scrollToFindMatch(m));
+    }
+    paintFindHighlights();
+    updateFindChrome();
+  }
+
+  function findStep(dir) {
+    if (!find.nav.length) return;
+    goToFindMatch(find.index < 0 ? 0 : find.index + dir);
+  }
+
+  function finishFindSearch(matches, invalid, capped) {
+    find.matches = matches;
+    find.invalid = !!invalid;
+    find.lastCapped = !!capped;
+    find.lastComplete = !invalid;
+    find.lastQuery = find.query;
+    find.lastFlags = findFlagsKey();
+    rebuildFindNav();
+    if (find.nav.length) {
+      if (find.index < 0) find.index = 0;
+      goToFindMatch(find.index, { scroll: false });
+    } else {
+      find.index = -1;
+      paintFindHighlights();
+      updateFindChrome();
+    }
+  }
+
+  function cancelFindSearch() {
+    if (find.timer) {
+      clearTimeout(find.timer);
+      find.timer = 0;
+    }
+    if (find.sliceTimer) {
+      clearTimeout(find.sliceTimer);
+      find.sliceTimer = 0;
+    }
+    find.gen += 1;
+  }
+
+  function runFindSearchNow() {
+    cancelFindSearch();
+    const query = find.query;
+    if (!find.open) return;
+    if (!query) {
+      find.matches = [];
+      find.nav = [];
+      find.hiddenCount = 0;
+      find.invalid = false;
+      find.lastComplete = false;
+      find.lastCapped = false;
+      find.index = -1;
+      clearFindHighlights();
+      updateFindChrome();
+      return;
+    }
+    const nodes = findCollectNodes();
+    find.lastNodes = nodes;
+    if (canNarrowFind(nodes, query)) {
+      const next = [];
+      const q = find.caseSensitive ? query : query.toLowerCase();
+      for (const m of find.matches) {
+        if (!m.node || !m.node.parentNode) continue;
+        const slice = m.node.data.slice(m.start, m.start + q.length);
+        const have = find.caseSensitive ? slice : slice.toLowerCase();
+        if (have === q) next.push({ node: m.node, start: m.start, end: m.start + q.length });
+      }
+      finishFindSearch(next, false, false);
+      return;
+    }
+    if (find.regex) {
+      const compiled = compileFindRegex(query, find.caseSensitive);
+      if (compiled.error) {
+        finishFindSearch([], true, false);
+        return;
+      }
+      const gen = find.gen;
+      const acc = [];
+      let i = 0;
+      const step = () => {
+        if (gen !== find.gen) return;
+        const t0 = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+        while (i < nodes.length && acc.length < FIND_MAX_MATCHES) {
+          searchNodeRegex(nodes[i], compiled.re, acc);
+          i += 1;
+          const now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+          if (now - t0 > FIND_SLICE_MS) break;
+        }
+        if (i < nodes.length && acc.length < FIND_MAX_MATCHES) {
+          find.matches = acc;
+          find.invalid = false;
+          rebuildFindNav();
+          if (find.countEl) find.countEl.textContent = find.nav.length + "…";
+          find.sliceTimer = setTimeout(step, 0);
+          return;
+        }
+        finishFindSearch(acc, false, acc.length >= FIND_MAX_MATCHES);
+      };
+      step();
+      return;
+    }
+    const gen = find.gen;
+    const acc = [];
+    let i = 0;
+    const step = () => {
+      if (gen !== find.gen) return;
+      const t0 = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+      while (i < nodes.length && acc.length < FIND_MAX_MATCHES) {
+        searchNodeLiteral(nodes[i], query, find.caseSensitive, acc);
+        i += 1;
+        const now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+        if (now - t0 > FIND_SLICE_MS) break;
+      }
+      if (i < nodes.length && acc.length < FIND_MAX_MATCHES) {
+        find.matches = acc;
+        find.invalid = false;
+        rebuildFindNav();
+        if (find.countEl) find.countEl.textContent = find.nav.length + "…";
+        find.sliceTimer = setTimeout(step, 0);
+        return;
+      }
+      finishFindSearch(acc, false, acc.length >= FIND_MAX_MATCHES);
+    };
+    step();
+  }
+
+  function scheduleFindSearch() {
+    cancelFindSearch();
+    find.timer = setTimeout(runFindSearchNow, FIND_DEBOUNCE_MS);
+  }
+
+  function setFindQuery(value, opts) {
+    const next = String(value || "").slice(0, FIND_QUERY_MAX);
+    find.query = next;
+    if (find.input && find.input.value !== next) find.input.value = next;
+    rememberFindQuery();
+    if (opts && opts.immediate) runFindSearchNow();
+    else scheduleFindSearch();
+  }
+
+  function ensureFindBar() {
+    if (find.bar) return find.bar;
+    const bar = document.createElement("div");
+    bar.id = "find-bar";
+    bar.className = "find-bar";
+    bar.hidden = true;
+    bar.setAttribute("role", "search");
+    bar.setAttribute("aria-label", "Find in this conversation");
+
+    const row = document.createElement("div");
+    row.className = "find-bar-row";
+    const icon = document.createElement("span");
+    icon.className = "find-bar-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.innerHTML = ICON.search;
+    const field = document.createElement("input");
+    field.id = "find-input";
+    field.type = "search";
+    field.placeholder = "Find in this conversation";
+    field.autocomplete = "off";
+    field.spellcheck = false;
+    field.setAttribute("enterkeyhint", "search");
+    const count = document.createElement("span");
+    count.className = "find-count";
+    count.setAttribute("aria-live", "polite");
+    const prev = document.createElement("button");
+    prev.type = "button";
+    prev.className = "icon-btn";
+    prev.title = "Previous match";
+    prev.setAttribute("aria-label", "Previous match");
+    prev.innerHTML = ICON.chevronUp;
+    const next = document.createElement("button");
+    next.type = "button";
+    next.className = "icon-btn";
+    next.title = "Next match";
+    next.setAttribute("aria-label", "Next match");
+    next.innerHTML = ICON.chevronDown;
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "icon-btn";
+    close.title = "Close find";
+    close.setAttribute("aria-label", "Close find");
+    close.innerHTML = ICON.x;
+    row.appendChild(icon);
+    row.appendChild(field);
+    row.appendChild(count);
+    row.appendChild(prev);
+    row.appendChild(next);
+    row.appendChild(close);
+
+    const opts = document.createElement("div");
+    opts.className = "find-bar-row";
+    const caseBtn = document.createElement("button");
+    caseBtn.type = "button";
+    caseBtn.className = "find-toggle";
+    caseBtn.textContent = "Aa";
+    caseBtn.title = "Match case";
+    caseBtn.setAttribute("aria-label", "Match case");
+    caseBtn.setAttribute("aria-pressed", "false");
+    const regexBtn = document.createElement("button");
+    regexBtn.type = "button";
+    regexBtn.className = "find-toggle";
+    regexBtn.textContent = ".*";
+    regexBtn.title = "Use regular expression";
+    regexBtn.setAttribute("aria-label", "Use regular expression");
+    regexBtn.setAttribute("aria-pressed", "false");
+    const hiddenBtn = document.createElement("button");
+    hiddenBtn.type = "button";
+    hiddenBtn.className = "find-hidden-hint";
+    hiddenBtn.hidden = true;
+    hiddenBtn.setAttribute("aria-pressed", "false");
+    opts.appendChild(caseBtn);
+    opts.appendChild(regexBtn);
+    opts.appendChild(hiddenBtn);
+
+    bar.appendChild(row);
+    bar.appendChild(opts);
+    const parent = messagesEl.parentNode;
+    if (parent) parent.insertBefore(bar, messagesEl);
+    else document.body.insertBefore(bar, document.body.firstChild);
+
+    field.addEventListener("input", () => setFindQuery(field.value));
+    field.addEventListener("keydown", (e) => {
+      if (e.isComposing) return;
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        findStep(e.shiftKey ? -1 : 1);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeFind();
+      }
+    });
+    prev.addEventListener("click", () => findStep(-1));
+    next.addEventListener("click", () => findStep(1));
+    close.addEventListener("click", () => closeFind());
+    caseBtn.addEventListener("click", () => {
+      find.caseSensitive = !find.caseSensitive;
+      find.lastComplete = false;
+      rememberFindQuery();
+      runFindSearchNow();
+    });
+    regexBtn.addEventListener("click", () => {
+      find.regex = !find.regex;
+      find.lastComplete = false;
+      rememberFindQuery();
+      runFindSearchNow();
+    });
+    hiddenBtn.addEventListener("click", () => {
+      find.includeHidden = !find.includeHidden;
+      rebuildFindNav();
+      if (find.nav.length && find.index < 0) find.index = 0;
+      if (find.includeHidden && find.hiddenCount && find.nav.length) {
+        const firstHidden = find.nav.findIndex((m) => findMatchIsHidden(m.node));
+        if (firstHidden >= 0) goToFindMatch(firstHidden);
+        else {
+          paintFindHighlights();
+          updateFindChrome();
+        }
+      } else {
+        paintFindHighlights();
+        updateFindChrome();
+      }
+    });
+
+    find.bar = bar;
+    find.input = field;
+    find.countEl = count;
+    find.hiddenBtn = hiddenBtn;
+    find.caseBtn = caseBtn;
+    find.regexBtn = regexBtn;
+    find.prevBtn = prev;
+    find.nextBtn = next;
+    return bar;
+  }
+
+  function onFindDocKey(e) {
+    if (!find.open) return;
+    if (isFindHotkey(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      openFind();
+      return;
+    }
+    if (e.key !== "Escape") return;
+    if (e.target && e.target.closest && e.target.closest(".toolbar-popover, .confirm-overlay, .rail-menu, #gear-popover")) return;
+    e.preventDefault();
+    closeFind();
+  }
+
+  function openFind() {
+    ensureFindBar();
+    const wasOpen = find.open;
+    if (!wasOpen) {
+      find.lastFocus = document.activeElement;
+      find.bar.hidden = false;
+      find.open = true;
+      document.addEventListener("keydown", onFindDocKey, true);
+    }
+    const selected = transcriptSelectionText();
+    const recalled = recalledFindQuery();
+    if (selected) {
+      find.caseSensitive = !!(recalled && recalled.caseSensitive);
+      find.regex = !!(recalled && recalled.regex);
+      setFindQuery(selected, { immediate: true });
+    } else if (!wasOpen && recalled) {
+      find.caseSensitive = !!recalled.caseSensitive;
+      find.regex = !!recalled.regex;
+      setFindQuery(recalled.query || "", { immediate: true });
+    } else if (!wasOpen) {
+      updateFindChrome();
+    }
+    find.input.focus({ preventScroll: true });
+    try { find.input.select(); } catch { /* ignore */ }
+  }
+
+  function closeFind() {
+    if (!find.open) return;
+    rememberFindQuery();
+    cancelFindSearch();
+    find.open = false;
+    if (find.bar) find.bar.hidden = true;
+    clearFindHighlights();
+    document.removeEventListener("keydown", onFindDocKey, true);
+    const back = find.lastFocus;
+    find.lastFocus = null;
+    if (back && back !== find.input && typeof back.focus === "function" && document.contains(back)) {
+      try { back.focus({ preventScroll: true }); } catch { try { back.focus(); } catch { /* ignore */ } }
+    } else {
+      input.focus({ preventScroll: true });
+    }
+  }
+
+  function onFindSessionReset() {
+    cancelFindSearch();
+    find.matches = [];
+    find.nav = [];
+    find.hiddenCount = 0;
+    find.index = -1;
+    find.lastComplete = false;
+    find.lastNodes = null;
+    find.includeHidden = false;
+    clearFindHighlights();
+    if (find.open) {
+      const recalled = recalledFindQuery();
+      if (recalled) {
+        find.caseSensitive = !!recalled.caseSensitive;
+        find.regex = !!recalled.regex;
+        if (find.input) find.input.value = recalled.query || "";
+        find.query = recalled.query || "";
+      }
+      updateFindChrome();
+    }
+  }
+
+  function onFindTranscriptSettled() {
+    if (find.open && find.query) runFindSearchNow();
+  }
+
+  if (!IS_REMOTE) {
+    document.addEventListener("keydown", (e) => {
+      if (!isFindHotkey(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openFind();
+    }, true);
+  }
+
+  onFindPreferenceChange = () => {
+    if (find.open) runFindSearchNow();
+  };
+
+  window.__grokFind = {
+    open: openFind,
+    close: closeFind,
+    isOpen: () => !!find.open,
+    query: () => find.query,
+    setQuery: (q) => setFindQuery(q, { immediate: true }),
+    next: () => findStep(1),
+    prev: () => findStep(-1),
+    matchCount: () => find.nav.length,
+    totalCount: () => find.matches.length,
+    hiddenCount: () => find.hiddenCount,
+    index: () => find.index,
+    includeHidden: (on) => {
+      find.includeHidden = !!on;
+      rebuildFindNav();
+      paintFindHighlights();
+      updateFindChrome();
+    },
+    caseSensitive: () => find.caseSensitive,
+    setCaseSensitive: (on) => {
+      find.caseSensitive = !!on;
+      find.lastComplete = false;
+      runFindSearchNow();
+    },
+    regex: () => find.regex,
+    setRegex: (on) => {
+      find.regex = !!on;
+      find.lastComplete = false;
+      runFindSearchNow();
+    },
+    invalid: () => !!find.invalid,
+    hasHighlightApi: findHasHighlightApi,
+  };
+
   // ---------- inbound ----------
 
   // Mid-turn events the agent emits while producing output. After each one we
@@ -12343,6 +13140,12 @@
         // type a prompt immediately. preventScroll: the composer lives in the
         // fixed chrome — html must never scroll to reveal it (boot-layout fix).
         input.focus({ preventScroll: true });
+        break;
+      case "findInSession":
+        // Command Palette / workbench Ctrl+F fallback. The keystroke path is
+        // untested inside a WebviewView, so this message must open find on its
+        // own. Idempotent: a second open focuses the field.
+        openFind();
         break;
       case "moveComposerCaret":
         moveComposerCaret(msg.direction);
@@ -12774,6 +13577,7 @@
           // One layout after the whole transcript is in the DOM — not one per
           // replayed row. Live streaming keeps using scrollToBottom per chunk.
           forceScrollToBottom();
+          onFindTranscriptSettled();
         }
         break;
       case "historyBatch":
@@ -13699,6 +14503,16 @@
       // Queued blocks live at the END of the conversation — re-pin them under
       // freshly streamed content.
       if (state.sendQueue.length && state.queuedWrapEl) messagesEl.appendChild(state.queuedWrapEl);
+    }
+    if (find.open && (
+      TURN_PROGRESS_MSGS.has(msg.type) ||
+      msg.type === "userMessage" ||
+      msg.type === "commandOutput" ||
+      msg.type === "agentEnd"
+    )) {
+      // Debounced — a 5 MB live turn must not re-scan on every token, and
+      // finishFindSearch does not scroll, so the current match stays put.
+      scheduleFindSearch();
     }
     if (shouldRecordExportEvent(msg)) {
       state.exportEvents.push(msg);

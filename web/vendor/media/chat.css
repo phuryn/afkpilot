@@ -1200,6 +1200,127 @@ a:hover {
 }
 .messages.stick-to-bottom { overflow-anchor: none; }
 
+/* ---- find in conversation (#99) ----
+   Sits under the top bar and pushes the transcript down. Not an overlay:
+   on a phone an overlay covers the hits. Highlight paint uses the CSS
+   Custom Highlight API (no <mark> wrappers — those would re-layout a
+   multi-megabyte transcript and detach tool-row handlers). */
+.find-bar {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px var(--pad) 6px;
+  border-bottom: 1px solid var(--vscode-editorWidget-border);
+  background: var(--vscode-sideBar-background);
+}
+.find-bar[hidden] { display: none; }
+.find-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.find-bar-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--vscode-descriptionForeground);
+}
+.find-bar-icon svg { width: 16px; height: 16px; display: block; }
+#find-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border));
+  border-radius: 6px;
+  background: var(--vscode-input-background, var(--vscode-editorWidget-background));
+  color: var(--vscode-input-foreground, var(--vscode-foreground));
+  font: inherit;
+  font-size: inherit;
+  outline: none;
+}
+#find-input:focus {
+  border-color: var(--vscode-focusBorder);
+}
+#find-input.find-input-invalid {
+  border-color: var(--vscode-inputValidation-errorBorder, #f14c4c);
+}
+.find-count {
+  flex: none;
+  min-width: 3.2em;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.find-toggle {
+  flex: none;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+.find-toggle:hover { color: var(--vscode-foreground); }
+.find-toggle[aria-pressed="true"] {
+  color: var(--vscode-charts-blue, #3794ff);
+  background: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 16%, transparent);
+}
+.find-toggle:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: -2px;
+}
+.find-hidden-hint {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.find-hidden-hint:hover { color: var(--vscode-foreground); }
+.find-hidden-hint[aria-pressed="true"] {
+  color: var(--vscode-charts-blue, #3794ff);
+}
+.find-hidden-hint[hidden] { display: none; }
+.find-hidden-hint:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: -2px;
+}
+::highlight(grok-find) {
+  background-color: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 30%, transparent);
+}
+::highlight(grok-find-current) {
+  background-color: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 55%, transparent);
+}
+
+/* Preference-hidden thinking stays display:none unless this match is the
+   one the user asked to see (include-hidden navigation). Does not flip
+   grok.showThinking. */
+body.thinking-hidden .msg.thinking.find-reveal { display: block; }
+
 .welcome {
   display: flex;
   flex-direction: column;
@@ -3381,20 +3502,16 @@ textarea#input {
    the glyphs on the row's own foreground, so it survives a light theme where a
    solid fill would put near-black text on blue.
 
-   The active/hovered row is the awkward case: its background is
-   list-activeSelectionBackground, which is itself blue in most themes, so a blue
-   wash on top can disappear. There the highlight switches to a ring plus a
-   barely-there fill — visible against a blue selection without fighting it. */
+   The same treatment on the active/hovered row, deliberately. That row is
+   painted list-activeSelectionBackground, which is itself blue in most themes,
+   so this was first written with a separate currentColor ring in case the wash
+   vanished into it. Tested in both light and dark: it does not, and one rule
+   reads better than two. */
 .slash-hl {
   background: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 30%, transparent);
   color: inherit;
   border-radius: 2px;
   font-weight: inherit;
-}
-.slash-item:hover .slash-hl,
-.slash-item.active .slash-hl {
-  background: color-mix(in srgb, currentColor 16%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 45%, transparent);
 }
 
 /* ---- "@" file-mention popover ---- */
@@ -4409,6 +4526,7 @@ body.vscode-light .preview-overlay {
    so desktop VS Code and desktop browsers keep the dense layout. */
 @media (hover: none), (pointer: coarse) {
   .icon-btn { width: 36px; height: 36px; min-width: 36px; min-height: 36px; }
+  .find-toggle, .find-hidden-hint, #find-input { min-height: 36px; height: 36px; }
   .send { width: 36px; height: 36px; }
   .send svg { width: 19px; height: 19px; }
   .toolbar-btn { height: 36px; }
@@ -4515,6 +4633,7 @@ body.vscode-light .preview-overlay {
   /* iOS Safari force-zooms the page when a focused input is under 16px. */
   .rail-search,
   #rail-search,
+  #find-input,
   textarea#input,
   .input-highlight,
   .session-name-input,
