@@ -862,17 +862,28 @@
       let dragging = false;
       let startX = 0;
       let startWidth = 0;
+      // Body `--chat-zoom` scales VISUAL rects and clientX, while --gfp-width
+      // is layout px. Convert both ends of the gesture so the edge tracks the
+      // cursor (a no-op at zoom 1). Converting only the delta jumps on grab.
+      // Helper lookup matches positionMenu: an older embedding without the
+      // helpers degrades to today's uncorrected drag instead of throwing.
+      const layoutPx = (clientPx) => {
+        const helpers = (win.GrokWebviewHelpers || root.GrokWebviewHelpers || {});
+        const zoomOf = typeof helpers.chatZoomFactor === "function" ? helpers.chatZoomFactor : () => 1;
+        const unzoom = typeof helpers.unzoomClientPx === "function" ? helpers.unzoomClientPx : (px) => px;
+        return unzoom(clientPx, zoomOf(doc));
+      };
       resizer.addEventListener("pointerdown", (event) => {
         if (!open || isOverlay()) return;
         dragging = true;
-        startX = event.clientX;
-        startWidth = rootEl.getBoundingClientRect().width;
+        startX = layoutPx(event.clientX);
+        startWidth = layoutPx(rootEl.getBoundingClientRect().width);
         rootEl.classList.add("gfp-resizing");
         try { resizer.setPointerCapture(event.pointerId); } catch (_) { /* noop */ }
         event.preventDefault();
       });
       resizer.addEventListener("pointermove", (event) => {
-        if (dragging) setPanelWidth(startWidth + startX - event.clientX);
+        if (dragging) setPanelWidth(startWidth + startX - layoutPx(event.clientX));
       });
       const stop = (event) => {
         if (!dragging) return;

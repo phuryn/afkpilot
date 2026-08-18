@@ -3363,13 +3363,19 @@
       let startX = 0;
       let startW = 0;
       let lastW = 0;
+      // Body `--chat-zoom` scales VISUAL rects and clientX, while --rail-width
+      // is layout px. Convert both ends of the gesture so the edge tracks the
+      // cursor (a no-op at zoom 1). Converting only the delta jumps on grab.
+      const zoomOf = typeof chatZoomFactor === "function" ? chatZoomFactor : () => 1;
+      const unzoom = typeof unzoomClientPx === "function" ? unzoomClientPx : (px) => px;
+      const layoutPx = (clientPx) => unzoom(clientPx, zoomOf());
       handle.addEventListener("pointerdown", (e) => {
         // getBoundingClientRect, not the stored value: the rail may be sitting
         // at its CSS default having never been dragged.
-        startW = rail.getBoundingClientRect().width;
+        startW = layoutPx(rail.getBoundingClientRect().width);
         if (!startW) return;
         dragging = true;
-        startX = e.clientX;
+        startX = layoutPx(e.clientX);
         lastW = startW;
         document.body.classList.add("rail-resizing");
         handle.classList.add("rail-resizing");
@@ -3378,7 +3384,7 @@
       });
       handle.addEventListener("pointermove", (e) => {
         // Rail is on the left: drag right → wider.
-        if (dragging) lastW = applyRailWidth(startW + (e.clientX - startX), false);
+        if (dragging) lastW = applyRailWidth(startW + (layoutPx(e.clientX) - startX), false);
       });
       const end = (e) => {
         if (!dragging) return;
