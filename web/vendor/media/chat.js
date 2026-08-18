@@ -5747,6 +5747,9 @@
   }
 
   function beginNewSession() {
+    // Empty open set: New would reset the welcome to Starting and then the
+    // host would refuse to spawn. Leave the empty-state card up.
+    if (state.onboardingMode === "no-project") return;
     // Capture before reset — activeSessionId is host-confirmed and is the only
     // honest "what we are leaving" for the identity frames that will confirm
     // the new conversation (they must differ from previousSessionId).
@@ -6885,12 +6888,16 @@
       // so wiping the panel here erased the very confirmation the swap was
       // announcing, which is why Codex and Claude never showed one. Any other
       // panel is genuinely stale at this point and still goes.
-      if (onb && state.onboardingMode !== "provider-connected") onb.innerHTML = "";
+      if (onb && state.onboardingMode !== "provider-connected" && state.onboardingMode !== "no-project") onb.innerHTML = "";
       // A host clearMessages during an optimistic new-session transition must
       // not replace the paired "Loading conversation" veil with Starting — the
       // click already owns that wait. Otherwise the rail highlights the
       // placeholder while the welcome says something unrelated.
+      // no-project is the other hold: last-folder-removed emits clearMessages
+      // then the empty-state card, and flipping to Starting in between is the
+      // hang that card exists to replace.
       if (state.railTransition) setConversationLoading(true);
+      else if (state.onboardingMode === "no-project") setWelcomeStatus("No project folder", false);
       else setWelcomeStatus("Starting", true);
       // The empty state is rebuilt on every new session, so the tip is too —
       // until the host stops advertising it.
@@ -7072,6 +7079,29 @@
         `</div>`;
       return;
     }
+    if (mode === "no-project") {
+      // Desktop with nothing open. Names the block and points at the same
+      // action the rail already offers — do not leave the baked Starting
+      // spinner up (that is the first-run hang).
+      if (ver) setWelcomeStatus("No project folder", false);
+      if (IS_REMOTE) {
+        onb.innerHTML =
+          `<div class="onb">` +
+            `<p class="onb-heading">No project folder</p>` +
+            `<p class="onb-desc">Add a project folder on the computer running this workspace, then start a conversation there.</p>` +
+          `</div>`;
+        updateSendButton();
+        return;
+      }
+      onb.innerHTML =
+        `<div class="onb">` +
+          `<p class="onb-heading">No project folder</p>` +
+          `<p class="onb-desc">A conversation needs a project folder before it can start. Add one to continue.</p>` +
+          `<button class="onb-action" type="button" data-act="addProjectFolder">Add project folder</button>` +
+        `</div>`;
+      updateSendButton();
+      return;
+    }
     if (mode === "provider-connected") {
       // A successful re-check used to leave a bare empty session, which reads
       // identically to "nothing happened" — the one moment someone most wants
@@ -7221,6 +7251,7 @@
     // Every branch above rebuilds innerHTML, so the launched-terminal state has
     // to be re-applied here rather than living on the node.
     applyOnboardingLaunchState();
+    updateSendButton();
   }
 
   function makeCollapsible(el, container) {
@@ -11284,10 +11315,22 @@
     modeBtn.disabled = state.busyLocked;
     modeBtn.classList.toggle("disabled", state.busyLocked);
     modeBtn.title = modeButtonTitle(state.currentModeId);
-    if (!state.busy) {
+    if (state.onboardingMode === "no-project") {
+      sendBtn.innerHTML = ICON.arrowUp;
+      sendBtn.title = "Add a project folder first";
+      sendBtn.disabled = true;
+      if (newBtn) {
+        newBtn.disabled = true;
+        newBtn.title = "Add a project folder first";
+      }
+    } else if (!state.busy) {
       sendBtn.innerHTML = ICON.arrowUp;
       sendBtn.title = "Send";
       sendBtn.disabled = false;
+      if (newBtn) {
+        newBtn.disabled = false;
+        newBtn.title = "New session";
+      }
     } else if (state.busyLocked) {
       sendBtn.innerHTML = ICON.spinner;
       sendBtn.title = "Initializing…";
@@ -11374,6 +11417,7 @@
   }
 
   function sendOrStop() {
+    if (state.onboardingMode === "no-project") return;
     if (state.busy) {
       // Typed text signals send-intent — queue it; text present never cancels.
       if (queueFromComposer()) return;
@@ -12376,9 +12420,11 @@
         // running. Keep showing Starting until the startup lock clears.
         if (!msg.info.provider || msg.info.provider === "grok") state.cliVersion = msg.info.version || "";
         state.startingPhase = true;
+        state.onboardingMode = null;
         setWelcomeStatus("Starting", true);
         const onb = $("welcome-onboarding");
         if (onb) onb.innerHTML = "";
+        updateSendButton();
         break;
       }
       case "cliUpdating": {
@@ -13926,6 +13972,7 @@
       else if (act === "connectProvider") vscode.postMessage({ type: "runGrokLogin", provider: onbAction.dataset.provider });
       else if (act === "recheckProvider") vscode.postMessage({ type: "recheckConnection", provider: onbAction.dataset.provider });
       else if (act === "retryProvider") vscode.postMessage({ type: "retryProviderSession", provider: onbAction.dataset.provider });
+      else if (act === "addProjectFolder") vscode.postMessage({ type: "addProjectFolder" });
       return;
     }
     const onbCopy = e.target.closest(".onb-copy");
