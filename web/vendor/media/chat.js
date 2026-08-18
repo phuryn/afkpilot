@@ -411,6 +411,7 @@
     thoughtStartTime: null,
     activeToolGroupEl: null,
     slashFiltered: [],
+    slashQuery: "",
     slashActive: 0,
     // "@" file popover: the rows the host sent for the current token
     // (mentionResults), the highlighted row, and the token the rows answer —
@@ -1023,7 +1024,7 @@
 
   // ---------- markdown ----------
 
-  const { looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, commandProgramLabel, commandTextPreview, extractToolResultOutput, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage, createPendingOverlay, getMentionQuery, applyMentionPick, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents } = globalThis.GrokWebviewHelpers;
+  const { looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, filterCommands, appendHighlightedText, commandProgramLabel, commandTextPreview, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage, createPendingOverlay, getMentionQuery, applyMentionPick, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents } = globalThis.GrokWebviewHelpers;
 
   function escapeAttr(s) {
     return String(s == null ? "" : s)
@@ -7655,7 +7656,7 @@
     return name && name.length < 30 ? `Running ${name}` : "Running tool";
   }
 
-  function toolLabel(call) {
+  function toolLabel(call, opts) {
     const name = toolName(call);
     const kind = toolKind(call);
     const verb = TOOL_VERB[name] || KIND_VERB[kind] || null;
@@ -7709,8 +7710,16 @@
     if (verb && target) return `${verb} ${target}`;
     if (verb) return verb;
     const title = (call.title || "").trim();
-    if (title) return title.length > 50 ? title.slice(0, 47) + "…" : title;
+    if (title) return opts && opts.full ? title : middleElide(title, TOOL_LABEL_MAX);
     return name || "tool";
+  }
+
+  // Flatten rebuilds the label span (details/chevron nodes move; the label
+  // does not), so title has to be painted wherever textContent is set.
+  function applyToolLabel(el, call) {
+    if (!el) return;
+    el.textContent = toolLabel(call);
+    el.title = toolLabel(call, { full: true });
   }
 
   // Category icon for a tool row (lucide outline; sized + colored by CSS via
@@ -7758,7 +7767,7 @@
       flat.innerHTML = toolIconFor(calls); // icon first
       const lbl = document.createElement("span");
       lbl.className = "tool-label";
-      lbl.textContent = toolLabel(calls[0]);
+      applyToolLabel(lbl, calls[0]);
       flat.appendChild(lbl);
       // #41: a lone command's expandable detail (full command + output) moves
       // into the flat row — moving the NODES keeps the pendingCommandDetails
@@ -7834,15 +7843,16 @@
     // still breaks onto its own full-width row.
     const itemLabel = document.createElement("span");
     itemLabel.className = "tool-item-label";
-    itemLabel.textContent = toolLabel(call);
+    applyToolLabel(itemLabel, call);
     item.appendChild(itemLabel);
     item._call = call;
     body.appendChild(item);
     if (call.toolCallId) state.toolItemsByToolCallId.set(call.toolCallId, item);
     // #41: a shell command's row carries an expandable detail — the FULL
     // command text immediately (grok truncates its titles), and the complete
-    // captured output once the terminal finishes.
-    const cmd = call.rawInput && typeof call.rawInput.command === "string" ? call.rawInput.command.trim() : "";
+    // captured output once the terminal finishes. MCP rows reuse this
+    // shell via host-normalized `detailInput` (never an empty pending block).
+    const cmd = commandDetailText(call);
     if (cmd) attachCommandDetails(item, cmd, call.toolCallId);
 
     hdr.innerHTML =
@@ -7860,7 +7870,7 @@
     // full command mid-run.
     el.classList.toggle(
       "cmd-single",
-      el._calls.length === 1 && !!(call.rawInput && (call.rawInput.command || call.rawInput.cmd)),
+      el._calls.length === 1 && !!commandDetailText(call),
     );
     hdr.onclick = () => {
       const expanded = !body.hidden;
@@ -8141,6 +8151,17 @@
    * sends an update carrying ONLY a toolCallId and `_meta` (the tool response),
    * which would erase everything gathered so far.
    */
+  // IN text for the shared command-detail shell. Shell rows use
+  // `rawInput.command` / `.cmd`. MCP rows use the host-stamped `detailInput`
+  // (`null` / absent = pending or not MCP; `{}` is a no-argument call).
+  function commandDetailText(call) {
+    const raw = (call && (call.rawInput || call.input)) || {};
+    if (typeof raw.command === "string" && raw.command.trim()) return raw.command.trim();
+    if (typeof raw.cmd === "string" && raw.cmd.trim()) return raw.cmd.trim();
+    if (typeof call.detailInput === "string" && call.detailInput.trim()) return call.detailInput.trim();
+    return "";
+  }
+
   function refreshToolRowFromUpdate(update) {
     const id = update && update.toolCallId;
     if (!id) return;
@@ -8158,18 +8179,28 @@
         merged[key] = { ...(item._call[key] || {}), ...update[key] };
       }
     }
-    item._call = merged;
-    const labelEl = item.querySelector(".tool-item-label");
-    if (labelEl) {
-      const next = toolLabel(merged);
-      if (next && next !== labelEl.textContent) labelEl.textContent = next;
+    if (Object.prototype.hasOwnProperty.call(update, "detailInput")) {
+      merged.detailInput = update.detailInput;
     }
+    item._call = merged;
+    // Flatten / summarize read `_calls`, not `item._call`. Grok's first
+    // use_tool row is titled "use_tool" until this update; leave the
+    // group's copy stale and the flat label stays the wrapper name.
+    const groupCalls = item.closest(".tool-group");
+    if (groupCalls && Array.isArray(groupCalls._calls)) {
+      const idx = groupCalls._calls.findIndex((c) => c && c.toolCallId === id);
+      if (idx >= 0) groupCalls._calls[idx] = merged;
+    }
+    const labelEl = item.querySelector(".tool-item-label");
+    if (labelEl) applyToolLabel(labelEl, merged);
     // A shell command that only shows up on the update still earns its IN/OUT
     // box; attachCommandDetails is a no-op once the row already has one.
-    const args = merged.rawInput || merged.input || {};
-    const cmd = typeof args.command === "string" ? args.command.trim()
-      : typeof args.cmd === "string" ? args.cmd.trim() : "";
+    // MCP args that arrive after a pending row use the same attach.
+    const cmd = commandDetailText(merged);
     if (cmd && !item.querySelector(".cmd-block")) attachCommandDetails(item, cmd, id);
+    if (groupCalls && groupCalls.classList.contains("in-progress") && groupCalls._calls && groupCalls._calls.length === 1) {
+      groupCalls.classList.toggle("cmd-single", !!cmd);
+    }
   }
 
   function attachCommandOutput(details, msg) {
@@ -8203,12 +8234,16 @@
         const group = row.closest && row.closest(".tool-group");
         if (group) group.classList.add("has-error");
       }
-    } else if (msg.exitCode == null) {
+    } else if (commandOutputWasCancelled(msg)) {
+      // Live kill. This host always states `cancelled` (true/false). Absence is
+      // an older host, which never hydrated replay commandOutput, so null exit
+      // was a kill. Do not infer from state.replaying: historyReplay also
+      // wraps buffer rebuilds.
       const mark = document.createElement("div");
       mark.className = "cmd-out-marker muted";
       mark.textContent = "[Cancelled] no exit code";
       body.appendChild(mark);
-    } else if (!hasOutput) {
+    } else if (msg.exitCode === 0 && !hasOutput) {
       // exit 0 with nothing on stdout: a bare "(no output)" pre read as broken.
       // A muted "done" marker (process success, not a claim about the task) is
       // clearer, and there's no empty <pre> to feel like a gap.
@@ -8225,7 +8260,7 @@
     if (msg.truncated) {
       const note = document.createElement("div");
       note.className = "cmd-out-marker muted";
-      note.textContent = "output truncated — grok saw the same cut";
+      note.textContent = commandOutputTruncationNote(msg);
       body.appendChild(note);
     }
     outRow.appendChild(body);
@@ -8249,6 +8284,12 @@
     if (!entry) return false;
     const block = entry.details.querySelector(".cmd-block");
     if (!block || block.querySelector(".cmd-out")) return false; // OUT already present (grok-build)
+    // Live Claude/Composer have no commandDone, so this is the only OUT source.
+    // extractToolResultOutput already prefers the unfenced string and applies
+    // the same 100K cap as the host commandOutput path — first arriver is
+    // correct; attachCommandOutput is idempotent if both land. Do not gate on
+    // state.replaying: historyReplay also wraps in-memory buffer rebuilds
+    // (focusSession / rehydrateWebviewFromFocused), which have no commandOutput.
     const res = extractToolResultOutput(call);
     if (!res) return false;
     attachCommandOutput(entry.details, res);
@@ -8431,7 +8472,7 @@
       item._call.rawInput = { ...(item._call.rawInput || {}), path: diffPath };
     }
     const itemLabel = item.querySelector(".tool-item-label");
-    if (itemLabel && item._call) itemLabel.textContent = toolLabel(item._call);
+    if (itemLabel && item._call) applyToolLabel(itemLabel, item._call);
     const group = item.closest && item.closest(".tool-group");
     if (group && group.classList.contains("in-progress") && item._call) {
       const groupLabel = group.querySelector(".tool-group-label");
@@ -9078,7 +9119,7 @@
     const row = document.createElement("div");
     row.className = "subagent-tool";
     if (id) row.dataset.toolCallId = id;
-    row.textContent = toolLabel(call);
+    applyToolLabel(row, call);
     stream.appendChild(row);
     if (id) el._childTools.set(id, row);
     setSubagentLiveStatus(el, toolLabel(call));
@@ -9092,7 +9133,7 @@
       return;
     }
     const label = toolLabel(call);
-    if (label && label !== "tool") row.textContent = label;
+    if (label && label !== "tool") applyToolLabel(row, call);
     const status = String(call && call.status || "").toLowerCase();
     if (status === "failed") row.classList.add("subagent-tool-failed");
   }
@@ -10008,8 +10049,12 @@
   // Follow streaming output only while the user is pinned to the bottom. Once
   // they gesture away (the listener below clears state.stickToBottom) this
   // becomes a no-op, so they can read history while grok keeps thinking (#16).
+  // Replay (ACP session/load *and* in-memory buffer rebuilds) must not do this
+  // per element: each assignment forces layout, and a large load looks like
+  // infinite scroll. historyReplay end force-scrolls once.
   function scrollToBottom() {
-    if (state.stickToBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+    if (state.replaying || !state.stickToBottom) return;
+    messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
   // The floating "Scroll to bottom" button (#28) shows exactly when we've stopped
@@ -10023,8 +10068,10 @@
 
   // Always pull the view to the bottom and re-pin. For interactive activity the
   // user needs to see regardless of where they've scrolled: permission/question
-  // cards and their own just-sent message.
+  // cards and their own just-sent message. No-op during replay — the closing
+  // historyReplay frame is what lands the loaded conversation at the bottom.
   function forceScrollToBottom() {
+    if (state.replaying) return;
     setStickToBottom(true);
     messagesEl.scrollTop = messagesEl.scrollHeight;
     updateScrollBtn();
@@ -10053,7 +10100,7 @@
     const h = messagesEl.clientHeight;
     if (h === lastScrollportHeight) return;
     lastScrollportHeight = h;
-    if (state.stickToBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+    if (state.stickToBottom && !state.replaying) messagesEl.scrollTop = messagesEl.scrollHeight;
   }).observe(messagesEl);
 
   // The scrollport's own border-box does not resize when content inside an
@@ -10062,10 +10109,10 @@
   // pinned; a deliberate scroll-up has cleared stickToBottom and is untouched.
   let contentFollowFrame = 0;
   new MutationObserver(() => {
-    if (!state.stickToBottom || contentFollowFrame) return;
+    if (state.replaying || !state.stickToBottom || contentFollowFrame) return;
     contentFollowFrame = requestAnimationFrame(() => {
       contentFollowFrame = 0;
-      if (state.stickToBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+      if (state.stickToBottom && !state.replaying) messagesEl.scrollTop = messagesEl.scrollHeight;
     });
   }).observe(messagesEl, {
     childList: true,
@@ -11183,21 +11230,10 @@
 
   function updateSlash() {
     const m = (input.value.slice(0, input.selectionStart || 0)).match(/(?:^|\n)\/(\S*)$/);
-    if (!m) { slashPopover.hidden = true; state.slashFiltered = []; return; }
-    const q = m[1].toLowerCase();
-    // Prefix first, then mid-name substring; advertised order within each tier.
-    if (!q) {
-      state.slashFiltered = state.commands;
-    } else {
-      const prefix = [];
-      const substring = [];
-      for (const c of state.commands) {
-        const name = c.name.toLowerCase();
-        if (name.startsWith(q)) prefix.push(c);
-        else if (name.includes(q)) substring.push(c);
-      }
-      state.slashFiltered = prefix.concat(substring);
-    }
+    if (!m) { slashPopover.hidden = true; state.slashFiltered = []; state.slashQuery = ""; return; }
+    const q = m[1];
+    state.slashQuery = q;
+    state.slashFiltered = filterCommands(state.commands, q);
     if (!state.slashFiltered.length) { slashPopover.hidden = true; return; }
     state.slashActive = 0;
     renderSlash();
@@ -11207,18 +11243,19 @@
   function renderSlash() {
     slashPopover.innerHTML = "";
     let activeEl = null;
+    const q = state.slashQuery || "";
     state.slashFiltered.forEach((cmd, i) => {
       const el = document.createElement("div");
       el.className = `slash-item${i === state.slashActive ? " active" : ""}`;
       if (i === state.slashActive) activeEl = el;
       const name = document.createElement("div");
       name.className = "slash-name";
-      name.textContent = `/${cmd.name}`;
+      appendHighlightedText(name, `/${cmd.name}`, q);
       el.appendChild(name);
       if (cmd.description) {
         const d = document.createElement("div");
         d.className = "slash-desc";
-        d.textContent = cmd.description;
+        appendHighlightedText(d, cmd.description, q);
         el.appendChild(d);
       }
       el.onclick = () => pickSlash(cmd);
@@ -12684,6 +12721,8 @@
       case "historyReplay":
         if (msg.active) {
           if (state.replayDepth === 0) {
+            // Raise before any veil DOM so MutationObserver cannot pin-scroll.
+            state.replaying = true;
             state.suppressReplayTurn = false; // fresh outer replay starts unsuppressed
             state.skipUserBubble = false;
             state.repoSwitchPending = true;
@@ -12732,6 +12771,9 @@
           // Remote reconnect/cold-load delivers only a recent window. Label
           // the export so it cannot be read as the whole transcript.
           if (IS_REMOTE) state.exportWindowed = true;
+          // One layout after the whole transcript is in the DOM — not one per
+          // replayed row. Live streaming keeps using scrollToBottom per chunk.
+          forceScrollToBottom();
         }
         break;
       case "historyBatch":
@@ -13061,6 +13103,28 @@
         setAllToolDetails(!!msg.open);
         break;
       case "commandOutput": {
+        // MCP output is keyed by toolCallId (always stated on that path).
+        // Do not fall back to a fabricated "Run …" shell row — the tool_call
+        // already owns the row, and argument text is not a correlation key.
+        const wantedId = typeof msg.toolCallId === "string" ? msg.toolCallId.trim() : "";
+        if (wantedId) {
+          let pending = state.pendingCommandDetails.find((p) => !p.done && p.toolCallId === wantedId);
+          if (!pending) {
+            const item = state.toolItemsByToolCallId.get(wantedId);
+            if (item) {
+              const cmd = commandDetailText(item._call)
+                || (typeof msg.command === "string" && msg.command.trim())
+                || "{}";
+              if (!item.querySelector(".cmd-block")) attachCommandDetails(item, cmd, wantedId);
+              pending = state.pendingCommandDetails.find((p) => p.toolCallId === wantedId);
+            }
+          }
+          if (pending) {
+            pending.done = true;
+            attachCommandOutput(pending.details, msg);
+          }
+          break;
+        }
         // A finished shell command's captured output (#41). grok-build delegates
         // commands via terminal/create, so this path fires for it — attach to the
         // oldest un-served row with the exact same command; if none matches

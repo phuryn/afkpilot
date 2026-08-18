@@ -3371,6 +3371,31 @@ textarea#input {
 }
 .slash-name { font-family: var(--vscode-editor-font-family); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
 .slash-desc { font-size: 11px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
+/* The matched run inside a slash/skill row. Uses the house accent
+   (--vscode-charts-blue, the same one the composer's voice and command tokens
+   ride) rather than the editor's find-match yellow, which read as a different
+   product's highlight sitting in our popover.
+
+   Weight sits between the composer's two: lighter than a command about to fire
+   (45% + ring), heavier than provisional dictation (15%). `color: inherit` keeps
+   the glyphs on the row's own foreground, so it survives a light theme where a
+   solid fill would put near-black text on blue.
+
+   The active/hovered row is the awkward case: its background is
+   list-activeSelectionBackground, which is itself blue in most themes, so a blue
+   wash on top can disappear. There the highlight switches to a ring plus a
+   barely-there fill — visible against a blue selection without fighting it. */
+.slash-hl {
+  background: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 30%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  font-weight: inherit;
+}
+.slash-item:hover .slash-hl,
+.slash-item.active .slash-hl {
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 45%, transparent);
+}
 
 /* ---- "@" file-mention popover ---- */
 /* Container reuses .slash-popover (same anchor/box); rows are one-line

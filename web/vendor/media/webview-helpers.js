@@ -565,6 +565,78 @@
     return "Grok CLI /settings → Privacy → Coding data, retention, and training → Opt in.";
   }
 
+  // Unpredicted tool titles (MCP dotted names especially) share a long prefix,
+  // so tail-truncating them leaves a column of indistinguishable rows. Budget
+  // includes the ellipsis; an odd remainder goes to the tail (the distinguisher).
+  const TOOL_LABEL_MAX = 50;
+  function middleElide(text, max) {
+    const s = text == null ? "" : String(text);
+    const limit = Number(max);
+    if (!Number.isFinite(limit) || limit <= 0) return s;
+    if (s.length <= limit) return s;
+    if (limit === 1) return "…";
+    const keep = limit - 1;
+    const head = Math.floor(keep / 2);
+    const tail = keep - head;
+    return s.slice(0, head) + "…" + s.slice(s.length - tail);
+  }
+
+  // KEEP IN STEP with src/slash-filter.ts filterCommands: name prefix, then
+  // mid-name, then description-only; advertised order inside each tier (#110).
+  function filterCommands(commands, query) {
+    const list = Array.isArray(commands) ? commands : [];
+    const q = String(query || "").toLowerCase();
+    if (!q) return list;
+    const prefix = [];
+    const substring = [];
+    const description = [];
+    for (const c of list) {
+      if (!c || typeof c.name !== "string") continue;
+      const name = c.name.toLowerCase();
+      if (name.startsWith(q)) prefix.push(c);
+      else if (name.includes(q)) substring.push(c);
+      else if (String(c.description || "").toLowerCase().includes(q)) description.push(c);
+    }
+    return prefix.concat(substring, description);
+  }
+
+  // First case-insensitive run of `query` in `text`, as text parts. Never
+  // markup — the caller turns `hit` parts into a textContent span.
+  function highlightQueryParts(text, query) {
+    const src = text == null ? "" : String(text);
+    const q = query == null ? "" : String(query);
+    if (!src) return [];
+    if (!q) return [{ text: src, hit: false }];
+    const i = src.toLowerCase().indexOf(q.toLowerCase());
+    if (i < 0) return [{ text: src, hit: false }];
+    const parts = [];
+    if (i > 0) parts.push({ text: src.slice(0, i), hit: false });
+    parts.push({ text: src.slice(i, i + q.length), hit: true });
+    if (i + q.length < src.length) parts.push({ text: src.slice(i + q.length), hit: false });
+    return parts;
+  }
+
+  function appendHighlightedText(el, text, query) {
+    if (!el) return;
+    const doc = el.ownerDocument;
+    el.textContent = "";
+    if (!doc) {
+      el.textContent = text == null ? "" : String(text);
+      return;
+    }
+    for (const part of highlightQueryParts(text, query)) {
+      if (!part.text) continue;
+      if (part.hit) {
+        const mark = doc.createElement("span");
+        mark.className = "slash-hl";
+        mark.textContent = part.text;
+        el.appendChild(mark);
+      } else {
+        el.appendChild(doc.createTextNode(part.text));
+      }
+    }
+  }
+
   // Scannable program label for a command tool row: the executable (first token,
   // path-stripped, de-quoted) plus one following BARE word when it isn't a flag —
   // so `git status` / `npm test` stay distinguishable while a long `node -e "…"`
@@ -632,6 +704,22 @@
     return sibling.href;
   }
 
+  // Same 100K display cap the host applies in `capCommandOutput` (acp-dispatch).
+  // The webview attach path must produce the identical payload so a live Claude
+  // row and an ACP session/load restore cannot disagree, and so the first
+  // arriver is already correct.
+  const MAX_COMMAND_OUTPUT_CHARS = 100000;
+
+  function capCommandOutput(output, truncated, maxChars) {
+    const cap = typeof maxChars === "number" ? maxChars : MAX_COMMAND_OUTPUT_CHARS;
+    const text = typeof output === "string" ? output : "";
+    const over = text.length > cap;
+    return {
+      output: over ? text.slice(0, cap) : text,
+      truncated: !!(truncated || over),
+    };
+  }
+
   // Pull a self-executed shell command's result off a completed `tool_call_update`.
   // The cursor/Composer agent runs commands in its OWN CLI-side persistent shell
   // and reports the result on the completed update (keyed by `toolCallId`) instead
@@ -639,11 +727,26 @@
   // terminal `commandOutput` path, never gets output for those rows. Recover the
   // output + exit code here so the box can render it, matched reliably by
   // `toolCallId` (Composer completes commands OUT of issue order, so no order-based
-  // guess is safe). Returns `{output, exitCode, truncated}` or null when the update
-  // carries no command result. Pure.
+  // guess is safe). Returns `{output, exitCode, truncated, cancelled, agentSawCut}`
+  // or null when the update carries no command result. Pure. Claude's string
+  // rawOutput is preferred over fenced `content`; the 100K cap matches the
+  // host restore path. Always states `cancelled: false` — this path is never
+  // a live terminal kill, and omitting the field would trip the old-host
+  // fallback. Always states `agentSawCut: true` — this is a shell result.
   function extractToolResultOutput(call) {
     if (!call || typeof call !== "object") return null;
+    // Host-normalized MCP rows carry `detailInput` (string or null). Their
+    // OUT arrives as commandOutput with `agentSawCut: false`. Do not invent
+    // a shell payload here — that would claim the agent saw a display cut.
+    if (Object.prototype.hasOwnProperty.call(call, "detailInput")) return null;
     const ro = call.rawOutput;
+    // Claude session/load (and the same live shape): rawOutput is the bare
+    // stdout string; content is that stdout wrapped in a ```console fence, or
+    // the tool description on the first row. Prefer the string.
+    if (typeof ro === "string") {
+      const capped = capCommandOutput(ro, false);
+      return { output: capped.output, exitCode: null, truncated: capped.truncated, cancelled: false, agentSawCut: true };
+    }
     // Output text: the decoded `content` text is cleanest; else decode rawOutput.output
     // (a byte array on the wire), else a plain string.
     let output = "";
@@ -663,7 +766,31 @@
       : ro && typeof ro.exitCode === "number" ? ro.exitCode
       : null;
     if (!output && exitCode == null) return null; // nothing to show
-    return { output, exitCode, truncated: !!(ro && ro.truncated) };
+    const capped = capCommandOutput(output, !!(ro && ro.truncated));
+    return { output: capped.output, exitCode, truncated: capped.truncated, cancelled: false, agentSawCut: true };
+  }
+
+  // Paint [Cancelled] only for a live kill. A host that distinguishes kill from
+  // "exit not reported" always includes `cancelled` (true or false) on every
+  // commandOutput. Absence is an older host, which never hydrated replay
+  // commandOutput, so null exit was a kill.
+  function commandOutputWasCancelled(msg) {
+    if (!msg || typeof msg !== "object") return false;
+    if (Object.prototype.hasOwnProperty.call(msg, "cancelled")) return msg.cancelled === true;
+    return msg.exitCode === null;
+  }
+
+  // Wording for a truncated OUT. This host always states `agentSawCut`
+  // (true = the agent already saw this cut; false = display cap only).
+  // Absence is an older host — do not attribute the cut either way.
+  function commandOutputTruncationNote(msg) {
+    if (!msg || typeof msg !== "object" || !msg.truncated) return "";
+    if (Object.prototype.hasOwnProperty.call(msg, "agentSawCut")) {
+      return msg.agentSawCut === true
+        ? "output truncated — grok saw the same cut"
+        : "output truncated — display only; the agent saw the full result";
+    }
+    return "output truncated";
   }
 
   // Parse the <vscode-context> envelope that prompt-builder.ts wraps around the
@@ -1287,9 +1414,15 @@
     const title = (typeof call.title === "string" && call.title.trim())
       || (typeof rec.kind === "string" && rec.kind)
       || "tool";
+    const detailInput = typeof call.detailInput === "string" && call.detailInput.trim()
+      ? call.detailInput.trim()
+      : "";
+    const parts = [];
+    if (detailInput) parts.push(detailInput);
+    if (rec.output) parts.push(rec.output);
     lines.push(`- ${title}`);
-    if (rec.output) {
-      lines.push("", exportFence(exportTrimmed(rec.output)));
+    if (parts.length) {
+      lines.push("", exportFence(exportTrimmed(parts.join("\n\n"))));
     }
     return lines;
   }
@@ -1328,6 +1461,19 @@
     };
 
     const attachCommand = (msg) => {
+      const id = typeof msg.toolCallId === "string" && msg.toolCallId.trim()
+        ? msg.toolCallId.trim()
+        : "";
+      if (id) {
+        let rec = tools.get(id);
+        if (!rec) {
+          rec = newToolRec(id);
+          tools.set(id, rec);
+          toolOrder.push(id);
+        }
+        if (typeof msg.output === "string") rec.output = msg.output;
+        return;
+      }
       const command = typeof msg.command === "string" ? msg.command : "";
       for (let i = toolOrder.length - 1; i >= 0; i--) {
         const rec = tools.get(toolOrder[i]);
@@ -1336,13 +1482,13 @@
           return;
         }
       }
-      const id = `cmd-${toolOrder.length}`;
-      const rec = newToolRec(id);
+      const fallbackId = `cmd-${toolOrder.length}`;
+      const rec = newToolRec(fallbackId);
       rec.command = command;
       rec.output = typeof msg.output === "string" ? msg.output : "";
       rec.kind = "execute";
-      tools.set(id, rec);
-      toolOrder.push(id);
+      tools.set(fallbackId, rec);
+      toolOrder.push(fallbackId);
     };
 
     const flushUser = () => {
@@ -1442,7 +1588,7 @@
     return header.join("\n") + (body ? body + "\n" : "");
   }
 
-  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, createPendingOverlay, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, commandProgramLabel, commandTextPreview, extractToolResultOutput, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents };
+  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, createPendingOverlay, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, filterCommands, highlightQueryParts, appendHighlightedText, commandProgramLabel, commandTextPreview, MAX_COMMAND_OUTPUT_CHARS, capCommandOutput, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents };
 
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;

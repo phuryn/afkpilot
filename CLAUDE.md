@@ -78,6 +78,16 @@ in-memory device registry — no accounts needed. See
   `media/`, don't eyeball it.
 - `docs/internal/` is the maintainers' private working area (gitignored);
   public docs must read complete without it and never reference it.
+- **A contributor stays visible as a contributor.** Any outside contribution
+  reaches `main` with its author's identity intact, so GitHub credits them on
+  the contributor list and the commit carries their name. Merge so their commit
+  survives — never squash someone else's work into a commit authored by us, and
+  never re-implement a PR as our own change. Adjustments go in commits **on
+  top** of theirs; if history must be collapsed, carry
+  `Co-authored-by: Name <email>` from their commits. This holds however heavily
+  we rewrite it — the person who found the problem and did the work earns the
+  credit even when little of the original diff survives. The same rule lives in
+  grok-build-vscode's `CLAUDE.md`.
 - The hosted service deploys from `main` (staging) and the promote-only
   `production` branch; deployment specifics live in
   [docs/CICD.md](docs/CICD.md).
