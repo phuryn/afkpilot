@@ -389,6 +389,12 @@
     // running turn hears you now, and it does not. See steerableProvider().
     lastTurnUsage: null, // last prompt's billing split (#53), for the donut popover
     sessionUsage: null, // session-cumulative billing — summed by the host, not grok
+    contextCategories: null,
+    contextSystemPromptTokens: null,
+    contextToolDefinitionsTokens: null,
+    contextMessageTokens: null,
+    contextFreeTokens: null,
+    contextAutoCompactPct: null,
     activeAgentEl: null,
     activeAgentRaw: "",
     activeUserEl: null,
@@ -624,6 +630,11 @@
     // Latest `grok update --check` result for Settings → About: { checking } while
     // in flight, then { current, latest, updateAvailable, error }.
     grokUpdate: null,
+    mcpServers: [],
+    mcpLoading: false,
+    mcpError: "",
+    mcpWarning: "",
+    mcpConnectors: [],
     // While replaying an older session, suppress a legacy primer user turn and
     // grok's response until the next user message starts.
     suppressReplayTurn: false,
@@ -1761,6 +1772,14 @@
 
   function openContextPopover() {
     closePopovers();
+    // The control-plane meter is independent of model prompts and is TTL-gated
+    // by the host. Render the cached snapshot immediately, then re-render when
+    // a fresh structured response arrives.
+    vscode.postMessage({ type: "refreshContextDetails" });
+    renderContextPopover();
+  }
+
+  function renderContextPopover() {
     contextPopover.innerHTML = "";
     // A `↳ ` label marks a sub-row (a component of the line above it) — indented
     // via CSS rather than padding the string, so the value column stays aligned.
@@ -1815,6 +1834,25 @@
       };
     }
     contextPopover.appendChild(act);
+
+    const hasBreakdown =
+      state.contextSystemPromptTokens != null ||
+      state.contextToolDefinitionsTokens != null ||
+      state.contextMessageTokens != null ||
+      (state.contextCategories && state.contextCategories.length);
+    if (hasBreakdown) {
+      section("In this window");
+      if (state.contextSystemPromptTokens != null) info("System", tok(state.contextSystemPromptTokens));
+      if (state.contextToolDefinitionsTokens != null) info("Tools", tok(state.contextToolDefinitionsTokens));
+      if (state.contextMessageTokens != null) info("Messages", tok(state.contextMessageTokens));
+      if (state.contextCategories) {
+        for (const category of state.contextCategories) {
+          info(category.detail ? `${category.label} (${category.detail})` : category.label, tok(category.tokens));
+        }
+      }
+      if (state.contextFreeTokens != null) info("Free", tok(state.contextFreeTokens));
+      if (state.contextAutoCompactPct != null) info("Auto-compact at", `${state.contextAutoCompactPct}%`);
+    }
 
     // Billing rows only when the CLI actually reported usage — an older build or
     // a session with no completed turn shows the context row alone rather than a
@@ -2276,6 +2314,11 @@
       hostKind: state.hostKind,
       hostName: state.hostName,
       grokUpdate: state.grokUpdate,
+      mcpServers: state.mcpServers,
+      mcpLoading: state.mcpLoading,
+      mcpError: state.mcpError,
+      mcpWarning: state.mcpWarning,
+      mcpConnectors: state.mcpConnectors,
     };
   }
 
@@ -11243,7 +11286,12 @@
   // ---------- slash autocomplete ----------
 
   function updateSlash() {
-    const m = (input.value.slice(0, input.selectionStart || 0)).match(/(?:^|\n)\/(\S*)$/);
+    // Position 0 of the whole message, matching what the CLI will actually
+    // dispatch (src/slash-filter.ts SLASH_TOKEN_RE / matchSlashCommand). A `\n/`
+    // token used to be offered too, so a command on line 2 completed and then
+    // went out as prose — #110. Mid-prompt stays unoffered for the same reason;
+    // the ask to accept a command anywhere in the block is upstream's.
+    const m = (input.value.slice(0, input.selectionStart || 0)).match(/^\/(\S*)$/);
     if (!m) { slashPopover.hidden = true; state.slashFiltered = []; state.slashQuery = ""; return; }
     const q = m[1];
     state.slashQuery = q;
@@ -12981,7 +13029,7 @@
     "initialState", "showThinking", "appPurpose", "expandCommandOutputs",
     "steerByDefault", "steerUnavailable", "soundNotifications", "processingSound",
     "readRepliesAloud", "summarizeRepliesAloud", "fontScale", "voiceConfigured",
-    "providerState", "remoteStatus", "telemetryEnabled", "grokUpdateStatus", "initialized",
+    "providerState", "mcpServers", "mcpConnectors", "remoteStatus", "telemetryEnabled", "grokUpdateStatus", "initialized",
   ]);
 
   function handleHostMessage(msg) {
@@ -13060,6 +13108,17 @@
         if (!gearPopover.hidden && state.gearView === "main") renderGearMain();
         if (!historyPopover.hidden) renderSessionRows();
         renderRail();
+        break;
+      case "mcpServers":
+        state.mcpServers = Array.isArray(msg.servers) ? msg.servers : [];
+        state.mcpLoading = msg.loading === true;
+        state.mcpError = msg.error || "";
+        state.mcpWarning = msg.warning || "";
+        refreshSettingsOverlay();
+        break;
+      case "mcpConnectors":
+        state.mcpConnectors = Array.isArray(msg.connectors) ? msg.connectors : [];
+        refreshSettingsOverlay();
         break;
       case "codexInstallProgress":
         state.codexInstall = {
@@ -13327,6 +13386,12 @@
         state.availableModels = msg.models || [];
         const m = state.availableModels.find((x) => x.modelId === msg.currentModelId && (!x.provider || x.provider === state.activeProvider));
         if (m?.totalContextTokens) state.contextWindow = m.totalContextTokens;
+        state.contextCategories = null;
+        state.contextSystemPromptTokens = null;
+        state.contextToolDefinitionsTokens = null;
+        state.contextMessageTokens = null;
+        state.contextFreeTokens = null;
+        state.contextAutoCompactPct = null;
         updateDonut(0);
         reportRemotePreferences();
         break;
@@ -13928,8 +13993,15 @@
         // or the remembered adapter prompt size. A window-only frame updates
         // the denominator without inventing a used count.
         if (msg.window) state.contextWindow = msg.window;
+        if (msg.categories) state.contextCategories = msg.categories;
+        if (msg.systemPromptTokens != null) state.contextSystemPromptTokens = msg.systemPromptTokens;
+        if (msg.toolDefinitionsTokens != null) state.contextToolDefinitionsTokens = msg.toolDefinitionsTokens;
+        if (msg.messageTokens != null) state.contextMessageTokens = msg.messageTokens;
+        if (msg.freeTokens != null) state.contextFreeTokens = msg.freeTokens;
+        if (msg.autoCompactThresholdPercent != null) state.contextAutoCompactPct = msg.autoCompactThresholdPercent;
         if (msg.used != null) updateDonut(msg.used);
         else updateDonut();
+        if (!contextPopover.hidden) renderContextPopover();
         break;
       case "expandCommandOutputs":
         // Live toggle (grok.expandCommandOutputs): applies to existing rows

@@ -13,6 +13,8 @@
     { id: "voice", title: "Voice", restore: true },
     { id: "notifications", title: "Notifications", restore: true },
     { id: "providers", title: "Providers", restore: false },
+    { id: "connectors", title: "Connectors", restore: false },
+    { id: "mcp", title: "MCP servers", restore: false },
     { id: "account", title: "Account", restore: false },
     { id: "advanced", title: "Advanced", restore: false },
     { id: "about", title: "About", restore: false },
@@ -25,6 +27,8 @@
     voice: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>',
     notifications: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
     providers: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>',
+    connectors: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h6"/><path d="M14 9h6"/><circle cx="10" cy="9" r="2"/><circle cx="14" cy="9" r="2"/><path d="M7 9v6a5 5 0 0 0 10 0V9"/></svg>',
+    mcp: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v3"/><path d="M15 3v3"/><path d="M7 6h10v5a5 5 0 0 1-10 0Z"/><path d="M12 16v5"/></svg>',
     account: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
     advanced: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
     about: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>',
@@ -543,14 +547,19 @@
       message: () => ({ type: "openProjectConfig" }),
     },
     {
-      id: "runMcpList",
-      category: "advanced",
+      id: "connectorsCatalog",
+      category: "connectors",
+      title: "Connectors",
+      description: "Apps available to Grok, Codex, and Claude after you sign in on this machine.",
+      kind: "connectors",
+    },
+    {
+      id: "mcpCatalog",
+      category: "mcp",
       title: "MCP servers",
-      description: "List the MCP servers configured for the Grok CLI.",
-      kind: "action",
-      actionLabel: "Open",
+      description: "See the servers and tools available to the current Grok session.",
+      kind: "mcp",
       hostLocal: true,
-      message: () => ({ type: "runMcpList" }),
     },
     {
       id: "showLogs",
@@ -855,9 +864,13 @@
 
   function searchHaystack(row, snapshot, env) {
     const cat = CATEGORIES.find((c) => c.id === row.category);
+    const extra = row.kind === "connectors" && Array.isArray(snapshot && snapshot.mcpConnectors)
+      ? snapshot.mcpConnectors.map((c) => [c.name, c.description].join(" ")).join(" ")
+      : "";
     return [
       rowTitle(row, snapshot, env),
       rowDescription(row, snapshot, env),
+      extra,
       cat ? cat.title : "",
       row.id,
     ].join(" ").toLowerCase();
@@ -1002,6 +1015,11 @@
       hostKind: "",
       hostName: "",
       grokUpdate: null,
+      mcpServers: [],
+      mcpLoading: false,
+      mcpError: "",
+      mcpWarning: "",
+      mcpConnectors: [],
       ...(partial || {}),
     };
   }
@@ -1142,7 +1160,166 @@
     return `<button type="button" class="settings-switch${on ? " on" : ""}" role="switch" aria-checked="${on ? "true" : "false"}"${disabled ? " disabled" : ""}><span class="settings-switch-knob"></span></button>`;
   }
 
+  function mcpDetail(server) {
+    const parts = [];
+    if (server.enabled === false) parts.push("Disabled");
+    if (server.status) parts.push(server.status);
+    if (Number.isFinite(server.toolCount)) {
+      parts.push(`${server.toolCount} ${server.toolCount === 1 ? "tool" : "tools"}`);
+    }
+    if (server.url) parts.push(server.url);
+    else if (server.command) parts.push([server.command].concat(server.args || []).join(" "));
+    if (server.error) parts.push(server.error);
+    return parts.join(" · ");
+  }
+
+  function renderMcpCatalog(snapshot) {
+    const el = document.createElement("div");
+    el.className = "settings-mcp";
+    el.dataset.id = "mcpCatalog";
+    const warning = document.createElement("div");
+    warning.className = "settings-mcp-warning";
+    warning.textContent = snapshot.mcpWarning || "This panel is read-only.";
+    el.appendChild(warning);
+    if (snapshot.mcpLoading) {
+      const loading = document.createElement("div");
+      loading.className = "settings-mcp-state";
+      loading.setAttribute("aria-live", "polite");
+      loading.textContent = "Loading MCP servers…";
+      el.appendChild(loading);
+      return el;
+    }
+    if (snapshot.mcpError) {
+      const error = document.createElement("div");
+      error.className = "settings-mcp-state is-error";
+      error.setAttribute("role", "alert");
+      error.textContent = snapshot.mcpError;
+      el.appendChild(error);
+      return el;
+    }
+    const servers = Array.isArray(snapshot.mcpServers) ? snapshot.mcpServers : [];
+    if (!servers.length) {
+      const empty = document.createElement("div");
+      empty.className = "settings-mcp-state";
+      empty.textContent = "No MCP servers reported by this Grok session.";
+      el.appendChild(empty);
+      return el;
+    }
+    const list = document.createElement("div");
+    list.className = "settings-mcp-list";
+    for (const server of servers) {
+      const row = document.createElement("div");
+      row.className = "settings-mcp-server";
+      const copy = document.createElement("div");
+      copy.className = "settings-mcp-copy";
+      const name = document.createElement("div");
+      name.className = "settings-mcp-name settings-row-title";
+      const status = document.createElement("span");
+      status.className = "settings-mcp-status" + (server.status === "ready" ? " is-ready" : (server.error || server.status === "unavailable" ? " is-error" : ""));
+      status.setAttribute("aria-hidden", "true");
+      name.appendChild(status);
+      const label = document.createElement("span");
+      label.textContent = server.displayName || server.name;
+      name.appendChild(label);
+      if (server.managed || server.source === "managed") {
+        const badge = document.createElement("span");
+        badge.className = "settings-mcp-badge";
+        badge.textContent = "grok.com managed";
+        name.appendChild(badge);
+      }
+      const detail = document.createElement("div");
+      detail.className = "settings-row-desc";
+      detail.textContent = mcpDetail(server) || (server.enabled ? "Enabled" : "Disabled");
+      copy.append(name, detail);
+      row.appendChild(copy);
+      list.appendChild(row);
+    }
+    el.appendChild(list);
+    return el;
+  }
+
+  function connectorDescription(connector, env) {
+    if (connector.status === "connecting") {
+      return "Waiting for the browser sign-in to finish…";
+    }
+    if (connector.status === "error" && connector.error) return connector.error;
+    if (env && env.isRemote) {
+      return connector.connected
+        ? connector.description + " Connected on the desk machine."
+        : connector.description + " Sign-in happens on the desk.";
+    }
+    if (connector.connected) {
+      return connector.description + " Applies to new conversations and when you reopen one.";
+    }
+    return connector.description;
+  }
+
+  function renderConnectorsCatalog(snapshot, env) {
+    const el = document.createElement("div");
+    el.className = "settings-mcp";
+    el.dataset.id = "connectorsCatalog";
+    const warning = document.createElement("div");
+    warning.className = "settings-mcp-warning";
+    warning.textContent = env && env.isRemote
+      ? "These apps are connected on the desk machine. Sign-in happens there — a phone cannot change which tools an agent has."
+      : "These apps are available to Grok, Codex, and Claude. Connecting opens a browser to sign in. Tokens stay on this machine.";
+    el.appendChild(warning);
+    const connectors = Array.isArray(snapshot.mcpConnectors) ? snapshot.mcpConnectors : [];
+    if (!connectors.length) {
+      const empty = document.createElement("div");
+      empty.className = "settings-mcp-state";
+      empty.textContent = "Connector list has not arrived from the host yet.";
+      el.appendChild(empty);
+      return el;
+    }
+    const list = document.createElement("div");
+    list.className = "settings-mcp-list";
+    for (const connector of connectors) {
+      const row = document.createElement("div");
+      row.className = "settings-row settings-connector";
+      row.dataset.id = "connector-" + connector.id;
+      const copy = document.createElement("div");
+      copy.className = "settings-row-copy";
+      const name = document.createElement("div");
+      name.className = "settings-row-title";
+      const status = document.createElement("span");
+      status.className = "settings-mcp-status" + (connector.connected ? " is-ready" : (connector.status === "error" ? " is-error" : ""));
+      status.setAttribute("aria-hidden", "true");
+      name.appendChild(status);
+      name.appendChild(document.createTextNode(connector.name));
+      const desc = document.createElement("div");
+      desc.className = "settings-row-desc";
+      desc.textContent = connectorDescription(connector, env);
+      copy.append(name, desc);
+      const control = document.createElement("div");
+      control.className = "settings-row-control";
+      if (!(env && env.isRemote)) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "settings-action settings-connector-action";
+        btn.dataset.id = connector.id;
+        btn.dataset.connected = connector.connected ? "true" : "false";
+        const connecting = connector.status === "connecting";
+        btn.textContent = connecting ? "Connecting…" : (connector.connected ? "Disconnect" : "Connect");
+        btn.disabled = connecting;
+        if (connecting) btn.setAttribute("aria-busy", "true");
+        control.appendChild(btn);
+      } else {
+        const span = document.createElement("span");
+        span.className = "settings-value";
+        span.textContent = connector.connected ? "Connected" : "Not connected";
+        control.appendChild(span);
+      }
+      row.append(copy, control);
+      list.appendChild(row);
+    }
+    el.appendChild(list);
+    return el;
+  }
+
   function renderRow(row, snapshot, env) {
+    if (row.kind === "mcp") return renderMcpCatalog(snapshot);
+    if (row.kind === "connectors") return renderConnectorsCatalog(snapshot, env);
     const el = document.createElement("div");
     el.className = "settings-row";
     el.dataset.id = row.id;
@@ -1271,6 +1448,7 @@
     let pendingRestore = null;
     let aboutChecked = false;
     let providersChecked = false;
+    let mcpChecked = false;
     const post = typeof opts.post === "function" ? opts.post : () => {};
     const apply = typeof opts.apply === "function" ? opts.apply : null;
     const onLocal = typeof opts.onLocal === "function" ? opts.onLocal : null;
@@ -1385,6 +1563,17 @@
       requestProvidersRefresh();
     }
 
+    function requestMcpRefresh() {
+      snapshot = { ...snapshot, mcpLoading: true, mcpError: "" };
+      post({ type: "listMcpServers" });
+    }
+
+    function maybeRefreshMcp() {
+      if (mcpChecked || categoryId !== "mcp" || query.trim() || env.isRemote) return;
+      mcpChecked = true;
+      requestMcpRefresh();
+    }
+
     function runAction(row) {
       if (row.local) {
         if (onClose && !opts.standalone) onClose();
@@ -1405,6 +1594,7 @@
       ensureCategory();
       maybeCheckAbout();
       maybeRefreshProviders();
+      maybeRefreshMcp();
       const searching = !!query.trim();
       const shownCats = cats();
       const page = CATEGORIES.find((c) => c.id === categoryId) || shownCats[0];
@@ -1506,6 +1696,16 @@
         refresh.onclick = (e) => { e.stopPropagation(); requestProvidersRefresh(); };
         headActions.appendChild(refresh);
       }
+      if (!searching && page && page.id === "mcp" && !env.isRemote) {
+        const refresh = document.createElement("button");
+        refresh.type = "button";
+        refresh.className = "settings-refresh";
+        refresh.textContent = snapshot.mcpLoading ? "Loading…" : "Refresh";
+        refresh.disabled = snapshot.mcpLoading === true;
+        if (refresh.disabled) refresh.setAttribute("aria-busy", "true");
+        refresh.onclick = (e) => { e.stopPropagation(); requestMcpRefresh(); paint(); };
+        headActions.appendChild(refresh);
+      }
       const changes = !searching && page && page.restore
         ? restoreChanges(page.id, snapshot, env)
         : [];
@@ -1600,6 +1800,7 @@
         if (!next) return;
         if (next !== "about") aboutChecked = false;
         if (next !== "providers") providersChecked = false;
+        if (next !== "mcp") mcpChecked = false;
         categoryId = next;
         query = "";
         dismissRestoreConfirm();
@@ -1679,6 +1880,18 @@
           btn.onclick = (e) => { e.stopPropagation(); runAction(row); };
         }
       });
+      body.querySelectorAll(".settings-connector-action").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (env.isRemote || btn.disabled) return;
+          const id = btn.dataset.id;
+          if (!id) return;
+          post({
+            type: btn.dataset.connected === "true" ? "disconnectMcpConnector" : "connectMcpConnector",
+            id,
+          });
+        });
+      });
       applyFocus(container, focus);
     }
 
@@ -1754,6 +1967,7 @@
       setCategory(id) {
         if (id !== "about") aboutChecked = false;
         if (id !== "providers") providersChecked = false;
+        if (id !== "mcp") mcpChecked = false;
         categoryId = id || "general";
         query = "";
         dismissRestoreConfirm();
