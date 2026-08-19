@@ -581,6 +581,49 @@
     return s.slice(0, head) + "…" + s.slice(s.length - tail);
   }
 
+  // KEEP IN STEP with src/slash-filter.ts isAdvertisedSkill: grok advertises
+  // skills with `_meta.scope` + `_meta.path`; builtins omit those keys.
+  function isAdvertisedSkill(cmd) {
+    if (!cmd || typeof cmd !== "object") return false;
+    const meta = cmd._meta || cmd.meta;
+    if (!meta || typeof meta !== "object") return false;
+    const path = meta.path;
+    const scope = meta.scope;
+    return typeof path === "string" && path.length > 0 && typeof scope === "string" && scope.length > 0;
+  }
+
+  function isSlashBoundary(ch) {
+    return ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\f" || ch === "\v";
+  }
+
+  // KEEP IN STEP with src/slash-filter.ts getSlashQuery. Skills load anywhere
+  // (`atStart: false` after whitespace); commands dispatch only at position 0.
+  function getSlashQuery(text, caret) {
+    const src = text == null ? "" : String(text);
+    const pos = Math.max(0, Math.min(Number(caret) || 0, src.length));
+    const before = src.slice(0, pos);
+    const m = before.match(/\/(\S*)$/);
+    if (!m) return null;
+    const slashIndex = before.length - m[0].length;
+    if (slashIndex > 0 && !isSlashBoundary(before.charAt(slashIndex - 1))) return null;
+    return { query: m[1], atStart: slashIndex === 0 };
+  }
+
+  // KEEP IN STEP with src/slash-filter.ts applySlashPick.
+  function applySlashPick(text, caret, name) {
+    const src = text == null ? "" : String(text);
+    const pos = Math.max(0, Math.min(Number(caret) || 0, src.length));
+    const before = src.slice(0, pos);
+    const after = src.slice(pos);
+    const hit = getSlashQuery(src, pos);
+    if (!hit) return { text: src, caret: pos };
+    const m = before.match(/\/(\S*)$/);
+    if (!m) return { text: src, caret: pos };
+    const slashIndex = before.length - m[0].length;
+    const newBefore = before.slice(0, slashIndex) + "/" + name + " ";
+    return { text: newBefore + after, caret: newBefore.length };
+  }
+
   // KEEP IN STEP with src/slash-filter.ts filterCommands: name prefix, then
   // mid-name, then description-only; advertised order inside each tier (#110).
   function filterCommands(commands, query) {
@@ -1588,7 +1631,7 @@
     return header.join("\n") + (body ? body + "\n" : "");
   }
 
-  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, createPendingOverlay, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, filterCommands, highlightQueryParts, appendHighlightedText, commandProgramLabel, commandTextPreview, MAX_COMMAND_OUTPUT_CHARS, capCommandOutput, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents };
+  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, createPendingOverlay, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, highlightQueryParts, appendHighlightedText, commandProgramLabel, commandTextPreview, MAX_COMMAND_OUTPUT_CHARS, capCommandOutput, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents };
 
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;

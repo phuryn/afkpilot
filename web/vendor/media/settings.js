@@ -552,6 +552,7 @@
       title: "Connectors",
       description: "Apps available to Grok, Codex, and Claude after you sign in on this machine.",
       kind: "connectors",
+      visible: (s, env) => mcpSettingsEnabled(env),
     },
     {
       id: "mcpCatalog",
@@ -560,6 +561,7 @@
       description: "See the servers and tools available to the current Grok session.",
       kind: "mcp",
       hostLocal: true,
+      visible: (s, env) => mcpSettingsEnabled(env),
     },
     {
       id: "showLogs",
@@ -817,6 +819,15 @@
     },
   ];
 
+  function mcpSettingsEnabled(env) {
+    return !!(env && env.hostCaps && env.hostCaps.mcpSettings);
+  }
+
+  function catalogCategories(env) {
+    if (mcpSettingsEnabled(env)) return CATEGORIES;
+    return CATEGORIES.filter((cat) => cat.id !== "connectors" && cat.id !== "mcp");
+  }
+
   function rowVisible(row, snapshot, env) {
     if (row.hostLocal && env && env.isRemote) return false;
     if (typeof row.visible === "function") return !!row.visible(snapshot, env);
@@ -859,7 +870,7 @@
   function visibleCategories(snapshot, env) {
     const rows = visibleRows(snapshot, env);
     const ids = new Set(rows.map((row) => row.category));
-    return CATEGORIES.filter((cat) => ids.has(cat.id));
+    return catalogCategories(env).filter((cat) => ids.has(cat.id));
   }
 
   function searchHaystack(row, snapshot, env) {

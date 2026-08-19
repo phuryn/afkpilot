@@ -1036,7 +1036,7 @@
 
   // ---------- markdown ----------
 
-  const { looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, filterCommands, appendHighlightedText, commandProgramLabel, commandTextPreview, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage, createPendingOverlay, getMentionQuery, applyMentionPick, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents } = globalThis.GrokWebviewHelpers;
+  const { looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, appendHighlightedText, commandProgramLabel, commandTextPreview, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage, createPendingOverlay, getMentionQuery, applyMentionPick, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents } = globalThis.GrokWebviewHelpers;
 
   function escapeAttr(s) {
     return String(s == null ? "" : s)
@@ -7592,6 +7592,34 @@
       (Array.isArray(r.paths) ? r.paths[0] : "") ||
       pathFromToolTitle(call);
   }
+  function isReadTool(call) {
+    if (!call) return false;
+    const name = toolName(call);
+    const kind = toolKind(call);
+    return name === "read_file" || name === "file_read" || kind === "read";
+  }
+  function asLineNum(v) {
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  }
+  // Line range for a Read row. Prefer requested offset/limit (1-based; 0 → 1),
+  // then FileContent.{offset,limit,total_lines} on the completed update.
+  // Do not invent numbers when none of those are on the wire.
+  function readLineRange(call) {
+    const r = (call && (call.rawInput || call.input)) || {};
+    const ro = call && call.rawOutput;
+    const fc = ro && (ro.FileContent || ro.file_content) || {};
+    let start = asLineNum(r.offset) ?? asLineNum(r.start_line) ?? asLineNum(r.startLine) ?? asLineNum(fc.offset);
+    const endHint = asLineNum(r.end_line) ?? asLineNum(r.endLine);
+    const limit = asLineNum(r.limit) ?? asLineNum(fc.limit);
+    const total = asLineNum(fc.total_lines) ?? asLineNum(fc.totalLines);
+    if (start === 0) start = 1;
+    if (start != null && endHint != null && endHint >= start) return { start, end: endHint };
+    if (start != null && limit != null && limit > 0) return { start, end: start + limit - 1 };
+    if (start == null && limit != null && limit > 0) return { start: 1, end: limit };
+    if (start != null && total != null && total >= start) return { start, end: total };
+    if (start == null && total != null && total > 0) return { start: 1, end: total };
+    return null;
+  }
   function toolRenamePaths(call) {
     const r = call && (call.rawInput || call.input) || {};
     const from = r.old_path || r.old_file || r.from;
@@ -7744,9 +7772,11 @@
       const isRead = name === "read_file" || name === "file_read" || kind === "read";
       if (isList) {
         target = prettyDir(filePath);
-      } else if (isRead && r.offset != null && r.limit != null) {
-        const end = Number(r.offset) + Number(r.limit) - 1;
-        target = `${prettyPath(filePath)} lines ${r.offset}-${end}`;
+      } else if (isRead) {
+        const range = readLineRange(call);
+        target = range
+          ? `${prettyPath(filePath)} lines ${range.start}-${range.end}`
+          : prettyPath(filePath);
       } else {
         target = prettyPath(filePath);
       }
@@ -7909,6 +7939,10 @@
     // shell via host-normalized `detailInput` (never an empty pending block).
     const cmd = commandDetailText(call);
     if (cmd) attachCommandDetails(item, cmd, call.toolCallId);
+    else if (isReadTool(call) && !item.querySelector(".cmd-block")) {
+      const path = String(toolFilePath(call) || "");
+      if (path || extractToolResultOutput(call)) attachCommandDetails(item, path, call.toolCallId);
+    }
 
     hdr.innerHTML =
       toolIconFor(el._calls) +
@@ -7925,7 +7959,7 @@
     // full command mid-run.
     el.classList.toggle(
       "cmd-single",
-      el._calls.length === 1 && !!commandDetailText(call),
+      el._calls.length === 1 && !!(commandDetailText(call) || isReadTool(call)),
     );
     hdr.onclick = () => {
       const expanded = !body.hidden;
@@ -7959,9 +7993,9 @@
   // Effective expand state, given the per-session latch (toolExpandOverride)
   // takes precedence over the persisted grok.expandCommandOutputs default.
   //   - override set  → force everything to the override (all groups, all boxes).
-  //   - override null → the setting: every detail box (command IN/OUT, edit diff)
-  //                     opens, and only GROUPS that HOLD a detail auto-open —
-  //                     command or edit groups, but not read/explore-only ones.
+  //   - override null → the setting: every detail box (command IN/OUT, Read
+  //                     file text, edit diff) opens, and only GROUPS that HOLD
+  //                     a detail auto-open — search/list-only groups stay collapsed.
   // `groupShouldExpand` needs the element to decide the has-detail case;
   // `detailShouldExpand` is group-agnostic.
   function groupShouldExpand(el) {
@@ -8253,8 +8287,12 @@
     // MCP args that arrive after a pending row use the same attach.
     const cmd = commandDetailText(merged);
     if (cmd && !item.querySelector(".cmd-block")) attachCommandDetails(item, cmd, id);
+    else if (isReadTool(merged) && !item.querySelector(".cmd-block")) {
+      const path = String(toolFilePath(merged) || "");
+      if (path || extractToolResultOutput(merged)) attachCommandDetails(item, path, id);
+    }
     if (groupCalls && groupCalls.classList.contains("in-progress") && groupCalls._calls && groupCalls._calls.length === 1) {
-      groupCalls.classList.toggle("cmd-single", !!cmd);
+      groupCalls.classList.toggle("cmd-single", !!(cmd || isReadTool(merged)));
     }
   }
 
@@ -8332,6 +8370,8 @@
   function maybeAttachToolResultOutput(call) {
     const id = call && call.toolCallId;
     if (!id) return false;
+    // A pending Claude row's `content` is the tool description — not stdout.
+    if (String(call.status || "").toLowerCase() === "pending") return false;
     // Use the pendingCommandDetails entry (a direct `details` node reference that
     // survives a lone command's flatten-move) rather than re-querying the item —
     // the item's details node is relocated to the .tool-flat wrapper.
@@ -8347,7 +8387,9 @@
     // (focusSession / rehydrateWebviewFromFocused), which have no commandOutput.
     const res = extractToolResultOutput(call);
     if (!res) return false;
-    attachCommandOutput(entry.details, res);
+    // Read rows reuse this OUT chrome. The 100K cap is display-only —
+    // grok already saw the full FileContent (same polarity as MCP).
+    attachCommandOutput(entry.details, isReadTool(call) ? { ...res, agentSawCut: false } : res);
     return true;
   }
 
@@ -11286,16 +11328,14 @@
   // ---------- slash autocomplete ----------
 
   function updateSlash() {
-    // Position 0 of the whole message, matching what the CLI will actually
-    // dispatch (src/slash-filter.ts SLASH_TOKEN_RE / matchSlashCommand). A `\n/`
-    // token used to be offered too, so a command on line 2 completed and then
-    // went out as prose — #110. Mid-prompt stays unoffered for the same reason;
-    // the ask to accept a command anywhere in the block is upstream's.
-    const m = (input.value.slice(0, input.selectionStart || 0)).match(/^\/(\S*)$/);
-    if (!m) { slashPopover.hidden = true; state.slashFiltered = []; state.slashQuery = ""; return; }
-    const q = m[1];
-    state.slashQuery = q;
-    state.slashFiltered = filterCommands(state.commands, q);
+    // Skills load anywhere in the prompt; commands dispatch only at position 0
+    // of the text block (owner-measured; grok `available_commands` stamps
+    // `_meta.scope`+`_meta.path` on skills). Offer accordingly — #110.
+    const hit = getSlashQuery(input.value, input.selectionStart || 0);
+    if (!hit) { slashPopover.hidden = true; state.slashFiltered = []; state.slashQuery = ""; return; }
+    const pool = hit.atStart ? state.commands : state.commands.filter(isAdvertisedSkill);
+    state.slashQuery = hit.query;
+    state.slashFiltered = filterCommands(pool, hit.query);
     if (!state.slashFiltered.length) { slashPopover.hidden = true; return; }
     state.slashActive = 0;
     renderSlash();
@@ -11327,11 +11367,12 @@
   }
 
   function pickSlash(cmd) {
-    input.value = input.value.replace(/(?:^|\n)\/(\S*)$/, (full) =>
-      full.startsWith("\n") ? `\n/${cmd.name} ` : `/${cmd.name} `,
-    );
+    const next = applySlashPick(input.value, input.selectionStart || 0, cmd.name);
+    input.value = next.text;
+    input.selectionStart = input.selectionEnd = next.caret;
     slashPopover.hidden = true;
     input.focus();
+    renderInputHighlight();
   }
 
   // ---------- "@" file autocomplete ----------
@@ -13735,6 +13776,9 @@
           state.mediaGenCallIds.add(msg.call.toolCallId);
         }
         addToToolGroup(msg.call);
+        // Reads replay as a completed tool_call with the file text in `content`.
+        // Shell rows wait for host `commandOutput` (grok) or a later update (Claude).
+        if (isReadTool(msg.call)) maybeAttachToolResultOutput(msg.call);
         // On session/load a completed edit replays as a single `tool_call` that
         // already carries its diff (no follow-up update) — attach the preview here
         // or the restored edit has no "open diff →" (#30).
@@ -13796,12 +13840,18 @@
             break;
           }
         }
+        // Fold the refined title and arguments into the row before OUT / diffs
+        // — Claude's first call is a bare verb; the path (and Read details)
+        // arrive on this update. Attach the IN box first so maybeAttach can
+        // fill OUT from this same completed payload.
+        refreshToolRowFromUpdate(msg.call);
         // A self-executed command (cursor/Composer runs it in its own shell and
         // reports the result here, not via terminal/create) — fill the row's #41
-        // IN/OUT box by toolCallId. Takes precedence over the generic failure path
-        // so a non-zero command reads as an [Error] exit N in its OUT box, matching
-        // grok-build's terminal-fed rows. No-op (returns false) for grok-build,
-        // whose row already has OUT.
+        // IN/OUT box by toolCallId. Same path now fills a Read row's View all.
+        // Takes precedence over the generic failure path so a non-zero command
+        // reads as an [Error] exit N in its OUT box, matching grok-build's
+        // terminal-fed rows. No-op (returns false) for grok-build, whose row
+        // already has OUT.
         if (String(msg.call?.status).toLowerCase() === "completed" && maybeAttachToolResultOutput(msg.call)) {
           break;
         }
@@ -13819,9 +13869,6 @@
           markToolFailed(id, hint ? failure + "\n" + hint : failure);
           break;
         }
-        // Fold the refined title and arguments into the row before the diff
-        // pass — for Claude this is where a row stops being a bare verb.
-        refreshToolRowFromUpdate(msg.call);
         applyToolDiffs(msg.call);
         break;
       }

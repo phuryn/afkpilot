@@ -109,14 +109,26 @@ body {
   display: flex;
   flex-direction: column;
   /* grok.chatFontScale zooms the chat via --chat-zoom (set inline on <body>).
-     `zoom` scales layout but the containing block does not, so a 100% body at
-     zoom 0.7 would paint at 70% and leave dead space below the composer —
-     divide the html height back out so the body always fills the window and
-     the composer stays pinned to the bottom at any scale.
      Use 100% of html, not 100vh: vh ignores CSS zoom and can read the
-     unsettled window/monitor size on first paint; html is the settled box. */
+     unsettled window/monitor size on first paint; html is the settled box.
+
+     Do NOT divide the zoom back out (#119). That was right under the old
+     non-standard `zoom`, where a percentage resolved against an unzoomed
+     containing block. The CSS Zoom spec (Chromium 128+) resolves percentages
+     against the ZOOM-ADJUSTED containing block, so `height: 100%` already
+     fills the window at any scale and dividing again halves it. Measured in
+     Chromium 149 against an 800px viewport — footer bottom, want 800:
+
+        zoom          0.6    0.7    1.0    1.5    2.0    3.0
+        calc(100%/z) 1333   1143    800    533    400    267
+        100%          800    800    800    800    800    800
+
+     So the old formula was wrong at EVERY scale but 1 — overflowing below 1
+     and clipping above it, which is what #119 reported at 200%. Electron 33
+     is Chromium 130 and VS Code ships newer, so both surfaces are on the spec
+     behaviour; no build here wants the division. */
   zoom: var(--chat-zoom, 1);
-  height: calc(100% / var(--chat-zoom, 1));
+  height: 100%;
   overflow: hidden;
   /* Shared rail / file-tree row rhythm (desktop tree panel reuses these). */
   --rail-row-font-size: 13px;
