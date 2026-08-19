@@ -15,7 +15,11 @@
     { id: "providers", title: "Providers", restore: false },
     { id: "connectors", title: "Connectors", restore: false },
     { id: "mcp", title: "MCP servers", restore: false },
-    { id: "account", title: "Account", restore: false },
+    // "Remote control" rather than "Account": the page is about driving this
+    // desk from a phone or browser — linking, the device list, the AFK Pilot
+    // sign-in that enables it. "Account" invited confusion with the agent
+    // accounts (Grok / Codex / Claude), which live under Providers.
+    { id: "account", title: "Remote control", restore: false },
     { id: "advanced", title: "Advanced", restore: false },
     { id: "about", title: "About", restore: false },
   ];
@@ -29,7 +33,10 @@
     providers: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>',
     connectors: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h6"/><path d="M14 9h6"/><circle cx="10" cy="9" r="2"/><circle cx="14" cy="9" r="2"/><path d="M7 9v6a5 5 0 0 0 10 0V9"/></svg>',
     mcp: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v3"/><path d="M15 3v3"/><path d="M7 6h10v5a5 5 0 0 1-10 0Z"/><path d="M12 16v5"/></svg>',
-    account: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+    // The lucide phone the top bar uses for Continue remotely (chat.js ICON
+    // .smartphone). Same shape on both so the nav row and the button read as
+    // one feature — which is the point of calling this page Remote control.
+    account: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/></svg>',
     advanced: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
     about: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>',
   };
@@ -44,6 +51,23 @@
     codex: "M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z",
     // Four-point sparkle — distinct from the Grok/Codex marks, currentColor.
     claude: "M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z",
+  };
+
+  /**
+   * Row marks for the About links. Lucide strokes like NAV_ICONS, plus the
+   * GitHub octicon, which is a FILLED path rather than a stroke — hence its
+   * own shape here instead of a line in the lucide set. Every one is
+   * currentColor, so they inherit .settings-row-logo's --vscode-foreground
+   * and dim with .is-disabled along with the copy beside them.
+   *
+   * The octicon ships with a 1024 viewBox but 0-16 coordinates (an export
+   * artifact); drawn at 0 0 16 16, which is the space the path is actually in.
+   */
+  const ROW_ICONS = {
+    bug: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/></svg>',
+    lightbulb: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg>',
+    mail: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>',
+    github: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8C0 11.54 2.29 14.53 5.47 15.59C5.87 15.66 6.02 15.42 6.02 15.21C6.02 15.02 6.01 14.39 6.01 13.72C4 14.09 3.48 13.23 3.32 12.78C3.23 12.55 2.84 11.84 2.5 11.65C2.22 11.5 1.82 11.13 2.49 11.12C3.12 11.11 3.57 11.7 3.72 11.94C4.44 13.15 5.59 12.81 6.05 12.6C6.12 12.08 6.33 11.73 6.56 11.53C4.78 11.33 2.92 10.64 2.92 7.58C2.92 6.71 3.23 5.99 3.74 5.43C3.66 5.23 3.38 4.41 3.82 3.31C3.82 3.31 4.49 3.1 6.02 4.13C6.66 3.95 7.34 3.86 8.02 3.86C8.7 3.86 9.38 3.95 10.02 4.13C11.55 3.09 12.22 3.31 12.22 3.31C12.66 4.41 12.38 5.23 12.3 5.43C12.81 5.99 13.12 6.7 13.12 7.58C13.12 10.65 11.25 11.33 9.47 11.53C9.76 11.78 10.01 12.26 10.01 13.01C10.01 14.08 10 14.94 10 15.21C10 15.42 10.15 15.67 10.55 15.59C13.71 14.53 16 11.53 16 8C16 3.58 12.42 0 8 0Z"></path></svg>',
   };
 
   function providerLogoMarkup(id) {
@@ -678,17 +702,6 @@
       },
     },
     {
-      id: "aboutCodexAdapter",
-      category: "about",
-      title: "Codex ACP adapter",
-      kind: "value",
-      visible: (s) => !!codexProvider(s),
-      get: (s) => {
-        const p = codexProvider(s);
-        return versionLabel(p && p.adapterVersion);
-      },
-    },
-    {
       id: "aboutClaudeCli",
       category: "about",
       title: "Claude Code CLI",
@@ -699,37 +712,17 @@
         return versionLabel(p && p.cliVersion);
       },
     },
-    {
-      id: "aboutClaudeAdapter",
-      category: "about",
-      title: "Claude ACP adapter",
-      kind: "value",
-      visible: (s) => !!claudeProvider(s),
-      get: (s) => {
-        const p = claudeProvider(s);
-        return versionLabel(p && p.adapterVersion);
-      },
-    },
-    {
-      id: "aboutCodexUpdate",
-      category: "about",
-      title: "Codex updates",
-      kind: "status",
-      visible: (s) => !!codexProvider(s),
-      describe: (s, env) => {
-        const p = codexProvider(s);
-        if (p && p.updateAvailable) {
-          const latest = p.latestCliVersion ? ` · v${p.latestCliVersion}` : "";
-          const where = env && env.isRemote
-            ? "Update it at the desk — this device can’t."
-            : "Update it at its install source.";
-          return `Codex update available${latest}. ${where}`;
-        }
-        return env && env.isRemote
-          ? "Codex updates are managed at the desk."
-          : "Codex updates are managed at its install source.";
-      },
-    },
+    // Deliberately absent: "Codex ACP adapter", "Claude ACP adapter" and
+    // "Codex updates". The two adapters are pinned dependencies of THIS
+    // extension (@agentclientprotocol/codex-acp, @agentclientprotocol/
+    // claude-agent-acp, exact versions in package.json) and ship inside the
+    // vsix, so they move only when the extension does — a version the reader
+    // cannot act on reads as one more thing to keep current. And "Codex
+    // updates are managed at its install source" was true only when the user
+    // installed Codex themselves; when they let us install it the source is
+    // us, pinned at CODEX_MANAGED_TAG, and there is nowhere for them to go.
+    // One sentence, two meanings. Grok is the only CLI this extension
+    // actually updates, so it is the only one with an update row.
     {
       id: "aboutGrokUpdateStatus",
       category: "about",
@@ -784,6 +777,7 @@
     {
       id: "reportBug",
       category: "about",
+      icon: "bug",
       title: "Report a bug",
       description: "Open a new issue on the GitHub tracker.",
       kind: "action",
@@ -793,6 +787,7 @@
     {
       id: "requestFeature",
       category: "about",
+      icon: "lightbulb",
       title: "Request a feature",
       description: "Open a new issue on the GitHub tracker.",
       kind: "action",
@@ -802,6 +797,7 @@
     {
       id: "contactSupport",
       category: "about",
+      icon: "mail",
       title: "Contact",
       description: "support@productcompass.pm",
       kind: "action",
@@ -811,6 +807,7 @@
     {
       id: "aboutRepo",
       category: "about",
+      icon: "github",
       title: "phuryn/grok-build-vscode",
       description: "Source repository on GitHub.",
       kind: "action",
@@ -1344,7 +1341,7 @@
     // The mark rides the title rather than a column of its own: the row is a
     // two-column grid (copy | control) and a third column would re-space every
     // other page. has-logo carries the flex, so rows without one are untouched.
-    const logoMark = row.logo ? providerLogoMarkup(row.logo) : "";
+    const logoMark = row.logo ? providerLogoMarkup(row.logo) : (row.icon ? ROW_ICONS[row.icon] || "" : "");
     if (logoMark) {
       name.classList.add("has-logo");
       const mark = document.createElement("span");

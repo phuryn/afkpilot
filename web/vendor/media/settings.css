@@ -344,7 +344,8 @@ body.settings-page .settings-surface {
 
 /* currentColor marks, so they follow the row — including the dimmed
    .is-disabled state — instead of staying vivid over greyed-out copy. */
-.settings-row-logo .provider-logo {
+.settings-row-logo .provider-logo,
+.settings-row-logo svg {
   display: block;
   width: 16px;
   height: 16px;
