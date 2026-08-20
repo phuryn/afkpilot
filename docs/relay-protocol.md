@@ -158,7 +158,12 @@ shim unchanged):
 
 - browser sends `{type:"ready", tabToken?:string}` → relay converts to
   `client-ready`, preserving a string token when present (never forwarded
-  as-is); everything else wraps into a `msg` frame for the uplink.
+  as-is).
+- browser sends `{type:"transportProbe"}` → the relay answers the same
+  browser with `{type:"transportProbe"}` and never forwards it. This is
+  transport liveness of the browser↔relay socket (including with no
+  uplink), not a host-protocol type — do not bump `REMOTE_PROTO_VERSION`.
+- every other browser message wraps into a `msg` frame for the uplink.
 - relay unwraps `host`/`host-to`/`snapshot` frames and delivers plain HostMsg
   JSON. `host` is device-wide; `host-to` and `snapshot` preserve per-client
   ownership.

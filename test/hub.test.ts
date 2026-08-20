@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Hub } from "../src/hub.js";
-import { REMOTE_PROTO_VERSION } from "../src/frames.js";
+import { REMOTE_PROTO_VERSION, TRANSPORT_PROBE_TYPE } from "../src/frames.js";
 
 class FakeSender {
   sent: string[] = [];
@@ -273,5 +273,44 @@ describe("Hub routing", () => {
     expect(hub.uplinkConnected("devA")).toBe(true);
     expect(hub.fromClient("devA", id, JSON.stringify({ type: "send", text: "after-reopen" }))).toBe("routed");
     expect(up.json()).toEqual([{ t: "msg", clientId: id, msg: { type: "send", text: "after-reopen" } }]);
+  });
+
+  it("answers a transport probe to the browser and never forwards it to the uplink", () => {
+    const hub = new Hub();
+    const up = new FakeSender();
+    const client = new FakeSender();
+    hub.attachUplink("devA", up);
+    hello(hub);
+    const id = hub.addClient("devA", client);
+    up.sent = [];
+
+    expect(hub.fromClient("devA", id, JSON.stringify({ type: TRANSPORT_PROBE_TYPE }))).toBe("answered");
+    expect(up.sent).toEqual([]);
+    expect(client.json()).toEqual([{ type: TRANSPORT_PROBE_TYPE }]);
+  });
+
+  it("answers a transport probe while the device has no uplink", () => {
+    const hub = new Hub();
+    const client = new FakeSender();
+    const id = hub.addClient("devA", client);
+
+    expect(hub.fromClient("devA", id, JSON.stringify({ type: TRANSPORT_PROBE_TYPE }))).toBe("answered");
+    expect(client.json()).toEqual([{ type: TRANSPORT_PROBE_TYPE }]);
+    expect(hub.fromClient("devA", id, JSON.stringify({ type: "send", text: "x" }))).toBe("offline");
+  });
+
+  it("answers a transport probe while the uplink is not deliverable", () => {
+    const hub = new Hub();
+    const up = new FakeSender();
+    const client = new FakeSender();
+    hub.attachUplink("devA", up);
+    hello(hub);
+    const id = hub.addClient("devA", client);
+    up.sent = [];
+    up.readyState = 2;
+
+    expect(hub.fromClient("devA", id, JSON.stringify({ type: TRANSPORT_PROBE_TYPE }))).toBe("answered");
+    expect(up.sent).toEqual([]);
+    expect(client.json()).toEqual([{ type: TRANSPORT_PROBE_TYPE }]);
   });
 });

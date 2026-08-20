@@ -1225,6 +1225,20 @@ window.grokRemoteClient = true;
       return !entry || !entry.authored;
     });
   }
+  function liveOutboundParkedByReplacement(current) {
+    return current.filter(function (entry) {
+      return isQueueReleaseMessage(entry && entry.message);
+    });
+  }
+  function liveOutboundRecoveredByReplacement(current) {
+    var texts = [];
+    for (var i = 0; i < current.length; i++) {
+      if (isQueueReleaseMessage(current[i] && current[i].message)) continue;
+      var text = current[i] && current[i].authored;
+      if (text) texts.push(text);
+    }
+    return texts;
+  }
   function persistOutboxMessage(raw, message, authored) {
     if (outboxDispositionForMessage(message, authored) !== "persist") {
       if (authored) {
@@ -1304,6 +1318,26 @@ window.grokRemoteClient = true;
   function forgetUnbouncedLiveOutbound() {
     // Unbounced entries were not refused. After a confirmed restore,
     // replaying them would duplicate a commit whose ack was lost.
+    liveOutbound = [];
+    clearInFlightAuthored();
+  }
+  function parkLiveOutboundForReplacement() {
+    // A deliberate socket replacement must not drop in-flight user text.
+    // finishIdentityRestore on the successor forgets unbounced liveOutbound
+    // (acks may have been lost on a normal reconnect). This path parks
+    // queue-release sends into the outbox so the new connection flushes
+    // them once, and returns other authored leftovers to the composer.
+    var parked = liveOutboundParkedByReplacement(liveOutbound);
+    for (var i = 0; i < parked.length; i++) {
+      persistOutboxMessage(parked[i].raw, parked[i].message);
+    }
+    var recovered = liveOutboundRecoveredByReplacement(liveOutbound);
+    recoverAuthoredTexts(recovered);
+    if (recovered.length) {
+      inFlightAuthored = inFlightAuthored.filter(function (text) {
+        return recovered.indexOf(text) === -1;
+      });
+    }
     liveOutbound = [];
     clearInFlightAuthored();
   }
@@ -2363,6 +2397,27 @@ window.grokRemoteClient = true;
     );
   }
 
+  // iOS reports OPEN on a socket whose TCP is already dead. A round trip
+  // does not: the relay answers this frame itself and never forwards it.
+  // Resume always probes; there is no hide-duration threshold.
+  var TRANSPORT_PROBE_TYPE = "transportProbe";
+  var PROBE_TIMEOUT_MS = 2000;
+  var probeTimer = null;
+  var probeGeneration = 0;
+  function probeTimeoutMs() {
+    var override = Number(window.__grokProbeTimeoutMs);
+    return override > 0 && isFinite(override) ? override : PROBE_TIMEOUT_MS;
+  }
+  function isTransportProbeMessage(data) {
+    return !!(data && data.type === TRANSPORT_PROBE_TYPE);
+  }
+  function transportProbePayload() {
+    return JSON.stringify({ type: TRANSPORT_PROBE_TYPE });
+  }
+  function clearResumeProbe() {
+    if (probeTimer) { clearTimeout(probeTimer); probeTimer = null; }
+  }
+
   function connect() {
     // A second dial while this one is CONNECTING or OPEN would create a
     // socket whose predecessor's error/close still mutates the successor,
@@ -2393,6 +2448,10 @@ window.grokRemoteClient = true;
       if (ws !== socket) return;
       var data;
       try { data = JSON.parse(e.data); } catch (_) { return; }
+      if (isTransportProbeMessage(data)) {
+        onTransportProbeReply();
+        return;
+      }
       if (hostBlocked) {
         // The expected exit from the gate is the desk updating and restarting:
         // the reconnected host pushes a fresh snapshot, and a version that now
@@ -2485,6 +2544,7 @@ window.grokRemoteClient = true;
     });
     socket.addEventListener("close", function (e) {
       if (ws !== socket) return;
+      clearResumeProbe();
       clearTimeout(identityTimer);
       identityTimer = null;
       clearIdentityFailTimer();
@@ -2510,6 +2570,53 @@ window.grokRemoteClient = true;
     });
     });
   }
+
+  function abandonSocketAndRedial() {
+    // Drop first so connect()'s live-socket guard cannot see this one as
+    // current. close() is only tidiness: a half-dead mobile socket can
+    // sit in CLOSING until the transport times out, and that event is
+    // what we must not wait on. Listeners are generation-guarded.
+    clearResumeProbe();
+    probeGeneration++;
+    parkLiveOutboundForReplacement();
+    var stale = ws;
+    ws = null;
+    if (stale) {
+      try { stale.close(); } catch (_) {}
+    }
+    showReconnecting();
+    setVoiceTransportReady(false);
+    connect();
+  }
+
+  function onTransportProbeReply() {
+    clearResumeProbe();
+    probeGeneration++;
+  }
+
+  function onResumeVisible() {
+    if (probeTimer) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    var generation = ++probeGeneration;
+    try {
+      ws.send(transportProbePayload());
+    } catch (_) {
+      abandonSocketAndRedial();
+      return;
+    }
+    probeTimer = setTimeout(function () {
+      probeTimer = null;
+      if (generation !== probeGeneration) return;
+      abandonSocketAndRedial();
+    }, probeTimeoutMs());
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden") return;
+    onResumeVisible();
+  });
+  window.addEventListener("pageshow", function () {
+    onResumeVisible();
+  });
 
   function domReady() {
     return new Promise(function (r) {

@@ -4,17 +4,20 @@
 // ferries: uplink `host` frames -> every client (raw HostMsg JSON), while
 // `host-to` targets a listed subset; a client's `ready` -> `client-ready` to
 // the uplink (which answers with a `snapshot` frame routed back to just that
-// client); any other client message -> `msg` frame to the uplink. It never
-// interprets protocol payloads beyond `type`.
+// client); a transport probe -> a reply to the same browser (never the host);
+// any other client message -> `msg` frame to the uplink. It never interprets
+// protocol payloads beyond `type`.
 
 import {
   clientLeftFrame,
   clientReadyFrame,
   clientsFrame,
+  isTransportProbe,
   msgFrame,
   parseClientMsg,
   parseUplinkFrame,
   REMOTE_PROTO_VERSION,
+  transportProbeReply,
   type ProtocolMsg,
 } from "./frames.js";
 
@@ -162,15 +165,22 @@ export class Hub {
   }
 
   /** A browser->relay message arrived. `ready` becomes a routed client-ready
-   *  (the uplink answers with that client's snapshot); everything else wraps
-   *  into a `msg` frame — the EXTENSION owns the capability gate, the relay
-   *  stays policy-free. Returns "offline" when no uplink is deliverable
-   *  (missing, or a WebSocket that is not OPEN) so the server can tell
-   *  the browser. */
-  fromClient(deviceId: string, clientId: string, raw: string): "routed" | "dropped" | "offline" {
+   *  (the uplink answers with that client's snapshot); a transport probe is
+   *  answered to that browser and never forwarded (liveness of this socket,
+   *  including with no uplink); everything else wraps into a `msg` frame —
+   *  the EXTENSION owns the capability gate, the relay stays policy-free.
+   *  Returns "offline" when no uplink is deliverable (missing, or a WebSocket
+   *  that is not OPEN) so the server can tell the browser. */
+  fromClient(deviceId: string, clientId: string, raw: string): "routed" | "dropped" | "offline" | "answered" {
     const msg: ProtocolMsg | null = parseClientMsg(raw);
     if (!msg) return "dropped";
     const d = this.device(deviceId);
+    if (isTransportProbe(msg)) {
+      const client = d.clients.get(clientId);
+      if (!client) return "dropped";
+      this.safeSend(client.sender, JSON.stringify(transportProbeReply()));
+      return "answered";
+    }
     if (msg.type === "ready") {
       const client = d.clients.get(clientId);
       const tabToken = typeof msg.tabToken === "string" ? msg.tabToken : undefined;

@@ -24,7 +24,7 @@ import {
   MAX_WS_PAYLOAD_BYTES,
   type RelayServer,
 } from "../src/server.js";
-import { REMOTE_PROTO_VERSION } from "../src/frames.js";
+import { REMOTE_PROTO_VERSION, TRANSPORT_PROBE_TYPE } from "../src/frames.js";
 
 const webRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "web");
 
@@ -173,6 +173,36 @@ describe("relay end-to-end", () => {
     browser.send(JSON.stringify({ type: "send", text: "anyone there?" }));
     const offline = await browserInbox.matching((m) => m.type === "error");
     expect(offline.text).toMatch(/offline/i);
+    browser.close();
+  });
+
+  it("answers a transport probe itself and never forwards it, even with no uplink", async () => {
+    const { json: started } = await post("/api/link/start", { name: "probe box" });
+    await post("/api/link/approve", { code: started.code });
+    const token: string = (await post("/api/link/poll", { code: started.code })).json.token;
+    const uplink = new WebSocket(`${wsBase}/uplink?token=${encodeURIComponent(token)}`);
+    const uplinkInbox = new WsInbox(uplink);
+    await waitOpen(uplink);
+    uplink.send(JSON.stringify({ t: "hello", proto: 1, device: { name: "probe box" } }));
+    const deviceId = (await (await fetch(`${base}/api/devices`)).json()).devices
+      .find((d: { name: string }) => d.name === "probe box").deviceId;
+
+    const browser = new WebSocket(`${wsBase}/client?device=${encodeURIComponent(deviceId)}`);
+    const browserInbox = new WsInbox(browser);
+    await waitOpen(browser);
+    browser.send(JSON.stringify({ type: "ready" }));
+    await uplinkInbox.matching((m) => m.t === "client-ready");
+
+    browser.send(JSON.stringify({ type: TRANSPORT_PROBE_TYPE }));
+    expect(await browserInbox.next()).toEqual({ type: TRANSPORT_PROBE_TYPE });
+    browser.send(JSON.stringify({ type: "send", text: "after-probe" }));
+    const routed = await uplinkInbox.matching((m) => m.t === "msg" || m.t === "client-ready");
+    expect(routed).toEqual({ t: "msg", clientId: expect.any(String), msg: { type: "send", text: "after-probe" } });
+
+    uplink.close();
+    await new Promise((r) => setTimeout(r, 100));
+    browser.send(JSON.stringify({ type: TRANSPORT_PROBE_TYPE }));
+    expect(await browserInbox.next()).toEqual({ type: TRANSPORT_PROBE_TYPE });
     browser.close();
   });
 

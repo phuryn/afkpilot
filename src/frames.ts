@@ -8,7 +8,8 @@ import { hasDeviceClientInfo, parseDeviceClientFields, type DeviceClientInfo } f
 //   extension -> relay : UplinkFrame  (hello / host / host-to / snapshot)
 //   relay -> extension : RelayFrame   (client-ready / client-left / msg / clients)
 //   browser  <-> relay : raw HostMsg / WebviewMsg JSON (the webview protocol
-//                        itself — the relay only inspects `type`).
+//                        itself — the relay only inspects `type`), plus a
+//                        transport probe the relay answers and never forwards.
 
 export const REMOTE_PROTO_VERSION = 1;
 
@@ -84,6 +85,17 @@ export function parseClientMsg(raw: string): ProtocolMsg | null {
   }
   return isProtocolMsg(obj) ? obj : null;
 }
+
+/**
+ * Browser <-> relay transport liveness. The relay answers this itself and
+ * never forwards it to the extension — not a host-protocol type, so
+ * REMOTE_PROTO_VERSION does not move.
+ */
+export const TRANSPORT_PROBE_TYPE = "transportProbe";
+
+export const isTransportProbe = (msg: ProtocolMsg): boolean => msg.type === TRANSPORT_PROBE_TYPE;
+
+export const transportProbeReply = (): ProtocolMsg => ({ type: TRANSPORT_PROBE_TYPE });
 
 export const clientReadyFrame = (clientId: string, tabToken?: string): RelayFrame => ({
   t: "client-ready",

@@ -6,6 +6,9 @@ import {
   clientLeftFrame,
   msgFrame,
   clientsFrame,
+  TRANSPORT_PROBE_TYPE,
+  isTransportProbe,
+  transportProbeReply,
 } from "../src/frames.js";
 
 describe("parseUplinkFrame", () => {
@@ -90,6 +93,15 @@ describe("parseClientMsg", () => {
     expect(parseClientMsg(JSON.stringify({ text: "hi" }))).toBeNull();
     expect(parseClientMsg("nope")).toBeNull();
     expect(parseClientMsg("[1]")).toBeNull();
+  });
+
+  it("accepts the client-relay transport probe without treating it as host traffic", () => {
+    const probe = parseClientMsg(JSON.stringify({ type: TRANSPORT_PROBE_TYPE }));
+    expect(probe).toEqual({ type: TRANSPORT_PROBE_TYPE });
+    expect(isTransportProbe(probe!)).toBe(true);
+    expect(isTransportProbe({ type: "send" })).toBe(false);
+    expect(transportProbeReply()).toEqual({ type: TRANSPORT_PROBE_TYPE });
+    expect(parseUplinkFrame(JSON.stringify({ t: TRANSPORT_PROBE_TYPE }))).toBeNull();
   });
 });
 

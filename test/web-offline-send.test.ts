@@ -43,6 +43,8 @@ const {
   liveOutboundAfterNamedDrop,
   liveOutboundRecoveredByNonRetryable,
   liveOutboundAfterNonRetryable,
+  liveOutboundParkedByReplacement,
+  liveOutboundRecoveredByReplacement,
 } = new Function(
   `${helpers}; return {
     isDeviceOfflineError,
@@ -74,6 +76,8 @@ const {
     liveOutboundAfterNamedDrop,
     liveOutboundRecoveredByNonRetryable,
     liveOutboundAfterNonRetryable,
+    liveOutboundParkedByReplacement,
+    liveOutboundRecoveredByReplacement,
   };`,
 )() as {
   isDeviceOfflineError: (data: unknown) => boolean;
@@ -140,6 +144,12 @@ const {
     current: Array<{ raw: string; message: unknown; authored?: string }>,
     data: unknown,
   ) => Array<{ raw: string; message: unknown; authored?: string }>;
+  liveOutboundParkedByReplacement: (
+    current: Array<{ raw: string; message: unknown; authored?: string }>,
+  ) => Array<{ raw: string; message: unknown; authored?: string }>;
+  liveOutboundRecoveredByReplacement: (
+    current: Array<{ raw: string; message: unknown; authored?: string }>,
+  ) => string[];
 };
 
 type SurfaceNode = {
@@ -702,5 +712,46 @@ describe("offline live-send hold", () => {
     expect(persistFn).toContain("mournableQueueCount() === 0");
     expect(persistFn).toContain("finishIdentityRestore()");
     expect(persistFn).not.toContain("flushRestoredOutbox()");
+  });
+
+  it("text sent just before a socket replacement is flushed exactly once", () => {
+    // Old behaviour: finishIdentityRestore forgot unbounced liveOutbound
+    // and the successor flushed only the persisted queue, so a live send
+    // that never got an ack arrived zero times. Parking first, then
+    // forgetting, then flushing, lands it once.
+    const raw = sendRaw("sent-before-replace", "sub-replace");
+    const live = liveOutboundAfterRemember([], raw, JSON.parse(raw));
+    const parked = liveOutboundParkedByReplacement(live);
+    expect(parked.map((e) => e.raw)).toEqual([raw]);
+
+    let queue: string[] = [];
+    for (const entry of parked) {
+      queue = outboxAfterPersist(queue, entry.raw, entry.message);
+    }
+    queue = outboxAfterPersist(queue, raw, JSON.parse(raw));
+    const flushed = queue.slice();
+    expect(flushed).toEqual([raw]);
+    expect(flushed).toHaveLength(1);
+
+    const plan = JSON.stringify({
+      type: "exitPlanAnswer", requestId: 1, verdict: "rejected",
+    });
+    const mixed = liveOutboundAfterRemember(live, plan, JSON.parse(plan), "plan comment");
+    expect(liveOutboundParkedByReplacement(mixed).map((e) => e.raw)).toEqual([raw]);
+    expect(liveOutboundRecoveredByReplacement(mixed)).toEqual(["plan comment"]);
+  });
+
+  it("replacement parks unacked liveOutbound before the successor restores", () => {
+    const abandonSrc = html.slice(
+      html.indexOf("function abandonSocketAndRedial"),
+      html.indexOf("function onResumeVisible"),
+    );
+    expect(abandonSrc).toContain("parkLiveOutboundForReplacement()");
+    expect(abandonSrc).toMatch(/parkLiveOutboundForReplacement\(\);[\s\S]*\bconnect\(\);/);
+    const finishSrc = html.slice(
+      html.indexOf("function finishIdentityRestore"),
+      html.indexOf("function abandonIdentityRestore"),
+    );
+    expect(finishSrc).toContain("forgetUnbouncedLiveOutbound()");
   });
 });

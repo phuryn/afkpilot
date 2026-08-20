@@ -720,6 +720,149 @@ try {
   assert.equal(afterStale.overlayReconnecting, false, "a stale close must not bounce a healthy session into reconnect");
   log("a stale socket error/close after a redial does not touch the live connection");
 
+  const setPageVisibility = async (state) => {
+    await page.evaluate((state) => {
+      const hidden = state === "hidden";
+      const visibilityState = hidden ? "hidden" : "visible";
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => visibilityState,
+      });
+      if (document.visibilityState !== visibilityState) {
+        throw new Error("visibilityState override did not take");
+      }
+      document.dispatchEvent(new Event("visibilitychange"));
+    }, state);
+  };
+  const clientSocketCount = async () => page.evaluate(() =>
+    window.__legacyTestSockets.filter((s) => String(s.url).includes("/client?")).length
+  );
+  const firePersistedPageshow = async () => page.evaluate(() => {
+    const event = new Event("pageshow");
+    Object.defineProperty(event, "persisted", { value: true });
+    window.dispatchEvent(event);
+  });
+  const droppedProbeCount = () =>
+    dropped.filter((m) => m.type === "transportProbe").length +
+    received.filter((m) => m.type === "transportProbe").length;
+
+  // A glance at another app must not bounce a healthy live session.
+  const briefStart = wireEvents.length;
+  const socketsBeforeBrief = await clientSocketCount();
+  const probesBeforeBrief = droppedProbeCount();
+  await page.evaluate(() => { window.__grokProbeTimeoutMs = 300; });
+  await setPageVisibility("hidden");
+  await page.waitForTimeout(20);
+  await setPageVisibility("visible");
+  await firePersistedPageshow();
+  await page.waitForTimeout(500);
+  assert.equal(await clientSocketCount(), socketsBeforeBrief, "a brief hide of a healthy socket must not redial");
+  assert.equal(
+    wireEvents.slice(briefStart).filter((e) => e.type === "client-ready").length,
+    0,
+    "a brief hide must not run another snapshot replay",
+  );
+  assert.equal(
+    wireEvents.slice(briefStart).filter((e) => e.type === "resumeSession").length,
+    0,
+    "a brief hide must not bounce a healthy session into restore",
+  );
+  assert.equal(
+    await page.locator(".auth-overlay.reconnecting").count(),
+    0,
+    "a brief hide must not show the reconnecting veil",
+  );
+  assert.equal(
+    droppedProbeCount(),
+    probesBeforeBrief,
+    "a resume probe must never reach the uplink",
+  );
+  await page.evaluate(() => { delete window.__grokProbeTimeoutMs; });
+  log("a brief hide of a healthy socket produces no new connection");
+
+  // A tab switch mid-recording must not bounce a healthy socket: close
+  // interrupts capture, and that is real user data loss, not a flicker.
+  send({ type: "voiceState", status: "listening" });
+  await page.locator("#mic-btn.listening").waitFor({ state: "visible", timeout: 5000 });
+  const voiceInterruptBefore = await page.locator(
+    ".msg.error",
+    { hasText: "Voice recording stopped because the connection was interrupted" },
+  ).count();
+  const socketsBeforeVoiceResume = await clientSocketCount();
+  await page.evaluate(() => { window.__grokProbeTimeoutMs = 300; });
+  await setPageVisibility("hidden");
+  await page.waitForTimeout(20);
+  await setPageVisibility("visible");
+  await firePersistedPageshow();
+  await page.waitForTimeout(500);
+  assert.equal(await clientSocketCount(), socketsBeforeVoiceResume, "a resume during voice capture must not redial");
+  assert.equal(await page.locator("#mic-btn.listening").count(), 1, "a resume must leave an active recording alone");
+  assert.equal(
+    await page.locator(".msg.error", { hasText: "Voice recording stopped because the connection was interrupted" }).count(),
+    voiceInterruptBefore,
+    "a resume during voice capture must not interrupt the recording",
+  );
+  send({ type: "voiceState", status: "idle" });
+  await page.locator("#mic-btn:not(.listening):not(.connecting):not(.transcribing)").waitFor({ timeout: 5000 });
+  await page.evaluate(() => { delete window.__grokProbeTimeoutMs; });
+  log("a resume during voice capture does not interrupt the recording");
+
+  // A dead-OPEN socket (send swallowed, the iOS lie) must redial once, and
+  // text sent into that socket just before resume must arrive exactly once
+  // on the successor — not zero times (forgotten as unbounced) and not twice.
+  const replaceStart = wireEvents.length;
+  const socketsBeforeReplace = await clientSocketCount();
+  const sendsBeforeReplace = received.filter((m) => m.type === "send" && m.text === "sent-before-replace").length;
+  await page.evaluate(() => {
+    window.__grokProbeTimeoutMs = 80;
+    const socket = [...window.__legacyTestSockets].reverse().find((s) => String(s.url).includes("/client?"));
+    if (!socket) throw new Error("expected a live client socket to swallow");
+    socket.send = function () { this.__swallowed = (this.__swallowed || 0) + 1; };
+  });
+  await page.evaluate(() => acquireVsCodeApi().postMessage({
+    type: "send",
+    text: "sent-before-replace",
+  }));
+  await setPageVisibility("hidden");
+  await setPageVisibility("visible");
+  await firePersistedPageshow();
+  await page.waitForFunction(
+    (n) => window.__legacyTestSockets.filter((s) => String(s.url).includes("/client?")).length >= n,
+    socketsBeforeReplace + 1,
+    { timeout: 5000 },
+  );
+  for (
+    let i = 0;
+    i < 160 && received.filter((m) => m.type === "send" && m.text === "sent-before-replace").length < sendsBeforeReplace + 1;
+    i++
+  ) {
+    await page.waitForTimeout(25);
+  }
+  await page.waitForTimeout(1500);
+  assert.equal(
+    await clientSocketCount(),
+    socketsBeforeReplace + 1,
+    "an unanswered probe must produce exactly one new connection",
+  );
+  assert.equal(
+    wireEvents.slice(replaceStart).filter((e) => e.type === "client-ready").length,
+    1,
+    "an unanswered probe must handshake once, not zero and not two",
+  );
+  assert.equal(
+    received.filter((m) => m.type === "send" && m.text === "sent-before-replace").length,
+    sendsBeforeReplace + 1,
+    "text sent just before a resume-triggered replacement must arrive exactly once",
+  );
+  assert.equal(
+    droppedProbeCount(),
+    probesBeforeBrief,
+    "a swallowed or answered probe must never be forwarded to the uplink",
+  );
+  await page.evaluate(() => { delete window.__grokProbeTimeoutMs; });
+  log("an unanswered probe redials once and flushes the in-flight send once");
+
   // With no remembered identity, the host's default scope is already correct.
   // A fresh tab must therefore be able to send even if its snapshot legitimately
   // omits initialState; there is no restoration confirmation to wait for.
