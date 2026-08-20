@@ -1729,11 +1729,13 @@ body.turn-busy .queued-steer:hover {
 .msg.agent:hover .msg-actions,
 .msg-actions:focus-within,
 .msg-actions:focus-visible { opacity: 1; }
+.msg-actions.has-rating { opacity: 1; }
 /* Touch has no hover. The dimmed row is the resting, tappable state — same
    as the rename pencil, which must exist without a gesture first. */
 @media (hover: none) {
   .msg.user .msg-actions,
   .msg.agent .msg-actions { opacity: 0.4; }
+  .msg-actions.has-rating { opacity: 1; }
 }
 /* Codex-style ghost action: 16px glyph centered in a 28px rounded-square hit
    target (glyph size and hit area are deliberately separate ÔÇö a 28px glyph
@@ -1765,6 +1767,10 @@ body.turn-busy .queued-steer:hover {
 }
 .msg-action-btn.copied { color: var(--vscode-charts-green, #4ec9b0); }
 .msg-action-glyph { display: inline-flex; align-items: center; }
+.msg-thumbs { display: inline-flex; align-items: center; }
+.msg-thumb-btn[aria-pressed="true"].msg-thumb-up { color: var(--vscode-charts-green, #4ec9b0); }
+.msg-thumb-btn[aria-pressed="true"].msg-thumb-down { color: var(--vscode-errorForeground, #f14c4c); }
+.msg-actions[data-feedback-pending="1"] .msg-thumb-btn { pointer-events: none; opacity: 0.55; }
 /* Rewind on the latest tip is a no-op ÔÇö hide rather than disable so the row
    stays copy+timestamp only on the current message. */
 .msg-rewind-btn[hidden] { display: none; }

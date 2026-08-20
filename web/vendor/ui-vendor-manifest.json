@@ -2,7 +2,7 @@
   "version": 1,
   "source": {
     "repository": "grok-build-vscode",
-    "revision": "a373fc9b8557f2c3855b08a862e0f91fa9c61bf4",
+    "revision": "000c0b11f167aeeb97dc2bc7aaadb64aa8fce385",
     "appVersion": "3.13.0",
     "filesMatchRevision": true
   },
@@ -10,22 +10,22 @@
     {
       "source": "media/chat.css",
       "destination": "media/chat.css",
-      "sha256": "386a3278175432e018c358d854d01c6bdfcb93642de65158c4c7ac008ad6efae"
+      "sha256": "d66d367206ff02358360717f88a26ecc8fa5fbe272367b24008ed5fd5588c1a4"
     },
     {
       "source": "media/chat.js",
       "destination": "media/chat.js",
-      "sha256": "26ba550dda0c661d917e0b29a84bbf2cb9121bb2a68cc20820bc246f6da6fe58"
+      "sha256": "018eab570f781425449b319362994945db89222e692b44a947cf9d5d883f9ca0"
     },
     {
       "source": "media/file-panel.css",
       "destination": "media/file-panel.css",
-      "sha256": "016a5ba045802fb4f9cc4137a349057592b74e20b555849a8e994f136815a7c9"
+      "sha256": "7703a48b772e4f4cd00cfc830edd5a97b46619cef01770bfd1eff23328e94d59"
     },
     {
       "source": "media/file-panel.js",
       "destination": "media/file-panel.js",
-      "sha256": "12dc6bd684a7cdbcbc70000ac3ab57c15c0fa9f880d88e504d4036ad17557e4f"
+      "sha256": "dcfa9bed051db606d60943bc467393e8da669e603244699c95837eda569413d8"
     },
     {
       "source": "media/syntax-highlight.js",
@@ -45,17 +45,17 @@
     {
       "source": "media/settings.css",
       "destination": "media/settings.css",
-      "sha256": "acdf90f7330506ffb78d0e6faf5ffb84c42164c114509d7b61943864b251b23b"
+      "sha256": "86fe2162bbfa33d9a8e617852584b8809dc4e9b5b4b8845d6dd2db8394b687f7"
     },
     {
       "source": "media/settings.js",
       "destination": "media/settings.js",
-      "sha256": "4b57ca3665922c7ff6e0d254c28f454b656e63ae17f423c0286980c7b8f3b5a3"
+      "sha256": "4048e64e00412bbf0a82ad15fbb189c138a44e3400b5a45f72fa7d2aafdb8677"
     },
     {
       "source": "media/webview-helpers.js",
       "destination": "media/webview-helpers.js",
-      "sha256": "f3bfb7c504b67797e9afa475df214e8dd5220f28751750d7fcd6a83523404c5c"
+      "sha256": "fbca791236f5255c74021bf04c959885f069cfdde3cbe5d788c144cef5b9f7cb"
     },
     {
       "source": "media/mathjax/tex-svg-full.js",

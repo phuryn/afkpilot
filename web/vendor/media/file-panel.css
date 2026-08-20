@@ -810,6 +810,8 @@ body.vscode-light {
 .gfp-menu-item:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; }
 .gfp-menu-item:disabled { opacity: .4; cursor: default; }
 .gfp-menu-item.danger { color: var(--vscode-errorForeground); }
+.gfp-icon-button.copied,
+.gfp-more.copied { color: var(--vscode-charts-green, #4ec9b0); }
 
 /* Viewer toolbar — three primitives, not one:
    1. .gfp-seg / .gfp-seg-on  — mode segments (Preview / Source). Grouped,

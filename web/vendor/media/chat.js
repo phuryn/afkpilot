@@ -383,18 +383,19 @@
     // whether it works — we offer it and let the host latch this off the first
     // time the CLI answers -32601 (the text falls back to the queue, never lost).
     steerSupported: true,
+    // Grok thumbs (#114). Off until the host advertises feedbackAvailability.
+    // Only the live-process turn that just finished is rateable (not session/load).
+    feedbackAvailable: false,
+    turnRating: 0,
     // Claude Code has no mid-turn interject, so a message typed while it is
     // working is always SCHEDULED, never steered — whatever the steer-by-default
     // setting says (owner, 2026-08-17). Offering Steer there would promise the
     // running turn hears you now, and it does not. See steerableProvider().
     lastTurnUsage: null, // last prompt's billing split (#53), for the donut popover
     sessionUsage: null, // session-cumulative billing — summed by the host, not grok
-    contextCategories: null,
-    contextSystemPromptTokens: null,
-    contextToolDefinitionsTokens: null,
-    contextMessageTokens: null,
-    contextFreeTokens: null,
-    contextAutoCompactPct: null,
+    // Structured session/info addends, bound to the `used` they arrived with.
+    // Occupancy-only frames that move used/window drop this rather than mixing.
+    contextBreakdown: null,
     activeAgentEl: null,
     activeAgentRaw: "",
     activeUserEl: null,
@@ -736,6 +737,8 @@
     listTree: `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12h-8"/><path d="M21 6H8"/><path d="M21 18h-8"/><path d="M3 6v4c0 1.1.9 2 2 2h3"/><path d="M3 10v6c0 1.1.9 2 2 2h3"/></svg>`,
     zap: `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>`,
     copy: `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`,
+    thumbsUp: `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg>`,
+    thumbsDown: `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></svg>`,
     check: `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`,
     squareChevronRight: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="m10 8 4 4-4 4"/></svg>`,
     chevronRight: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>`,
@@ -1037,7 +1040,7 @@
 
   // ---------- markdown ----------
 
-  const { looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, appendHighlightedText, commandProgramLabel, commandTextPreview, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage, createPendingOverlay, getMentionQuery, applyMentionPick, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents } = globalThis.GrokWebviewHelpers;
+  const { looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, appendHighlightedText, commandProgramLabel, commandTextPreview, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage, contextOverheadTokens, nextContextBreakdown, contextBreakdownIsCurrent, createPendingOverlay, getMentionQuery, applyMentionPick, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents } = globalThis.GrokWebviewHelpers;
 
   function escapeAttr(s) {
     return String(s == null ? "" : s)
@@ -1836,23 +1839,53 @@
     }
     contextPopover.appendChild(act);
 
-    const hasBreakdown =
-      state.contextSystemPromptTokens != null ||
-      state.contextToolDefinitionsTokens != null ||
-      state.contextMessageTokens != null ||
-      (state.contextCategories && state.contextCategories.length);
+    // Only the session/info snapshot whose used/window still match occupancy.
+    // A used-only frame that moved `used` has already dropped it; this gate
+    // also covers promptComplete / modelChanged, which never go through that path.
+    const breakdown = contextBreakdownIsCurrent(state.contextBreakdown, used, state.contextWindow)
+      ? state.contextBreakdown
+      : null;
+    const hasBreakdown = breakdown && (
+      breakdown.systemPromptTokens != null ||
+      breakdown.toolDefinitionsTokens != null ||
+      breakdown.messageTokens != null ||
+      breakdown.freeTokens != null ||
+      (breakdown.categories && breakdown.categories.length)
+    );
     if (hasBreakdown) {
+      // Same split as the CLI TUI: legend rows fill the bar; informational
+      // rows sit below it because their tokens are already in those addends
+      // (tool definitions in Reasoning/overhead, usage categories in Messages).
+      // Overhead is derived from THIS snapshot's used, never live occupancy.
+      const overheadTokens = contextOverheadTokens(
+        breakdown.used,
+        breakdown.systemPromptTokens,
+        breakdown.messageTokens,
+      );
       section("In this window");
-      if (state.contextSystemPromptTokens != null) info("System", tok(state.contextSystemPromptTokens));
-      if (state.contextToolDefinitionsTokens != null) info("Tools", tok(state.contextToolDefinitionsTokens));
-      if (state.contextMessageTokens != null) info("Messages", tok(state.contextMessageTokens));
-      if (state.contextCategories) {
-        for (const category of state.contextCategories) {
-          info(category.detail ? `${category.label} (${category.detail})` : category.label, tok(category.tokens));
+      if (breakdown.systemPromptTokens != null) info("System", tok(breakdown.systemPromptTokens));
+      if (breakdown.messageTokens != null) info("Messages", tok(breakdown.messageTokens));
+      if (overheadTokens != null) info("Reasoning/overhead", tok(overheadTokens));
+      if (breakdown.freeTokens != null) info("Free", tok(breakdown.freeTokens));
+      if (breakdown.autoCompactPct != null) info("Auto-compact at", `${breakdown.autoCompactPct}%`);
+      const hasCounted =
+        breakdown.toolDefinitionsTokens != null ||
+        (breakdown.categories && breakdown.categories.length);
+      if (hasCounted) {
+        section("Already counted above");
+        if (breakdown.toolDefinitionsTokens != null) {
+          const n = breakdown.toolDefinitionsCount;
+          const toolsLabel = typeof n === "number"
+            ? `Tool definitions (${n} ${n === 1 ? "tool" : "tools"})`
+            : "Tool definitions";
+          info(toolsLabel, tok(breakdown.toolDefinitionsTokens));
+        }
+        if (breakdown.categories) {
+          for (const category of breakdown.categories) {
+            info(category.detail ? `${category.label} (${category.detail})` : category.label, tok(category.tokens));
+          }
         }
       }
-      if (state.contextFreeTokens != null) info("Free", tok(state.contextFreeTokens));
-      if (state.contextAutoCompactPct != null) info("Auto-compact at", `${state.contextAutoCompactPct}%`);
     }
 
     // Billing rows only when the CLI actually reported usage — an older build or
@@ -6997,10 +7030,13 @@
     state.planHistoryQueue = [];
     state.permissionHistoryQueue = [];
     state.userMsgCount = 0;
+    state.feedbackAvailable = false;
+    state.turnRating = 0;
     state.interjectionCount = 0;
     state.historyEventCount = 0;
     state.lastTurnUsage = null;
     state.sessionUsage = null;
+    state.contextBreakdown = null;
     state.suppressReplayTurn = false;
     state.skipUserBubble = false;
     cancelPendingSpeech();
@@ -7478,8 +7514,15 @@
       } else {
         // A user message starts a new turn; the previous turn's footer (if the
         // replay never emitted an explicit turn end) becomes final now.
+        // A steer is still the same turn — keep the footer pointer so agentEnd
+        // can attach thumbs to it. Nulling it here dropped the only handle
+        // after more agent chunks reused the same bubble.
         revealTurnFooter();
-        state.turnAgentActionsEl = null;
+        if (!(opts && opts.steer)) {
+          retireLiveTurnFeedback(state.turnAgentActionsEl);
+          state.turnAgentActionsEl = null;
+          state.turnRating = 0;
+        }
       }
     }
 
@@ -7553,6 +7596,98 @@
     } else if (typeof timestampMs === "number" && Number.isFinite(timestampMs)) {
       ts.textContent = formatTime(timestampMs);
     }
+  }
+
+  function feedbackOffered() {
+    return state.feedbackAvailable === true && state.activeProvider !== "codex" && state.activeProvider !== "claude";
+  }
+
+  function stripTurnThumbs(actions) {
+    if (!actions) return;
+    const existing = actions.querySelector(".msg-thumbs");
+    if (existing) existing.remove();
+    actions.classList.remove("has-rating");
+    delete actions.dataset.feedbackPending;
+  }
+
+  function retireLiveTurnFeedback(actions) {
+    if (!actions) return;
+    stripTurnThumbs(actions);
+    delete actions.dataset.feedbackLive;
+  }
+
+  function liveTurnActions() {
+    const a = state.turnAgentActionsEl;
+    if (!a || a.hidden || a.dataset.feedbackLive !== "1") return null;
+    return a;
+  }
+
+  function insertTurnThumbs(actions) {
+    if (actions.querySelector(".msg-thumbs")) return;
+    const wrap = document.createElement("span");
+    wrap.className = "msg-thumbs";
+    wrap.appendChild(makeThumbButton("up", 1, "Good response", ICON.thumbsUp));
+    wrap.appendChild(makeThumbButton("down", -1, "Bad response", ICON.thumbsDown));
+    const ts = actions.querySelector(".msg-timestamp");
+    if (ts) actions.insertBefore(wrap, ts);
+    else actions.appendChild(wrap);
+    paintTurnThumbs(actions);
+  }
+
+  function makeThumbButton(kind, rating, label, glyph) {
+    const btn = document.createElement("button");
+    btn.className = `msg-action-btn msg-thumb-btn msg-thumb-${kind}`;
+    btn.type = "button";
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    btn.setAttribute("aria-pressed", "false");
+    btn.dataset.rating = String(rating);
+    btn.innerHTML = `<span class="msg-action-glyph">${glyph}</span>`;
+    return btn;
+  }
+
+  function paintTurnThumbs(actions) {
+    const rating = state.turnRating === 1 || state.turnRating === -1 ? state.turnRating : 0;
+    actions.classList.toggle("has-rating", rating === 1 || rating === -1);
+    const up = actions.querySelector(".msg-thumb-up");
+    const down = actions.querySelector(".msg-thumb-down");
+    if (up) up.setAttribute("aria-pressed", rating === 1 ? "true" : "false");
+    if (down) down.setAttribute("aria-pressed", rating === -1 ? "true" : "false");
+  }
+
+  function syncFeedbackButtons() {
+    const live = liveTurnActions();
+    for (const actions of messagesEl.querySelectorAll(".msg.agent .msg-actions")) {
+      if (actions === live && feedbackOffered()) {
+        if (!actions.querySelector(".msg-thumbs")) insertTurnThumbs(actions);
+        else paintTurnThumbs(actions);
+      } else {
+        stripTurnThumbs(actions);
+      }
+    }
+  }
+
+  /** Thumbs rate only the turn that just finished in this process. */
+  function markLiveTurnFeedback() {
+    if (state.replaying) return;
+    const a = state.turnAgentActionsEl;
+    if (!a) return;
+    for (const other of messagesEl.querySelectorAll(".msg.agent .msg-actions")) {
+      if (other !== a) retireLiveTurnFeedback(other);
+    }
+    a.dataset.feedbackLive = "1";
+    state.turnRating = 0;
+    syncFeedbackButtons();
+  }
+
+  function applyTurnFeedbackAck(rating) {
+    if (state.replaying) return;
+    const a = state.turnAgentActionsEl;
+    if (!a) return;
+    a.dataset.feedbackLive = "1";
+    state.turnRating = rating === 1 || rating === -1 ? rating : 0;
+    delete a.dataset.feedbackPending;
+    syncFeedbackButtons();
   }
 
   const TOOL_VERB = {
@@ -11327,6 +11462,10 @@
     donutLabel.textContent = `${toK(used)}/${toK(max)}`;
     donutLabel.title = `${used.toLocaleString()} / ${max.toLocaleString()} tokens`;
     donutEl.title = `Context usage — ${used.toLocaleString()} / ${max.toLocaleString()} tokens`;
+    // Occupancy can move without a contextUsage frame (promptComplete,
+    // modelChanged). Re-paint so the open popover cannot keep a breakdown
+    // that no longer describes the number above it.
+    if (!contextPopover.hidden) renderContextPopover();
   }
 
   // ---------- slash autocomplete ----------
@@ -13328,6 +13467,7 @@
         // Nothing streaming survives a truncation — drop the per-turn handles so
         // the next turn starts clean rather than appending into a removed node.
         state.userMsgCount = msg.surviving;
+        state.turnRating = 0;
         state.activeAgentEl = null;
         state.activeAgentRaw = "";
         state.activeUserEl = null;
@@ -13425,18 +13565,14 @@
       case "session": {
         state.currentModelId = msg.currentModelId;
         state.activeProvider = msg.provider === "codex" || msg.provider === "claude" ? msg.provider : "grok";
+        syncFeedbackButtons();
         syncProviderVoice();
         if (state.railTransition?.kind === "new") renderRail();
         state.isWorktree = !!msg.worktree; // gates the gear Apply/Remove worktree items
         state.availableModels = msg.models || [];
         const m = state.availableModels.find((x) => x.modelId === msg.currentModelId && (!x.provider || x.provider === state.activeProvider));
         if (m?.totalContextTokens) state.contextWindow = m.totalContextTokens;
-        state.contextCategories = null;
-        state.contextSystemPromptTokens = null;
-        state.contextToolDefinitionsTokens = null;
-        state.contextMessageTokens = null;
-        state.contextFreeTokens = null;
-        state.contextAutoCompactPct = null;
+        state.contextBreakdown = null;
         updateDonut(0);
         reportRemotePreferences();
         break;
@@ -13628,7 +13764,11 @@
         break;
       case "agentStart":
         // A user-initiated turn began. Show Grokking until content replaces it.
+        // Previous completed turn keeps its footer but loses thumbs — only the
+        // turn that just finished is rateable.
+        retireLiveTurnFeedback(state.turnAgentActionsEl);
         state.turnAgentActionsEl = null; // new turn → previous turn keeps its footer
+        if (!state.replaying) state.turnRating = 0;
         state.ttsTurnText = "";
         showGrokking();
         // Busy is event-sourced through the session buffer so a re-focus lands
@@ -14043,16 +14183,12 @@
         // Host-authoritative occupancy: grok's signals.json / live envelope,
         // or the remembered adapter prompt size. A window-only frame updates
         // the denominator without inventing a used count.
+        // Structured addends are one snapshot (`nextContextBreakdown`): a
+        // used-only frame that moves occupancy drops them instead of merging.
+        state.contextBreakdown = nextContextBreakdown(state.contextBreakdown, msg);
         if (msg.window) state.contextWindow = msg.window;
-        if (msg.categories) state.contextCategories = msg.categories;
-        if (msg.systemPromptTokens != null) state.contextSystemPromptTokens = msg.systemPromptTokens;
-        if (msg.toolDefinitionsTokens != null) state.contextToolDefinitionsTokens = msg.toolDefinitionsTokens;
-        if (msg.messageTokens != null) state.contextMessageTokens = msg.messageTokens;
-        if (msg.freeTokens != null) state.contextFreeTokens = msg.freeTokens;
-        if (msg.autoCompactThresholdPercent != null) state.contextAutoCompactPct = msg.autoCompactThresholdPercent;
         if (msg.used != null) updateDonut(msg.used);
         else updateDonut();
-        if (!contextPopover.hidden) renderContextPopover();
         break;
       case "expandCommandOutputs":
         // Live toggle (grok.expandCommandOutputs): applies to existing rows
@@ -14142,6 +14278,9 @@
         hideGrokking(); // turn ended (possibly before any content)
         hideThinkingIndicator();
         revealTurnFooter();
+        // Image-read failures fire agentError before a turn starts — don't
+        // restamp the previous reply. A prompt that actually failed is busy.
+        if (state.busy) markLiveTurnFeedback();
         addError(msg.text);
         state.busy = false;
         state.busyLocked = false; // an error ends any startup lock too
@@ -14157,6 +14296,7 @@
         // empty) would otherwise orphan the dots forever — content-based
         // clearing never fires.
         revealTurnFooter();
+        markLiveTurnFeedback();
         state.busy = false;
         updateSendButton();
         if (!state.replaying) maybeNotifySound("done"); // #59 — live turns only, and only when away
@@ -14268,6 +14408,18 @@
         state.steerSupported = false;
         state.steerByDefault = false;
         renderQueuedBlocks();
+        break;
+      case "feedbackAvailability":
+        state.feedbackAvailable = msg.available === true;
+        if (!state.feedbackAvailable) {
+          for (const actions of messagesEl.querySelectorAll(".msg.agent .msg-actions")) {
+            delete actions.dataset.feedbackPending;
+          }
+        }
+        syncFeedbackButtons();
+        break;
+      case "turnFeedbackAck":
+        applyTurnFeedbackAck(msg.rating);
         break;
       case "usage":
         // Billing split (#53). `turn` is absent on a restore (we only stored the
@@ -15034,6 +15186,22 @@
           onbCopy.classList.remove("copied");
         }, 1500);
       });
+      return;
+    }
+    const thumbBtn = e.target.closest(".msg-thumb-btn");
+    if (thumbBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (state.replaying || !feedbackOffered()) return;
+      const actions = thumbBtn.closest(".msg-actions");
+      if (!actions || actions.dataset.feedbackPending === "1") return;
+      if (actions !== liveTurnActions()) return;
+      const clicked = Number(thumbBtn.dataset.rating);
+      if (clicked !== 1 && clicked !== -1) return;
+      const current = state.turnRating === 1 || state.turnRating === -1 ? state.turnRating : 0;
+      const next = current === clicked ? 0 : clicked;
+      actions.dataset.feedbackPending = "1";
+      vscode.postMessage({ type: "turnFeedback", rating: next });
       return;
     }
     const msgCopyBtn = e.target.closest(".msg-copy-btn");

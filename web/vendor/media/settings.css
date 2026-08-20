@@ -306,6 +306,10 @@ body.settings-page .settings-surface {
   color: var(--vscode-descriptionForeground);
 }
 
+.settings-body > .settings-group:first-child {
+  margin-top: 8px;
+}
+
 .settings-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(8rem, max-content);

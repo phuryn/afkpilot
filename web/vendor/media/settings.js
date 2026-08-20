@@ -14,7 +14,6 @@
     { id: "notifications", title: "Notifications", restore: true },
     { id: "providers", title: "Providers", restore: false },
     { id: "connectors", title: "Connectors", restore: false },
-    { id: "mcp", title: "MCP servers", restore: false },
     // "Remote control" rather than "Account": the page is about driving this
     // desk from a phone or browser — linking, the device list, the AFK Pilot
     // sign-in that enables it. "Account" invited confusion with the agent
@@ -32,7 +31,6 @@
     notifications: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
     providers: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>',
     connectors: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h6"/><path d="M14 9h6"/><circle cx="10" cy="9" r="2"/><circle cx="14" cy="9" r="2"/><path d="M7 9v6a5 5 0 0 0 10 0V9"/></svg>',
-    mcp: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v3"/><path d="M15 3v3"/><path d="M7 6h10v5a5 5 0 0 1-10 0Z"/><path d="M12 16v5"/></svg>',
     // The lucide phone the top bar uses for Continue remotely (chat.js ICON
     // .smartphone). Same shape on both so the nav row and the button read as
     // one feature — which is the point of calling this page Remote control.
@@ -77,6 +75,9 @@
   }
 
   const GITHUB_REPO_URL = "https://github.com/phuryn/grok-build-vscode";
+  const GROK_CONNECTORS_URL = "https://grok.com/connectors";
+  const CONNECTOR_SECTION_HERE = "On this computer";
+  const CONNECTOR_SECTION_GROK = "In this Grok session";
   const GITHUB_ISSUE_BUG_URL = GITHUB_REPO_URL + "/issues/new?labels=bug";
   const GITHUB_ISSUE_FEATURE_URL = GITHUB_REPO_URL + "/issues/new?labels=enhancement";
   const SUPPORT_MAILTO = "mailto:support@productcompass.pm";
@@ -579,10 +580,22 @@
       visible: (s, env) => mcpSettingsEnabled(env),
     },
     {
+      id: "grokConnectorsSite",
+      category: "connectors",
+      title: "grok.com/connectors",
+      kind: "action",
+      actionLabel: "Open",
+      href: GROK_CONNECTORS_URL,
+      visible: (s, env) => mcpSettingsEnabled(env),
+      describe: (s, env) => env && env.isRemote
+        ? "Grok's live server list is only on the desk. Add or remove grok.com-managed connectors here."
+        : "Add or remove grok.com-managed connectors for this machine.",
+    },
+    {
       id: "mcpCatalog",
-      category: "mcp",
+      category: "connectors",
       title: "MCP servers",
-      description: "See the servers and tools available to the current Grok session.",
+      description: "Servers and tools the current Grok session actually sees.",
       kind: "mcp",
       hostLocal: true,
       visible: (s, env) => mcpSettingsEnabled(env),
@@ -820,9 +833,15 @@
     return !!(env && env.hostCaps && env.hostCaps.mcpSettings);
   }
 
+  function connectorSection(row) {
+    if (row.id === "connectorsCatalog") return CONNECTOR_SECTION_HERE;
+    if (row.id === "grokConnectorsSite" || row.id === "mcpCatalog") return CONNECTOR_SECTION_GROK;
+    return "";
+  }
+
   function catalogCategories(env) {
     if (mcpSettingsEnabled(env)) return CATEGORIES;
-    return CATEGORIES.filter((cat) => cat.id !== "connectors" && cat.id !== "mcp");
+    return CATEGORIES.filter((cat) => cat.id !== "connectors");
   }
 
   function rowVisible(row, snapshot, env) {
@@ -872,13 +891,19 @@
 
   function searchHaystack(row, snapshot, env) {
     const cat = CATEGORIES.find((c) => c.id === row.category);
-    const extra = row.kind === "connectors" && Array.isArray(snapshot && snapshot.mcpConnectors)
+    const extraConnectors = row.kind === "connectors" && Array.isArray(snapshot && snapshot.mcpConnectors)
       ? snapshot.mcpConnectors.map((c) => [c.name, c.description].join(" ")).join(" ")
       : "";
+    const extraMcp = row.kind === "mcp" && Array.isArray(snapshot && snapshot.mcpServers)
+      ? snapshot.mcpServers.map((s) => [s.displayName, s.name].filter(Boolean).join(" ")).join(" ")
+      : "";
+    const section = connectorSection(row);
     return [
       rowTitle(row, snapshot, env),
       rowDescription(row, snapshot, env),
-      extra,
+      extraConnectors,
+      extraMcp,
+      section,
       cat ? cat.title : "",
       row.id,
     ].join(" ").toLowerCase();
@@ -1094,6 +1119,18 @@
     return null;
   }
 
+  /** Focus plus whether the phone category <select> is the live control.
+   *  Destroying that node while its native picker is open closes the picker. */
+  function describeChrome(container) {
+    const doc = container.ownerDocument;
+    const active = doc && doc.activeElement;
+    const focus = describeFocus(container, active);
+    return {
+      focus,
+      navMenuOpen: !!(focus && focus.kind === "nav-select"),
+    };
+  }
+
   function applyFocus(container, desc) {
     if (!desc) return;
     let next = null;
@@ -1187,13 +1224,13 @@
     el.dataset.id = "mcpCatalog";
     const warning = document.createElement("div");
     warning.className = "settings-mcp-warning";
-    warning.textContent = snapshot.mcpWarning || "This panel is read-only.";
+    warning.textContent = snapshot.mcpWarning || "This list is read-only.";
     el.appendChild(warning);
     if (snapshot.mcpLoading) {
       const loading = document.createElement("div");
       loading.className = "settings-mcp-state";
       loading.setAttribute("aria-live", "polite");
-      loading.textContent = "Loading MCP servers…";
+      loading.textContent = "Loading Grok's server list…";
       el.appendChild(loading);
       return el;
     }
@@ -1209,7 +1246,7 @@
     if (!servers.length) {
       const empty = document.createElement("div");
       empty.className = "settings-mcp-state";
-      empty.textContent = "No MCP servers reported by this Grok session.";
+      empty.textContent = "No servers reported by this Grok session.";
       el.appendChild(empty);
       return el;
     }
@@ -1462,6 +1499,8 @@
     const onLocal = typeof opts.onLocal === "function" ? opts.onLocal : null;
     const onClose = typeof opts.onClose === "function" ? opts.onClose : null;
     let phoneNav = matchPhoneNav(container.ownerDocument);
+    let lastPaintedKey = "";
+    let paintDeferred = false;
 
     const modal = !opts.standalone;
     container.classList.add("settings-surface");
@@ -1577,7 +1616,7 @@
     }
 
     function maybeRefreshMcp() {
-      if (mcpChecked || categoryId !== "mcp" || query.trim() || env.isRemote) return;
+      if (mcpChecked || categoryId !== "connectors" || query.trim() || env.isRemote) return;
       mcpChecked = true;
       requestMcpRefresh();
     }
@@ -1597,12 +1636,31 @@
       if (opts.closeOnAction && onClose) onClose();
     }
 
+    function paintKey() {
+      return JSON.stringify({
+        snapshot,
+        env,
+        categoryId,
+        query,
+        pendingRestore: pendingRestore ? pendingRestore.map((row) => row.id) : null,
+        phoneNav,
+      });
+    }
+
     function paint() {
-      const focus = describeFocus(container, container.ownerDocument && container.ownerDocument.activeElement);
+      const chrome = describeChrome(container);
       ensureCategory();
       maybeCheckAbout();
       maybeRefreshProviders();
       maybeRefreshMcp();
+      const key = paintKey();
+      if (key === lastPaintedKey && container.firstChild) {
+        paintDeferred = false;
+        return;
+      }
+      lastPaintedKey = key;
+      paintDeferred = false;
+      const focus = chrome.focus;
       const searching = !!query.trim();
       const shownCats = cats();
       const page = CATEGORIES.find((c) => c.id === categoryId) || shownCats[0];
@@ -1704,7 +1762,7 @@
         refresh.onclick = (e) => { e.stopPropagation(); requestProvidersRefresh(); };
         headActions.appendChild(refresh);
       }
-      if (!searching && page && page.id === "mcp" && !env.isRemote) {
+      if (!searching && page && page.id === "connectors" && !env.isRemote) {
         const refresh = document.createElement("button");
         refresh.type = "button";
         refresh.className = "settings-refresh";
@@ -1781,7 +1839,18 @@
           body.appendChild(renderRow(row, snapshot, env));
         }
       } else {
-        for (const row of rows) body.appendChild(renderRow(row, snapshot, env));
+        let lastSection = "";
+        for (const row of rows) {
+          const section = connectorSection(row);
+          if (section && section !== lastSection) {
+            lastSection = section;
+            const heading = document.createElement("h2");
+            heading.className = "settings-group";
+            heading.textContent = section;
+            body.appendChild(heading);
+          }
+          body.appendChild(renderRow(row, snapshot, env));
+        }
         if (categoryId === "about") {
           const disclaimer = document.createElement("p");
           disclaimer.className = "settings-about-disclaimer";
@@ -1808,7 +1877,7 @@
         if (!next) return;
         if (next !== "about") aboutChecked = false;
         if (next !== "providers") providersChecked = false;
-        if (next !== "mcp") mcpChecked = false;
+        if (next !== "connectors") mcpChecked = false;
         categoryId = next;
         query = "";
         dismissRestoreConfirm();
@@ -1948,6 +2017,12 @@
 
     container._onKey = onKey;
     document.addEventListener("keydown", onKey, true);
+    container.addEventListener("blur", (e) => {
+      if (!paintDeferred) return;
+      const target = e.target;
+      if (!target || !target.classList || !target.classList.contains("settings-nav-select")) return;
+      paint();
+    }, true);
     const view = container.ownerDocument && container.ownerDocument.defaultView;
     const phoneMq = view && view.matchMedia ? view.matchMedia(PHONE_NAV_MQ) : null;
     function onPhoneNavChange() {
@@ -1966,6 +2041,11 @@
       update(nextSnapshot, nextEnv) {
         if (nextSnapshot) snapshot = defaultSnapshot({ ...snapshot, ...nextSnapshot });
         if (nextEnv) Object.assign(env, nextEnv);
+        if (container.firstChild && paintKey() === lastPaintedKey) return;
+        if (describeChrome(container).navMenuOpen) {
+          paintDeferred = true;
+          return;
+        }
         paint();
       },
       focusSearch() {
@@ -1975,7 +2055,7 @@
       setCategory(id) {
         if (id !== "about") aboutChecked = false;
         if (id !== "providers") providersChecked = false;
-        if (id !== "mcp") mcpChecked = false;
+        if (id !== "connectors") mcpChecked = false;
         categoryId = id || "general";
         query = "";
         dismissRestoreConfirm();
@@ -2001,6 +2081,7 @@
     TELEMETRY_COPY,
     ABOUT_DISCLAIMER,
     GITHUB_REPO_URL,
+    GROK_CONNECTORS_URL,
     GITHUB_ISSUE_BUG_URL,
     GITHUB_ISSUE_FEATURE_URL,
     SUPPORT_MAILTO,

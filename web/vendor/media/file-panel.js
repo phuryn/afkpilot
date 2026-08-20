@@ -87,6 +87,46 @@
     return parts.length ? parts[parts.length - 1] : String(relPath || "") || "untitled";
   }
 
+  /**
+   * Workspace-relative form for "Copy relative path". Listings always use `/`
+   * (`file-tree` `childRel`); keep that, including on a Windows desk — it is
+   * what the composer and grok accept, and it is what the tree already shows.
+   */
+  function relativeCopyPath(relPath) {
+    return String(relPath || "").replace(/\\/g, "/");
+  }
+
+  /**
+   * Filesystem root of a panel scope. Production mounts put the host cwd in
+   * `id` (desktop `value.root`, remote `cwd`) and the same path in `title`.
+   * Tests may use a synthetic id and keep the real root in `title`.
+   */
+  function scopeCwd(scope) {
+    if (!scope) return "";
+    const id = String(scope.id || "");
+    const title = String(scope.title || "");
+    if (/[\\/]/.test(id)) return id;
+    if (/[\\/]/.test(title)) return title;
+    return id || title;
+  }
+
+  /**
+   * Join a host cwd to a workspace-relative path using the **desk's** separator.
+   * A phone client must not invent `/` just because it is POSIX: a backslash
+   * anywhere in `cwd` means the desk is Windows (`C:\repo\src\foo.ts`, never
+   * `C:\repo/src/foo.ts`).
+   */
+  function joinHostPath(root, relPath) {
+    const cwd = String(root || "");
+    const parts = String(relPath || "").replace(/\\/g, "/").split("/").filter(Boolean);
+    if (!parts.length) return cwd;
+    const sep = cwd.includes("\\") ? "\\" : "/";
+    const base = cwd.replace(/[\\/]+$/, "");
+    const tail = parts.join(sep);
+    if (!base) return sep + tail;
+    return base + sep + tail;
+  }
+
   function scopeKey(scopeId, relPath) {
     return String(scopeId || "") + "\0" + String(relPath || "");
   }
@@ -308,6 +348,7 @@
     maximize: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>',
     restore: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>',
     more: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>',
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>',
     // book-open-text / code — the two Markdown modes, kept as the icon pair the
     // desktop panel has always used rather than a worded toggle. A worded
     // button made Markdown the odd one out beside the pencil every other text
@@ -348,6 +389,7 @@
      *  that same control toggles closed instead of close-and-reopen. */
     let menuAnchor = null;
     let overflowRelPaths = [];
+    let copyFlashTimer = null;
     let lastStripPlan = null;
     let forcedStripPlan = null;
     let stripBusy = false;
@@ -1020,19 +1062,19 @@
       name.textContent = entry.name;
       const actions = doc.createElement("div");
       actions.className = "gfp-row-actions desk-ft-row-actions";
-      if (access.reveal || (entry.kind !== "dir" && access.openExternal)) {
-        const more = doc.createElement("button");
-        more.type = "button";
-        more.className = "gfp-icon-button desk-ft-action-btn";
-        more.innerHTML = ICON.more;
-        more.title = "More actions";
-        more.setAttribute("aria-label", "More actions");
-        more.addEventListener("click", (event) => {
-          event.stopPropagation();
-          openRowMenu(more, entry);
-        });
-        actions.appendChild(more);
-      }
+      // Copy path is host-free, so every row has a menu — including remote,
+      // which has no openExternal/reveal, and directories, which have a path.
+      const more = doc.createElement("button");
+      more.type = "button";
+      more.className = "gfp-icon-button desk-ft-action-btn";
+      more.innerHTML = ICON.more;
+      more.title = "More actions";
+      more.setAttribute("aria-label", "More actions");
+      more.addEventListener("click", (event) => {
+        event.stopPropagation();
+        openRowMenu(more, entry);
+      });
+      actions.appendChild(more);
       row.append(lead, name, actions);
       node.appendChild(row);
       if (entry.kind === "dir") {
@@ -1045,12 +1087,10 @@
         if (event.target && event.target.closest && event.target.closest(".gfp-row-actions")) return;
         void activate();
       });
-      if (access.reveal || (entry.kind !== "dir" && access.openExternal)) {
-        row.addEventListener("contextmenu", (event) => {
-          event.preventDefault();
-          openRowMenu(row, entry, event);
-        });
-      }
+      row.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        openRowMenu(row, entry, event);
+      });
       row.addEventListener("keydown", (event) => {
         if (event.target === row && (event.key === "Enter" || event.key === " ")) {
           event.preventDefault();
@@ -1472,11 +1512,10 @@
         // Inside the tab's own body, under its own tab. The message is the
         // content of this file as far as the panel is concerned.
         //
-        // The action row above is dropped when it would be EMPTY — which is the
-        // remote's case, since there is no default app to offer and nothing to
-        // edit. An empty toolbar over an error is a row of chrome explaining
-        // nothing. The desktop keeps its row, because the "…" menu still has
-        // Open in default app and Reveal in it.
+        // The action row above is dropped when it would be EMPTY. Copy path
+        // is always in the ⋯ menu, so a failed open still keeps the bar (you
+        // can copy the path of a file you could not preview). An older
+        // client with nothing at all in the menu still drops it.
         if (!head.childNodes.length) head.remove();
         appendStatus(body, tab.error, true);
         // The desktop can still hand it to the OS — offered here, not done for
@@ -1606,15 +1645,13 @@
           end.append(cancel, save);
         }
       }
-      if (access.openExternal || access.reveal) {
-        const more = actionButton("", "", () => openRowMenu(more, { relPath: tab.relPath, kind: "file", name: fileName(tab.relPath) }));
-        more.classList.add("gfp-more");
-        more.classList.add("desk-ft-open-ext");
-        more.innerHTML = ICON.more;
-        more.title = "More actions";
-        more.setAttribute("aria-label", "More actions");
-        end.appendChild(more);
-      }
+      const more = actionButton("", "", () => openRowMenu(more, { relPath: tab.relPath, kind: "file", name: fileName(tab.relPath) }));
+      more.classList.add("gfp-more");
+      more.classList.add("desk-ft-open-ext");
+      more.innerHTML = ICON.more;
+      more.title = "More actions";
+      more.setAttribute("aria-label", "More actions");
+      end.appendChild(more);
       if (end.childNodes.length) head.appendChild(end);
     }
 
@@ -1875,6 +1912,14 @@
       menu = doc.createElement("div");
       menu.className = "gfp-menu desk-ft-overflow-menu desk-ft-open";
       menu.setAttribute("role", "menu");
+      const rel = relativeCopyPath(entry && entry.relPath);
+      if (rel) {
+        menu.appendChild(menuItem("Copy relative path", () => copyEntryPath(anchor, rel)));
+      }
+      const cwd = scopeCwd(currentScope);
+      if (cwd) {
+        menu.appendChild(menuItem("Copy path", () => copyEntryPath(anchor, joinHostPath(cwd, entry && entry.relPath))));
+      }
       if (entry.kind !== "dir" && access.openExternal) {
         menu.appendChild(menuItem("Open in default app", () => access.openExternal(currentScope.id, entry.relPath)));
       }
@@ -1885,6 +1930,42 @@
       menuAnchor = anchor;
       doc.body.appendChild(menu);
       positionMenu(anchor, pointerEvent);
+    }
+
+    function writeClipboard(text) {
+      const clip = win.navigator && win.navigator.clipboard;
+      if (!clip || typeof clip.writeText !== "function") return Promise.resolve(false);
+      return Promise.resolve(clip.writeText(String(text == null ? "" : text)))
+        .then(() => true)
+        .catch(() => false);
+    }
+
+    function flashCopied(anchor) {
+      if (!anchor) return;
+      const isButton = anchor.classList
+        && (anchor.classList.contains("gfp-icon-button") || anchor.classList.contains("gfp-more"));
+      const btn = isButton
+        ? anchor
+        : (anchor.querySelector && anchor.querySelector(".gfp-icon-button, .gfp-more"));
+      if (!btn) return;
+      const prev = btn.innerHTML;
+      btn.innerHTML = ICON.check;
+      btn.classList.add("copied");
+      btn.dataset.gfpCopied = "1";
+      if (copyFlashTimer) win.clearTimeout(copyFlashTimer);
+      copyFlashTimer = win.setTimeout(() => {
+        copyFlashTimer = null;
+        if (btn.dataset.gfpCopied) {
+          delete btn.dataset.gfpCopied;
+          btn.innerHTML = prev;
+        }
+        btn.classList.remove("copied");
+      }, 1500);
+    }
+
+    async function copyEntryPath(anchor, text) {
+      const ok = await writeClipboard(text);
+      if (ok) flashCopied(anchor);
     }
 
     function openOverflowMenu(anchor) {
@@ -1983,6 +2064,10 @@
       destroyed = true;
       abortPending();
       closeMenu();
+      if (copyFlashTimer) {
+        win.clearTimeout(copyFlashTimer);
+        copyFlashTimer = null;
+      }
       setMaximized(false);
       if (stripObserver) {
         try { stripObserver.disconnect(); } catch (_) { /* noop */ }
@@ -2164,6 +2249,9 @@
     createFilePanel,
     resolveMarkdownLink,
     fileName,
+    relativeCopyPath,
+    scopeCwd,
+    joinHostPath,
     scopeKey,
     defaultFileIconId,
     stripShrinkState,

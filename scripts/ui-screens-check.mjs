@@ -396,11 +396,28 @@ try {
     assert.deepEqual(
       // Modes live in .gfp-seg now; titles still paint in this order because
       // Preview / Edit source stay first in the toolbar. Query by [title] so
-      // text buttons (no title) drop out. Remote has no host-local ⋯.
+      // text buttons (no title) drop out. The trailing ⋯ is no longer
+      // host-local: copying a path needs no round-trip, so it is offered on
+      // every client — remote included, which is the surface where retyping a
+      // path hurts most and the one that used to have no row menu at all.
       await page.evaluate(() => [...document.querySelectorAll(".gfp-viewer-head [title]")].map((b) => b.title)),
-      ["Preview", "Edit source"],
-      `${name}: Markdown shows the desktop's two-icon mode pair`,
+      ["Preview", "Edit source", "More actions"],
+      `${name}: Markdown shows the mode pair plus the copy menu`,
     );
+
+    // The ⋯ exists FOR the copy items, so prove they are in it. Asserting the
+    // button alone would pass just as happily on an empty menu, which is the
+    // shape this would regress into if the host-capability gate crept back.
+    await page.locator(".gfp-viewer-head [title='More actions']").click();
+    await page.waitForSelector(".gfp-menu", { timeout: 5000 });
+    assert.deepEqual(
+      await page.evaluate(() => [...document.querySelectorAll(".gfp-menu-item")].map((b) => b.textContent)),
+      ["Copy relative path", "Copy path"],
+      `${name}: the remote ⋯ carries both copy forms and nothing host-local`,
+    );
+    // Same anchor toggles it shut (beginMenu), leaving the toolbar as found.
+    await page.locator(".gfp-viewer-head [title='More actions']").click();
+    await page.waitForTimeout(150);
     await assertToolbarEnd(page, `${name} file open`);
 
     // --- editing -----------------------------------------------------------

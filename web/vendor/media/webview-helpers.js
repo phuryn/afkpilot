@@ -33,7 +33,7 @@
     "permissionResolved", "exitPlanRequest", "planResolved", "questionRequest", "planNotice", "autoCompactNotice", "planBlocked",
     "promptComplete", "contextUsage", "commandOutput", "expandCommandOutputs", "setAllToolDetails", "focusInput", "findInSession", "restoreComposer", "truncateMessages", "uiConfirmRequest", "agentReset", "agentError", "agentEnd", "exit", "setBusy", "summarizing",
     "sessionContext", "clearMessages", "onboarding", "error", "hostNotice", "xaiNotification", "subagentUpdate", "childStream", "runProgress", "sessions", "repoSessions", "pinnedSessions", "repos",
-    "sessionDot", "queuedSends", "submitQueuedSend", "steerUnavailable", "usage", "steerByDefault", "soundNotifications", "processingSound", "readRepliesAloud", "summarizeRepliesAloud", "speechSummary", "imageFull", "moveComposerCaret",
+    "sessionDot", "queuedSends", "submitQueuedSend", "steerUnavailable", "feedbackAvailability", "turnFeedbackAck", "usage", "steerByDefault", "soundNotifications", "processingSound", "readRepliesAloud", "summarizeRepliesAloud", "speechSummary", "imageFull", "moveComposerCaret",
     "remoteStatus",
   ];
   const WEBVIEW_MESSAGE_TYPES = [
@@ -47,7 +47,7 @@
     "recheckConnection", "refreshProviders", "retryProviderSession", "listSessions", "listRepoSessions", "selectRepo", "toggleRepoPin", "setRepoArchived", "setRepoColor", "toggleSessionPin", "resumeSession", "renameSession", "deleteSession",
       "clearAllSessions", "pickFile", "mentionQuery", "addMentionFile", "listProjectDir", "readProjectFile", "writeProjectFile", "pasteImage", "uploadFile", "voiceStart", "voiceStop",
       "remoteVoiceStart", "remoteVoiceChunk", "remoteVoiceStop",
-    "queueSend", "dequeueSend", "clearQueuedSends", "steerSend", "forkSession", "setSteerByDefault",
+    "queueSend", "dequeueSend", "clearQueuedSends", "steerSend", "turnFeedback", "forkSession", "setSteerByDefault",
     "setSoundNotifications", "setProcessingSound", "setReadRepliesAloud", "setSummarizeRepliesAloud", "setVoiceSendPhrase", "setVoiceKeyterms", "setTelemetryEnabled", "summarizeSpeech", "requestImageFull", "composerFocus",
     "newWorktreeSession", "applyWorktree", "removeWorktree", "rewindSession", "editLastMessage", "uiConfirmAnswer", "workflowControl", "refreshContextDetails",
     "remoteSignIn", "remoteSignOut", "unlinkRemoteDevice", "openRemotePortal",
@@ -59,6 +59,86 @@
    *  drift the sync test is designed to prevent, warned at runtime as a backstop. */
   function isKnownHostMessage(type) {
     return HOST_MESSAGE_TYPE_SET.has(type);
+  }
+
+  /**
+   * CLI legend-row remainder: `used - (system + messages)`, floored at 0.
+   * Null when either input is missing or the remainder is 0 — tool
+   * definitions and usage categories are already inside those addends.
+   * Callers must pass addends from the same snapshot as `used`.
+   */
+  function contextOverheadTokens(used, system, messages) {
+    if (typeof used !== "number" || !Number.isFinite(used) || used < 0) return null;
+    if (typeof system !== "number" || !Number.isFinite(system) || system < 0) return null;
+    if (typeof messages !== "number" || !Number.isFinite(messages) || messages < 0) return null;
+    const overhead = used - (system + messages);
+    return overhead > 0 ? overhead : null;
+  }
+
+  function finiteNonNeg(value) {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+  }
+
+  /** True when a contextUsage frame carries session/info addends, not just occupancy. */
+  function contextUsageHasBreakdown(msg) {
+    if (!msg || typeof msg !== "object") return false;
+    return msg.systemPromptTokens != null
+      || msg.toolDefinitionsTokens != null
+      || msg.toolDefinitionsCount != null
+      || msg.messageTokens != null
+      || msg.freeTokens != null
+      || msg.autoCompactThresholdPercent != null
+      || (Array.isArray(msg.categories) && msg.categories.length > 0);
+  }
+
+  /**
+   * Bind structured session/info rows to the `used` they were measured with.
+   * A used-only or window-only frame that moves occupancy away from that
+   * snapshot returns null so the popover cannot mix two readings. A live
+   * envelope that restates the same used/window keeps the snapshot.
+   */
+  function nextContextBreakdown(prev, msg) {
+    if (!msg || typeof msg !== "object") return prev || null;
+    if (contextUsageHasBreakdown(msg)) {
+      const used = finiteNonNeg(msg.used);
+      if (used == null) return null;
+      const win = typeof msg.window === "number" && Number.isFinite(msg.window) && msg.window > 0
+        ? msg.window
+        : null;
+      return {
+        used,
+        window: win,
+        systemPromptTokens: finiteNonNeg(msg.systemPromptTokens),
+        toolDefinitionsTokens: finiteNonNeg(msg.toolDefinitionsTokens),
+        toolDefinitionsCount: finiteNonNeg(msg.toolDefinitionsCount),
+        messageTokens: finiteNonNeg(msg.messageTokens),
+        freeTokens: finiteNonNeg(msg.freeTokens),
+        autoCompactPct: typeof msg.autoCompactThresholdPercent === "number"
+          && Number.isFinite(msg.autoCompactThresholdPercent)
+          && msg.autoCompactThresholdPercent > 0
+          ? msg.autoCompactThresholdPercent
+          : null,
+        categories: Array.isArray(msg.categories) && msg.categories.length ? msg.categories : null,
+      };
+    }
+    if (!prev) return null;
+    if (typeof msg.used === "number" && Number.isFinite(msg.used) && msg.used !== prev.used) return null;
+    if (typeof msg.window === "number" && Number.isFinite(msg.window) && prev.window != null && msg.window !== prev.window) {
+      return null;
+    }
+    return prev;
+  }
+
+  /**
+   * Render the snapshot only while live occupancy still matches the used
+   * (and window, when both known) it was measured with. promptComplete and
+   * modelChanged can move occupancy without a contextUsage frame.
+   */
+  function contextBreakdownIsCurrent(snapshot, used, window) {
+    if (!snapshot || typeof snapshot.used !== "number") return false;
+    if (snapshot.used !== used) return false;
+    if (snapshot.window != null && typeof window === "number" && snapshot.window !== window) return false;
+    return true;
   }
 
   /**
@@ -1631,7 +1711,7 @@
     return header.join("\n") + (body ? body + "\n" : "");
   }
 
-  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, createPendingOverlay, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, highlightQueryParts, appendHighlightedText, commandProgramLabel, commandTextPreview, MAX_COMMAND_OUTPUT_CHARS, capCommandOutput, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents };
+  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, contextOverheadTokens, nextContextBreakdown, contextBreakdownIsCurrent, createPendingOverlay, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, highlightQueryParts, appendHighlightedText, commandProgramLabel, commandTextPreview, MAX_COMMAND_OUTPUT_CHARS, capCommandOutput, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents };
 
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
