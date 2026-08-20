@@ -396,7 +396,7 @@
     lastTurnUsage: null, // last prompt's billing split (#53), for the donut popover
     sessionUsage: null, // session-cumulative billing — summed by the host, not grok
     // Structured session/info addends, bound to the `used` they arrived with.
-    // Occupancy-only frames that move used/window drop this rather than mixing.
+    // Occupancy-only frames keep this; an open popover re-fetches session/info.
     contextBreakdown: null,
     activeAgentEl: null,
     activeAgentRaw: "",
@@ -1841,12 +1841,10 @@
     }
     contextPopover.appendChild(act);
 
-    // Only the session/info snapshot whose used/window still match occupancy.
-    // A used-only frame that moved `used` has already dropped it; this gate
-    // also covers promptComplete / modelChanged, which never go through that path.
-    const breakdown = contextBreakdownIsCurrent(state.contextBreakdown, used, state.contextWindow)
-      ? state.contextBreakdown
-      : null;
+    // Snapshot addends are internally consistent (overhead from snapshot.used).
+    // Occupancy that has moved does not hide the group: an open popover
+    // re-fetches session/info so header and rows become current together.
+    const breakdown = state.contextBreakdown;
     const hasBreakdown = breakdown && (
       breakdown.systemPromptTokens != null ||
       breakdown.toolDefinitionsTokens != null ||
@@ -11469,9 +11467,14 @@
     donutLabel.title = `${used.toLocaleString()} / ${max.toLocaleString()} tokens`;
     donutEl.title = `Context usage — ${used.toLocaleString()} / ${max.toLocaleString()} tokens`;
     // Occupancy can move without a contextUsage frame (promptComplete,
-    // modelChanged). Re-paint so the open popover cannot keep a breakdown
-    // that no longer describes the number above it.
-    if (!contextPopover.hidden) renderContextPopover();
+    // modelChanged). Re-paint, then re-fetch session/info while the popover
+    // is open so the group stays and catches up instead of vanishing.
+    if (!contextPopover.hidden) {
+      renderContextPopover();
+      if (!contextBreakdownIsCurrent(state.contextBreakdown, used, state.contextWindow)) {
+        vscode.postMessage({ type: "refreshContextDetails" });
+      }
+    }
   }
 
   // ---------- slash autocomplete ----------
@@ -14231,8 +14234,8 @@
         // Host-authoritative occupancy: grok's signals.json / live envelope,
         // or the remembered adapter prompt size. A window-only frame updates
         // the denominator without inventing a used count.
-        // Structured addends are one snapshot (`nextContextBreakdown`): a
-        // used-only frame that moves occupancy drops them instead of merging.
+        // Structured addends are one snapshot (`nextContextBreakdown`). A
+        // used-only frame keeps them; currency is `contextBreakdownIsCurrent`.
         state.contextBreakdown = nextContextBreakdown(state.contextBreakdown, msg);
         if (msg.window) state.contextWindow = msg.window;
         if (msg.used != null) updateDonut(msg.used);

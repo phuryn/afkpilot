@@ -135,9 +135,11 @@
 
   /**
    * Bind structured session/info rows to the `used` they were measured with.
-   * A used-only or window-only frame that moves occupancy away from that
-   * snapshot returns null so the popover cannot mix two readings. A live
-   * envelope that restates the same used/window keeps the snapshot.
+   * Occupancy-only frames keep the previous snapshot (overhead is computed
+   * from that snapshot's used, never live occupancy minus stale addends).
+   * Currency is `contextBreakdownIsCurrent`; an open popover re-fetches
+   * rather than dropping the group. A live envelope that restates the same
+   * used/window keeps the snapshot.
    */
   function nextContextBreakdown(prev, msg) {
     if (!msg || typeof msg !== "object") return prev || null;
@@ -164,17 +166,14 @@
       };
     }
     if (!prev) return null;
-    if (typeof msg.used === "number" && Number.isFinite(msg.used) && msg.used !== prev.used) return null;
-    if (typeof msg.window === "number" && Number.isFinite(msg.window) && prev.window != null && msg.window !== prev.window) {
-      return null;
-    }
     return prev;
   }
 
   /**
-   * Render the snapshot only while live occupancy still matches the used
-   * (and window, when both known) it was measured with. promptComplete and
-   * modelChanged can move occupancy without a contextUsage frame.
+   * True while live occupancy still matches the used (and window, when both
+   * known) the snapshot was measured with. promptComplete and modelChanged
+   * can move occupancy without a contextUsage frame; an open popover then
+   * re-fetches session/info instead of hiding the group.
    */
   function contextBreakdownIsCurrent(snapshot, used, window) {
     if (!snapshot || typeof snapshot.used !== "number") return false;

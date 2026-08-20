@@ -29,8 +29,8 @@
     general: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg>',
     voice: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>',
     notifications: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
-    providers: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>',
-    connectors: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h6"/><path d="M14 9h6"/><circle cx="10" cy="9" r="2"/><circle cx="14" cy="9" r="2"/><path d="M7 9v6a5 5 0 0 0 10 0V9"/></svg>',
+    providers: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>',
+    connectors: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>',
     // The lucide phone the top bar uses for Continue remotely (chat.js ICON
     // .smartphone). Same shape on both so the nav row and the button read as
     // one feature — which is the point of calling this page Remote control.
@@ -77,7 +77,20 @@
   const GITHUB_REPO_URL = "https://github.com/phuryn/grok-build-vscode";
   const GROK_CONNECTORS_URL = "https://grok.com/connectors";
   const CONNECTOR_SECTION_HERE = "On this computer";
-  const CONNECTOR_SECTION_GROK = "Grok connectors";
+  const CONNECTOR_SECTION_GROK = "Grok.com connectors";
+  const CONNECTOR_SECTION_LOCAL = "Local Grok connectors";
+  const CONNECTOR_BLURB_HERE =
+    "These apps are available to Grok, Codex, and Claude. Connecting opens a browser to sign in. Tokens stay on this machine.";
+  const CONNECTOR_BLURB_HERE_REMOTE =
+    "These apps are connected on the desk machine. Sign-in happens there — a phone cannot change which tools an agent has.";
+  const CONNECTOR_BLURB_GROK =
+    "These follow your Grok account, so they are shared across every Grok session on every machine.";
+  const CONNECTOR_BLURB_LOCAL =
+    "Declared in this machine's Grok config files. Grok only.";
+  const CONNECTOR_BLURB_LOCAL_REMOTE =
+    "Declared in this machine's Grok config files. Grok only. These are managed on the desk machine only.";
+  const ICON_EXTERNAL_LINK =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
   const GITHUB_ISSUE_BUG_URL = GITHUB_REPO_URL + "/issues/new?labels=bug";
   const GITHUB_ISSUE_FEATURE_URL = GITHUB_REPO_URL + "/issues/new?labels=enhancement";
   const SUPPORT_MAILTO = "mailto:support@productcompass.pm";
@@ -216,6 +229,63 @@
       message: (value) => ({ type: "setAppPurpose", value }),
     },
     {
+      id: "chatFontScale",
+      category: "general",
+      title: "Text size",
+      description: "Chat text size on this device only. Keyboard zoom stays in sync with this slider.",
+      kind: "range",
+      min: 80,
+      max: 160,
+      step: 10,
+      defaultValue: 100,
+      visible: (s, env) => !!(env && env.clientOwnsFontScale),
+      get: (s) => Math.round(((s && s.fontScale) || 1) * 100),
+      localOnly: true,
+    },
+    {
+      id: "openChatFontScale",
+      category: "general",
+      title: "Text size",
+      description: "Chat zoom lives in VS Code settings so it can stay a user or workspace preference.",
+      kind: "action",
+      actionLabel: "Open VS Code settings",
+      visible: (s, env) => !!(env && !env.isRemote && !env.clientOwnsFontScale && !env.isDesktop),
+      message: () => ({ type: "openSettings", section: "grok.chatFontScale" }),
+    },
+    {
+      id: "showThinking",
+      category: "general",
+      title: "Show thinking traces",
+      description: "Show Grok's reasoning traces in chat, including on already-loaded sessions.",
+      kind: "toggle",
+      defaultValue: false,
+      visible: (s) => purposeOf(s) === "coding",
+      get: (s) => !!(s && s.showThinking),
+      message: (value) => ({ type: "setShowThinking", value }),
+    },
+    {
+      id: "expandCommandOutputs",
+      category: "general",
+      title: "Expand tool details",
+      description: "Pre-open each command's IN/OUT block and each edit's inline diff instead of clicking a row to expand it.",
+      kind: "toggle",
+      defaultValue: false,
+      visible: (s) => purposeOf(s) === "coding",
+      get: (s) => !!(s && s.expandCommandOutputs),
+      message: (value) => ({ type: "setExpandCommandOutputs", value }),
+    },
+    {
+      id: "steerByDefault",
+      category: "general",
+      title: "Steer by default",
+      description: "Send straight into the running turn instead of queueing until it finishes. Steering does not cancel work in progress.",
+      kind: "toggle",
+      defaultValue: false,
+      visible: (s, env) => !env || env.steerSupported !== false,
+      get: (s) => !!(s && s.steerByDefault),
+      message: (value) => ({ type: "setSteerByDefault", value }),
+    },
+    {
       id: "telemetryDesktop",
       category: "general",
       title: "Anonymous usage stats",
@@ -272,63 +342,6 @@
         const state = known ? (s.thumbsFeedback ? "On. " : "Off. ") : "";
         return state + THUMBS_COPY;
       },
-    },
-    {
-      id: "chatFontScale",
-      category: "general",
-      title: "Text size",
-      description: "Chat text size on this device only. Keyboard zoom stays in sync with this slider.",
-      kind: "range",
-      min: 80,
-      max: 160,
-      step: 10,
-      defaultValue: 100,
-      visible: (s, env) => !!(env && env.clientOwnsFontScale),
-      get: (s) => Math.round(((s && s.fontScale) || 1) * 100),
-      localOnly: true,
-    },
-    {
-      id: "openChatFontScale",
-      category: "general",
-      title: "Text size",
-      description: "Chat zoom lives in VS Code settings so it can stay a user or workspace preference.",
-      kind: "action",
-      actionLabel: "Open VS Code settings",
-      visible: (s, env) => !!(env && !env.isRemote && !env.clientOwnsFontScale && !env.isDesktop),
-      message: () => ({ type: "openSettings", section: "grok.chatFontScale" }),
-    },
-    {
-      id: "showThinking",
-      category: "general",
-      title: "Show thinking traces",
-      description: "Show Grok's reasoning traces in chat, including on already-loaded sessions.",
-      kind: "toggle",
-      defaultValue: false,
-      visible: (s) => purposeOf(s) === "coding",
-      get: (s) => !!(s && s.showThinking),
-      message: (value) => ({ type: "setShowThinking", value }),
-    },
-    {
-      id: "expandCommandOutputs",
-      category: "general",
-      title: "Expand tool details",
-      description: "Pre-open each command's IN/OUT block and each edit's inline diff instead of clicking a row to expand it.",
-      kind: "toggle",
-      defaultValue: false,
-      visible: (s) => purposeOf(s) === "coding",
-      get: (s) => !!(s && s.expandCommandOutputs),
-      message: (value) => ({ type: "setExpandCommandOutputs", value }),
-    },
-    {
-      id: "steerByDefault",
-      category: "general",
-      title: "Steer by default",
-      description: "Send straight into the running turn instead of queueing until it finishes. Steering does not cancel work in progress.",
-      kind: "toggle",
-      defaultValue: false,
-      visible: (s, env) => !env || env.steerSupported !== false,
-      get: (s) => !!(s && s.steerByDefault),
-      message: (value) => ({ type: "setSteerByDefault", value }),
     },
     {
       id: "voiceSendPhrase",
@@ -602,25 +615,15 @@
       id: "connectorsCatalog",
       category: "connectors",
       title: "Connectors",
-      description: "Apps available to Grok, Codex, and Claude after you sign in on this machine.",
+      description: CONNECTOR_BLURB_HERE,
       kind: "connectors",
       visible: (s, env) => mcpSettingsEnabled(env),
-    },
-    {
-      id: "grokConnectorsSite",
-      category: "connectors",
-      title: "grok.com/connectors",
-      kind: "action",
-      actionLabel: "Open",
-      href: GROK_CONNECTORS_URL,
-      visible: (s, env) => mcpSettingsEnabled(env),
-      description: "Add or remove grok.com-managed connectors here.",
     },
     {
       id: "mcpCatalog",
       category: "connectors",
       title: "Grok connectors",
-      description: "grok.com-managed connectors and user-level config on this machine.",
+      description: CONNECTOR_BLURB_GROK,
       kind: "mcp",
       visible: (s, env) => mcpSettingsEnabled(env),
     },
@@ -859,7 +862,6 @@
 
   function connectorSection(row) {
     if (row.id === "connectorsCatalog") return CONNECTOR_SECTION_HERE;
-    if (row.id === "grokConnectorsSite" || row.id === "mcpCatalog") return CONNECTOR_SECTION_GROK;
     return "";
   }
 
@@ -919,7 +921,14 @@
       ? snapshot.mcpConnectors.map((c) => [c.name, c.description].join(" ")).join(" ")
       : "";
     const extraMcp = row.kind === "mcp" && Array.isArray(snapshot && snapshot.mcpServers)
-      ? snapshot.mcpServers.map((s) => [s.displayName, s.name].filter(Boolean).join(" ")).join(" ")
+      ? [
+          CONNECTOR_SECTION_GROK,
+          CONNECTOR_SECTION_LOCAL,
+          GROK_CONNECTORS_URL,
+          CONNECTOR_BLURB_GROK,
+          CONNECTOR_BLURB_LOCAL,
+          ...snapshot.mcpServers.map((s) => [s.displayName, s.name, s.scopeName, s.configFile].filter(Boolean).join(" ")),
+        ].join(" ")
       : "";
     const section = connectorSection(row);
     return [
@@ -1246,40 +1255,40 @@
     return parts.join(" · ");
   }
 
-  function renderMcpCatalog(snapshot) {
-    const el = document.createElement("div");
-    el.className = "settings-mcp";
-    el.dataset.id = "mcpCatalog";
-    const warning = document.createElement("div");
-    warning.className = "settings-mcp-warning";
-    warning.textContent = snapshot.mcpWarning || "This list is read-only.";
-    el.appendChild(warning);
-    if (snapshot.mcpLoading) {
-      const loading = document.createElement("div");
-      loading.className = "settings-mcp-state";
-      loading.setAttribute("aria-live", "polite");
-      loading.textContent = "Loading Grok connectors…";
-      el.appendChild(loading);
-      return el;
-    }
-    if (snapshot.mcpError) {
-      const error = document.createElement("div");
-      error.className = "settings-mcp-state is-error";
-      error.setAttribute("role", "alert");
-      error.textContent = snapshot.mcpError;
-      el.appendChild(error);
-      return el;
-    }
-    const servers = Array.isArray(snapshot.mcpServers) ? snapshot.mcpServers : [];
-    if (!servers.length) {
-      const empty = document.createElement("div");
-      empty.className = "settings-mcp-state";
-      empty.textContent = "No connectors reported.";
-      el.appendChild(empty);
-      return el;
-    }
-    const list = document.createElement("div");
-    list.className = "settings-mcp-list";
+  function mcpIsManagedServer(server) {
+    return !!(server && (server.managed === true || server.source === "managed"));
+  }
+
+  function settingsFileIconBase() {
+    try {
+      const scripts = document.getElementsByTagName("script");
+      for (let i = 0; i < scripts.length; i++) {
+        const src = scripts[i].src || "";
+        if (src.indexOf("settings.js") !== -1) return new URL("file-icons/", src).href;
+      }
+    } catch (_) { /* */ }
+    return "";
+  }
+
+  function configFileIconId(fileName) {
+    const lower = String(fileName || "").replace(/\\/g, "/").split("/").pop().toLowerCase();
+    if (lower.endsWith(".json")) return "json";
+    if (lower.endsWith(".toml")) return "config";
+    return "default";
+  }
+
+  function renderConfigFileIcon(host, fileName) {
+    const base = settingsFileIconBase();
+    const id = configFileIconId(fileName);
+    if (!base) return;
+    const img = document.createElement("img");
+    img.alt = "";
+    img.draggable = false;
+    img.src = base + id + ".svg";
+    host.appendChild(img);
+  }
+
+  function appendMcpServerRows(list, servers, opts) {
     for (const server of servers) {
       const row = document.createElement("div");
       row.className = "settings-mcp-server";
@@ -1294,13 +1303,11 @@
       const label = document.createElement("span");
       label.textContent = server.displayName || server.name;
       name.appendChild(label);
-      const tag = server.tag
-        || ((server.managed || server.source === "managed") ? "grok.com managed" : "");
-      if (tag) {
-        const badge = document.createElement("span");
-        badge.className = "settings-mcp-badge";
-        badge.textContent = tag;
-        name.appendChild(badge);
+      if (opts.managed && server.scopeName) {
+        const scope = document.createElement("span");
+        scope.className = "settings-mcp-scope";
+        scope.textContent = server.scopeName;
+        name.appendChild(scope);
       }
       const detail = document.createElement("div");
       detail.className = "settings-row-desc";
@@ -1309,7 +1316,98 @@
       row.appendChild(copy);
       list.appendChild(row);
     }
-    el.appendChild(list);
+  }
+
+  function renderMcpSectionState(text, error) {
+    const el = document.createElement("div");
+    el.className = "settings-mcp-state" + (error ? " is-error" : "");
+    if (error) el.setAttribute("role", "alert");
+    else el.setAttribute("aria-live", "polite");
+    el.textContent = text;
+    return el;
+  }
+
+  function renderMcpCatalog(snapshot, env) {
+    const el = document.createElement("div");
+    el.className = "settings-mcp settings-mcp-split";
+    el.dataset.id = "mcpCatalog";
+    const servers = Array.isArray(snapshot.mcpServers) ? snapshot.mcpServers : [];
+    const managed = servers.filter(mcpIsManagedServer);
+    const local = servers.filter((server) => !mcpIsManagedServer(server));
+    const loading = !!snapshot.mcpLoading;
+    const error = snapshot.mcpError ? String(snapshot.mcpError) : "";
+
+    const grokHead = document.createElement("div");
+    grokHead.className = "settings-group-row";
+    const grokTitle = document.createElement("h2");
+    grokTitle.className = "settings-group";
+    grokTitle.textContent = CONNECTOR_SECTION_GROK;
+    grokHead.appendChild(grokTitle);
+    const grokOpen = document.createElement("button");
+    grokOpen.type = "button";
+    grokOpen.className = "settings-action settings-mcp-web";
+    grokOpen.dataset.href = GROK_CONNECTORS_URL;
+    const grokIcon = document.createElement("span");
+    grokIcon.className = "settings-file-icon";
+    grokIcon.setAttribute("aria-hidden", "true");
+    grokIcon.innerHTML = ICON_EXTERNAL_LINK;
+    grokOpen.appendChild(grokIcon);
+    grokOpen.appendChild(document.createTextNode("Open"));
+    grokHead.appendChild(grokOpen);
+    el.appendChild(grokHead);
+    const grokBlurb = document.createElement("div");
+    grokBlurb.className = "settings-mcp-warning";
+    grokBlurb.textContent = CONNECTOR_BLURB_GROK;
+    el.appendChild(grokBlurb);
+    if (loading) {
+      el.appendChild(renderMcpSectionState("Loading Grok connectors…"));
+    } else if (error) {
+      el.appendChild(renderMcpSectionState(error, true));
+    } else if (!managed.length) {
+      el.appendChild(renderMcpSectionState("No grok.com connectors reported."));
+    } else {
+      const grokList = document.createElement("div");
+      grokList.className = "settings-mcp-list";
+      appendMcpServerRows(grokList, managed, { managed: true });
+      el.appendChild(grokList);
+    }
+
+    const localHead = document.createElement("div");
+    localHead.className = "settings-group-row";
+    const localTitle = document.createElement("h2");
+    localTitle.className = "settings-group";
+    localTitle.textContent = CONNECTOR_SECTION_LOCAL;
+    localHead.appendChild(localTitle);
+    if (!(env && env.isRemote)) {
+      const localOpen = document.createElement("button");
+      localOpen.type = "button";
+      localOpen.className = "settings-action settings-mcp-open";
+      localOpen.title = "config.toml";
+      const localIcon = document.createElement("span");
+      localIcon.className = "settings-file-icon";
+      localIcon.setAttribute("aria-hidden", "true");
+      renderConfigFileIcon(localIcon, "config.toml");
+      localOpen.appendChild(localIcon);
+      localOpen.appendChild(document.createTextNode("Open"));
+      localHead.appendChild(localOpen);
+    }
+    el.appendChild(localHead);
+    const localBlurb = document.createElement("div");
+    localBlurb.className = "settings-mcp-warning";
+    localBlurb.textContent = env && env.isRemote ? CONNECTOR_BLURB_LOCAL_REMOTE : CONNECTOR_BLURB_LOCAL;
+    el.appendChild(localBlurb);
+    if (loading) {
+      el.appendChild(renderMcpSectionState("Loading Grok connectors…"));
+    } else if (error) {
+      el.appendChild(renderMcpSectionState(error, true));
+    } else if (!local.length) {
+      el.appendChild(renderMcpSectionState("No local Grok connectors reported."));
+    } else {
+      const localList = document.createElement("div");
+      localList.className = "settings-mcp-list";
+      appendMcpServerRows(localList, local, {});
+      el.appendChild(localList);
+    }
     return el;
   }
 
@@ -1336,8 +1434,8 @@
     const warning = document.createElement("div");
     warning.className = "settings-mcp-warning";
     warning.textContent = env && env.isRemote
-      ? "These apps are connected on the desk machine. Sign-in happens there — a phone cannot change which tools an agent has."
-      : "These apps are available to Grok, Codex, and Claude. Connecting opens a browser to sign in. Tokens stay on this machine.";
+      ? CONNECTOR_BLURB_HERE_REMOTE
+      : CONNECTOR_BLURB_HERE;
     el.appendChild(warning);
     const connectors = Array.isArray(snapshot.mcpConnectors) ? snapshot.mcpConnectors : [];
     if (!connectors.length) {
@@ -1393,7 +1491,7 @@
   }
 
   function renderRow(row, snapshot, env) {
-    if (row.kind === "mcp") return renderMcpCatalog(snapshot);
+    if (row.kind === "mcp") return renderMcpCatalog(snapshot, env);
     if (row.kind === "connectors") return renderConnectorsCatalog(snapshot, env);
     const el = document.createElement("div");
     el.className = "settings-row";
@@ -1999,6 +2097,20 @@
           });
         });
       });
+      body.querySelectorAll(".settings-mcp-web").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const url = btn.dataset.href;
+          if (url) openExternalHref(url);
+        });
+      });
+      body.querySelectorAll(".settings-mcp-open").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (env.isRemote) return;
+          post({ type: "openGlobalConfig" });
+        });
+      });
       applyFocus(container, focus);
     }
 
@@ -2113,6 +2225,14 @@
     ABOUT_DISCLAIMER,
     GITHUB_REPO_URL,
     GROK_CONNECTORS_URL,
+    CONNECTOR_SECTION_HERE,
+    CONNECTOR_SECTION_GROK,
+    CONNECTOR_SECTION_LOCAL,
+    CONNECTOR_BLURB_HERE,
+    CONNECTOR_BLURB_HERE_REMOTE,
+    CONNECTOR_BLURB_GROK,
+    CONNECTOR_BLURB_LOCAL,
+    CONNECTOR_BLURB_LOCAL_REMOTE,
     GITHUB_ISSUE_BUG_URL,
     GITHUB_ISSUE_FEATURE_URL,
     SUPPORT_MAILTO,

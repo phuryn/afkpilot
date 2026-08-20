@@ -306,8 +306,42 @@ body.settings-page .settings-surface {
   color: var(--vscode-descriptionForeground);
 }
 
-.settings-body > .settings-group:first-child {
+.settings-group-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.settings-group-row .settings-group {
+  margin: 0;
+}
+
+.settings-body > .settings-group:first-child,
+.settings-body > .settings-group-row:first-child {
   margin-top: 8px;
+}
+
+.settings-mcp-web,
+.settings-mcp-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-file-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.settings-file-icon img,
+.settings-file-icon svg {
+  display: block;
+  width: 14px;
+  height: 14px;
 }
 
 .settings-row {
@@ -385,8 +419,9 @@ body.settings-page .settings-surface {
 
 .settings-mcp-server {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  align-items: center;
   min-height: 46px;
   padding: 12px 14px;
 }
@@ -410,16 +445,11 @@ body.settings-page .settings-surface {
   min-width: 0;
 }
 
-.settings-mcp-badge {
+.settings-mcp-scope {
   flex: none;
-  padding: 2px 6px;
-  border: 1px solid color-mix(in srgb, var(--vscode-textLink-foreground, #3794ff) 45%, transparent);
-  border-radius: 999px;
-  color: var(--vscode-textLink-foreground, #3794ff);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: .02em;
-  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  font-weight: 400;
 }
 
 .settings-mcp-status {

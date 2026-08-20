@@ -1912,6 +1912,12 @@
       menu = doc.createElement("div");
       menu.className = "gfp-menu desk-ft-overflow-menu desk-ft-open";
       menu.setAttribute("role", "menu");
+      if (entry.kind !== "dir" && access.openExternal) {
+        menu.appendChild(menuItem("Open in default app", () => access.openExternal(currentScope.id, entry.relPath)));
+      }
+      if (access.reveal) {
+        menu.appendChild(menuItem(ui.revealLabel || "Reveal in file manager", () => access.reveal(currentScope.id, entry.relPath)));
+      }
       const rel = relativeCopyPath(entry && entry.relPath);
       if (rel) {
         menu.appendChild(menuItem("Copy relative path", () => copyEntryPath(anchor, rel)));
@@ -1919,12 +1925,6 @@
       const cwd = scopeCwd(currentScope);
       if (cwd) {
         menu.appendChild(menuItem("Copy path", () => copyEntryPath(anchor, joinHostPath(cwd, entry && entry.relPath))));
-      }
-      if (entry.kind !== "dir" && access.openExternal) {
-        menu.appendChild(menuItem("Open in default app", () => access.openExternal(currentScope.id, entry.relPath)));
-      }
-      if (access.reveal) {
-        menu.appendChild(menuItem(ui.revealLabel || "Reveal in file manager", () => access.reveal(currentScope.id, entry.relPath)));
       }
       if (!menu.childNodes.length) return closeMenu();
       menuAnchor = anchor;
