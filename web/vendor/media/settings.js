@@ -80,7 +80,7 @@
   const CONNECTOR_SECTION_GROK = "Grok.com connectors";
   const CONNECTOR_SECTION_LOCAL = "Local Grok connectors";
   const CONNECTOR_BLURB_HERE =
-    "These apps are available to Grok, Codex, and Claude. Connecting opens a browser to sign in. Tokens stay on this machine.";
+    "These apps are available to Grok, Codex, and Claude. Most open a browser to sign in; GitHub uses a personal access token you paste here. Tokens stay on this machine.";
   const CONNECTOR_BLURB_HERE_REMOTE =
     "These apps are connected on the desk machine. Sign-in happens there — a phone cannot change which tools an agent has.";
   const CONNECTOR_BLURB_GROK =
@@ -931,7 +931,7 @@
   function searchHaystack(row, snapshot, env) {
     const cat = CATEGORIES.find((c) => c.id === row.category);
     const extraConnectors = row.kind === "connectors" && Array.isArray(snapshot && snapshot.mcpConnectors)
-      ? snapshot.mcpConnectors.map((c) => [c.name, c.description].join(" ")).join(" ")
+      ? snapshot.mcpConnectors.map((c) => [c.name, c.description, c.keyHint].join(" ")).join(" ")
       : "";
     const extraMcp = row.kind === "mcp" && Array.isArray(snapshot && snapshot.mcpServers)
       ? [
@@ -1448,23 +1448,92 @@
     return el;
   }
 
+  function isKeyConnectorView(connector) {
+    return !!(connector && connector.auth === "key");
+  }
+
   function connectorDescription(connector, env) {
     if (connector.status === "connecting") {
-      return "Waiting for the browser sign-in to finish…";
+      return isKeyConnectorView(connector)
+        ? "Checking the token…"
+        : "Waiting for the browser sign-in to finish…";
     }
     if (connector.status === "error" && connector.error) return connector.error;
     if (env && env.isRemote) {
+      if (isKeyConnectorView(connector) && connector.connected && connector.keySet !== true) {
+        return connector.description + " Connected, but no key on the desk.";
+      }
       return connector.connected
         ? connector.description + " Connected on the desk machine."
         : connector.description + " Sign-in happens on the desk.";
     }
+    if (isKeyConnectorView(connector) && connector.connected && connector.keySet === true) {
+      return connector.description + " Key is set. Applies to new conversations and when you reopen one.";
+    }
+    if (isKeyConnectorView(connector) && connector.connected) {
+      return connector.description + " Connected, but no key on this machine. Paste a token to use it here.";
+    }
     if (connector.connected) {
       return connector.description + " Applies to new conversations and when you reopen one.";
     }
+    if (isKeyConnectorView(connector) && connector.keyHint) return connector.keyHint;
     return connector.description;
   }
 
-  function renderConnectorsCatalog(snapshot, env) {
+  function renderConnectorKeyForm(connector, keyForm) {
+    const form = document.createElement("div");
+    form.className = "settings-connector-key";
+    const input = document.createElement("input");
+    input.type = "password";
+    input.className = "settings-text settings-connector-key-input";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.setAttribute("aria-label", connector.name + " personal access token");
+    input.placeholder = "Paste token";
+    input.value = keyForm && keyForm.id === connector.id ? String(keyForm.value || "") : "";
+    input.dataset.id = connector.id;
+    form.appendChild(input);
+    if (connector.keyDocsUrl) {
+      const hint = document.createElement("div");
+      hint.className = "settings-connector-key-hint";
+      hint.appendChild(document.createTextNode("Create a fine-grained token at "));
+      const link = document.createElement("a");
+      link.className = "settings-connector-key-docs";
+      link.href = connector.keyDocsUrl;
+      link.textContent = "github.com/settings/personal-access-tokens";
+      link.dataset.href = connector.keyDocsUrl;
+      hint.appendChild(link);
+      hint.appendChild(document.createTextNode("."));
+      form.appendChild(hint);
+    }
+    const readonly = document.createElement("label");
+    readonly.className = "settings-connector-readonly";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.className = "settings-connector-readonly-input";
+    box.dataset.id = connector.id;
+    box.checked = !!(keyForm && keyForm.id === connector.id ? keyForm.readOnly : connector.readOnly);
+    readonly.appendChild(box);
+    readonly.appendChild(document.createTextNode("Read-only (the agent can look, not write)"));
+    form.appendChild(readonly);
+    const actions = document.createElement("div");
+    actions.className = "settings-connector-key-actions";
+    const submit = document.createElement("button");
+    submit.type = "button";
+    submit.className = "settings-action settings-connector-key-submit";
+    submit.dataset.id = connector.id;
+    submit.textContent = connector.connected ? "Save key" : "Connect";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "settings-action settings-connector-key-cancel";
+    cancel.dataset.id = connector.id;
+    cancel.textContent = "Cancel";
+    actions.append(submit, cancel);
+    form.appendChild(actions);
+    return form;
+  }
+
+  function renderConnectorsCatalog(snapshot, env, keyForm) {
     const el = document.createElement("div");
     el.className = "settings-mcp";
     el.dataset.id = "connectorsCatalog";
@@ -1490,6 +1559,7 @@
       const row = document.createElement("div");
       row.className = "settings-row settings-connector" + (connector.connected ? " is-connected" : "");
       row.dataset.id = "connector-" + connector.id;
+      row.dataset.auth = isKeyConnectorView(connector) ? "key" : "oauth";
       const copy = document.createElement("div");
       copy.className = "settings-row-copy";
       const name = document.createElement("div");
@@ -1506,14 +1576,31 @@
       copy.append(name, desc);
       const control = document.createElement("div");
       control.className = "settings-row-control";
+      const connecting = connector.status === "connecting";
+      const formOpen = !!(keyForm && keyForm.id === connector.id);
       if (!(env && env.isRemote)) {
+        if (isKeyConnectorView(connector) && connector.connected && !formOpen) {
+          const replace = document.createElement("button");
+          replace.type = "button";
+          replace.className = "settings-action settings-connector-key-open";
+          replace.dataset.id = connector.id;
+          replace.dataset.action = "replace";
+          replace.textContent = connector.keySet === true ? "Replace" : "Paste token";
+          replace.disabled = connecting;
+          control.appendChild(replace);
+        }
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "settings-action settings-connector-action";
         btn.dataset.id = connector.id;
+        btn.dataset.auth = isKeyConnectorView(connector) ? "key" : "oauth";
         btn.dataset.connected = connector.connected ? "true" : "false";
-        const connecting = connector.status === "connecting";
-        btn.textContent = connecting ? "Connecting…" : (connector.connected ? "Disconnect" : "Connect");
+        if (isKeyConnectorView(connector) && !connector.connected) {
+          btn.textContent = connecting ? "Connecting…" : (formOpen ? "Cancel" : "Connect");
+          btn.dataset.action = formOpen ? "cancel" : "open";
+        } else {
+          btn.textContent = connecting ? "Connecting…" : (connector.connected ? "Disconnect" : "Connect");
+        }
         btn.disabled = connecting;
         if (connecting) btn.setAttribute("aria-busy", "true");
         control.appendChild(btn);
@@ -1524,15 +1611,32 @@
         control.appendChild(span);
       }
       row.append(copy, control);
+      if (!(env && env.isRemote) && isKeyConnectorView(connector) && connector.connected && connector.keySet === true && !formOpen) {
+        const readonly = document.createElement("label");
+        readonly.className = "settings-connector-readonly settings-connector-readonly-live";
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.className = "settings-connector-readonly-input";
+        box.dataset.id = connector.id;
+        box.dataset.live = "true";
+        box.checked = connector.readOnly === true;
+        box.disabled = connecting;
+        readonly.appendChild(box);
+        readonly.appendChild(document.createTextNode("Read-only (the agent can look, not write)"));
+        row.appendChild(readonly);
+      }
+      if (!(env && env.isRemote) && isKeyConnectorView(connector) && formOpen && !connecting) {
+        row.appendChild(renderConnectorKeyForm(connector, keyForm));
+      }
       list.appendChild(row);
     }
     el.appendChild(list);
     return el;
   }
 
-  function renderRow(row, snapshot, env) {
+  function renderRow(row, snapshot, env, keyForm) {
     if (row.kind === "mcp") return renderMcpCatalog(snapshot, env);
-    if (row.kind === "connectors") return renderConnectorsCatalog(snapshot, env);
+    if (row.kind === "connectors") return renderConnectorsCatalog(snapshot, env, keyForm);
     const el = document.createElement("div");
     el.className = "settings-row";
     el.dataset.id = row.id;
@@ -1658,6 +1762,7 @@
     let snapshot = defaultSnapshot(opts.snapshot);
     let categoryId = opts.category || "general";
     let query = "";
+    let keyForm = { id: "", value: "", readOnly: false };
     let pendingRestore = null;
     let aboutChecked = false;
     let providersChecked = false;
@@ -1812,6 +1917,7 @@
         query,
         pendingRestore: pendingRestore ? pendingRestore.map((row) => row.id) : null,
         phoneNav,
+        keyFormId: keyForm.id,
       });
     }
 
@@ -2004,7 +2110,7 @@
             heading.textContent = cat ? cat.title : row.category;
             body.appendChild(heading);
           }
-          body.appendChild(renderRow(row, snapshot, env));
+          body.appendChild(renderRow(row, snapshot, env, keyForm));
         }
       } else {
         let lastSection = "";
@@ -2017,7 +2123,7 @@
             heading.textContent = section;
             body.appendChild(heading);
           }
-          body.appendChild(renderRow(row, snapshot, env));
+          body.appendChild(renderRow(row, snapshot, env, keyForm));
         }
         if (categoryId === "about") {
           const disclaimer = document.createElement("p");
@@ -2125,16 +2231,98 @@
           btn.onclick = (e) => { e.stopPropagation(); runAction(row); };
         }
       });
+      function closeKeyForm() {
+        keyForm = { id: "", value: "", readOnly: false };
+        paint();
+      }
+      function openKeyForm(id, readOnly) {
+        keyForm = { id, value: "", readOnly: !!readOnly };
+        paint();
+        const input = container.querySelector(".settings-connector-key-input");
+        if (input) input.focus();
+      }
       body.querySelectorAll(".settings-connector-action").forEach((btn) => {
         btn.addEventListener("click", (e) => {
           e.stopPropagation();
           if (env.isRemote || btn.disabled) return;
           const id = btn.dataset.id;
           if (!id) return;
+          if (btn.dataset.auth === "key" && btn.dataset.connected !== "true") {
+            if (btn.dataset.action === "cancel" || keyForm.id === id) closeKeyForm();
+            else {
+              const row = snapshot.mcpConnectors.find((c) => c && c.id === id);
+              openKeyForm(id, row && row.readOnly);
+            }
+            return;
+          }
           post({
             type: btn.dataset.connected === "true" ? "disconnectMcpConnector" : "connectMcpConnector",
             id,
           });
+        });
+      });
+      body.querySelectorAll(".settings-connector-key-open").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (env.isRemote || btn.disabled) return;
+          const id = btn.dataset.id;
+          if (!id) return;
+          const row = snapshot.mcpConnectors.find((c) => c && c.id === id);
+          openKeyForm(id, row && row.readOnly);
+        });
+      });
+      body.querySelectorAll(".settings-connector-key-cancel").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          closeKeyForm();
+        });
+      });
+      body.querySelectorAll(".settings-connector-key-submit").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (env.isRemote || btn.disabled) return;
+          const id = btn.dataset.id;
+          if (!id) return;
+          const form = btn.closest(".settings-connector-key");
+          const input = form && form.querySelector(".settings-connector-key-input");
+          const box = form && form.querySelector(".settings-connector-readonly-input");
+          const key = input ? String(input.value || "") : "";
+          const readOnly = !!(box && box.checked);
+          if (input) input.value = "";
+          keyForm = { id: "", value: "", readOnly: false };
+          post({ type: "connectMcpConnector", id, key, readOnly });
+          paint();
+        });
+      });
+      body.querySelectorAll(".settings-connector-key-input").forEach((input) => {
+        input.addEventListener("input", () => {
+          if (keyForm.id === input.dataset.id) keyForm.value = input.value;
+        });
+        input.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter") return;
+          e.preventDefault();
+          const submit = input.closest(".settings-connector-key")
+            && input.closest(".settings-connector-key").querySelector(".settings-connector-key-submit");
+          if (submit) submit.click();
+        });
+      });
+      body.querySelectorAll(".settings-connector-readonly-input").forEach((box) => {
+        box.addEventListener("change", () => {
+          if (env.isRemote || box.disabled) return;
+          const id = box.dataset.id;
+          if (!id) return;
+          if (keyForm.id === id) keyForm.readOnly = box.checked;
+          if (box.dataset.live === "true") {
+            post({ type: "connectMcpConnector", id, readOnly: box.checked });
+          }
+        });
+      });
+      body.querySelectorAll(".settings-connector-key-docs").forEach((link) => {
+        link.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const url = link.dataset.href || link.href;
+          if (url) openExternalHref(url);
         });
       });
       body.querySelectorAll(".settings-mcp-web").forEach((btn) => {

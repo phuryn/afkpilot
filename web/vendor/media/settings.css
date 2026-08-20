@@ -522,6 +522,54 @@ body.settings-page .settings-surface {
   border-top: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, .2));
 }
 
+.settings-connector:has(.settings-connector-key) {
+  align-items: start;
+}
+
+.settings-connector-key {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.settings-connector-key-input {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+
+.settings-connector-key-hint {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground, #969696);
+  line-height: 1.4;
+}
+
+.settings-connector-key-docs {
+  color: var(--vscode-textLink-foreground, #3794ff);
+}
+
+.settings-connector-key-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-connector-readonly {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground, #969696);
+}
+
+.settings-connector .settings-row-control {
+  gap: 8px;
+}
+
 .settings-row-control {
   display: flex;
   justify-content: flex-end;
