@@ -99,7 +99,6 @@
     atlassian: true,
     canva: true,
     cloudflare: true,
-    figma: true,
     linear: true,
     notion: true,
     sentry: true,

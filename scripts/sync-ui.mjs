@@ -3,7 +3,7 @@
 // re-run this after pulling it. Usage:
 //   node scripts/sync-ui.mjs [path-to-grok-build-vscode] [vendor-output]
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -23,11 +23,19 @@ if (!existsSync(join(extRoot, "media", "chat.js"))) {
 }
 
 for (const [from, to] of UI_VENDOR_COPIES) {
+  const src = join(extRoot, from);
   const dest = join(vendor, to);
   mkdirSync(dirname(dest), { recursive: true });
+  // A directory entry is MIRRORED, not merged. `cpSync` writes over what it
+  // finds and leaves everything else in place, so a file deleted upstream
+  // would survive here forever — and because `check:vendor` hashes the whole
+  // tree, it would report stale on every run with nothing this script could
+  // do about it. Clearing the destination first is what makes a deletion
+  // propagate. (Found when a connector logo was removed upstream.)
+  if (statSync(src).isDirectory()) rmSync(dest, { recursive: true, force: true });
   // `recursive` so a directory entry (the icon set) copies as a tree; harmless
   // for the file entries, which are the rest of the list.
-  cpSync(join(extRoot, from), dest, { recursive: true });
+  cpSync(src, dest, { recursive: true });
   console.log(`synced ${from}`);
 }
 
