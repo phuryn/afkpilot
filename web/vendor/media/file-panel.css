@@ -953,7 +953,19 @@ body.vscode-light {
      Glyph stays 15 — in-tab affordance, not the 20px bar scale. */
   .gfp-tab-close { width: 36px; height: 36px; }
   .gfp-tab-close svg { width: 15px; height: 15px; }
-  .gfp-row-actions { display: flex; }
+  /* Match the rail: on touch the ⋯ is always in-flow, so :hover has no
+     reveal job. Sticky :hover on the last tap would paint a band that is
+     not a selected state (tree rows have none) and whose fade colour
+     never matches the unhovered row. */
+  .gfp-row:hover { background: transparent; }
+  .gfp-row-actions {
+    position: static;
+    inset: auto;
+    display: flex;
+    flex: 0 0 auto;
+    background: transparent;
+    padding-left: 0;
+  }
   /* 36px buttons + 1px inset overflow a 36px row; cap to the inset box. */
   .gfp-row-actions .gfp-icon-button {
     width: 34px;

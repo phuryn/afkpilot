@@ -77,7 +77,7 @@
   const GITHUB_REPO_URL = "https://github.com/phuryn/grok-build-vscode";
   const GROK_CONNECTORS_URL = "https://grok.com/connectors";
   const CONNECTOR_SECTION_HERE = "On this computer";
-  const CONNECTOR_SECTION_GROK = "In this Grok session";
+  const CONNECTOR_SECTION_GROK = "Grok connectors";
   const GITHUB_ISSUE_BUG_URL = GITHUB_REPO_URL + "/issues/new?labels=bug";
   const GITHUB_ISSUE_FEATURE_URL = GITHUB_REPO_URL + "/issues/new?labels=enhancement";
   const SUPPORT_MAILTO = "mailto:support@productcompass.pm";
@@ -88,6 +88,9 @@
 
   const TELEMETRY_COPY =
     "Anonymous usage stats only: a single session-start event with an anonymous install id — never prompts, code, file paths or names, and no identity. The IP address is discarded, never stored.";
+
+  const THUMBS_COPY =
+    "Show thumbs on a finished Grok turn so you can send a rating to SpaceXAI. Off by default. On, thumbs appear only when this Grok session supports feedback — never on Codex or Claude.";
 
   function escapeHtml(s) {
     return String(s ?? "")
@@ -244,6 +247,30 @@
         const known = s && typeof s.telemetryEnabled === "boolean";
         const state = known ? (s.telemetryEnabled ? "On. " : "Off. ") : "";
         return state + TELEMETRY_COPY;
+      },
+    },
+    {
+      id: "thumbsFeedback",
+      category: "general",
+      title: "Thumbs feedback to SpaceXAI",
+      description: THUMBS_COPY,
+      kind: "toggle",
+      defaultValue: false,
+      visible: (s, env) => !env || !env.isRemote,
+      get: (s) => !!(s && s.thumbsFeedback),
+      message: (value) => ({ type: "setThumbsFeedback", value }),
+    },
+    {
+      id: "thumbsFeedbackRemote",
+      category: "general",
+      title: "Thumbs feedback to SpaceXAI",
+      description: "",
+      kind: "status",
+      visible: (s, env) => !!(env && env.isRemote),
+      describe: (s) => {
+        const known = s && typeof s.thumbsFeedback === "boolean";
+        const state = known ? (s.thumbsFeedback ? "On. " : "Off. ") : "";
+        return state + THUMBS_COPY;
       },
     },
     {
@@ -587,17 +614,14 @@
       actionLabel: "Open",
       href: GROK_CONNECTORS_URL,
       visible: (s, env) => mcpSettingsEnabled(env),
-      describe: (s, env) => env && env.isRemote
-        ? "Grok's live server list is only on the desk. Add or remove grok.com-managed connectors here."
-        : "Add or remove grok.com-managed connectors for this machine.",
+      description: "Add or remove grok.com-managed connectors here.",
     },
     {
       id: "mcpCatalog",
       category: "connectors",
-      title: "MCP servers",
-      description: "Servers and tools the current Grok session actually sees.",
+      title: "Grok connectors",
+      description: "grok.com-managed connectors and user-level config on this machine.",
       kind: "mcp",
-      hostLocal: true,
       visible: (s, env) => mcpSettingsEnabled(env),
     },
     {
@@ -1002,6 +1026,9 @@
       case "telemetryDesktop":
         next.telemetryEnabled = !!value;
         break;
+      case "thumbsFeedback":
+        next.thumbsFeedback = !!value;
+        break;
       default:
         break;
     }
@@ -1038,6 +1065,7 @@
       voiceSendPhrase: "grok send",
       voiceKeyterms: [],
       telemetryEnabled: true,
+      thumbsFeedback: false,
       providers: [],
       // Host-owned, never latched locally: an older host that ignores
       // refreshProviders leaves this false and the button stays idle rather
@@ -1230,7 +1258,7 @@
       const loading = document.createElement("div");
       loading.className = "settings-mcp-state";
       loading.setAttribute("aria-live", "polite");
-      loading.textContent = "Loading Grok's server list…";
+      loading.textContent = "Loading Grok connectors…";
       el.appendChild(loading);
       return el;
     }
@@ -1246,7 +1274,7 @@
     if (!servers.length) {
       const empty = document.createElement("div");
       empty.className = "settings-mcp-state";
-      empty.textContent = "No servers reported by this Grok session.";
+      empty.textContent = "No connectors reported.";
       el.appendChild(empty);
       return el;
     }
@@ -1266,10 +1294,12 @@
       const label = document.createElement("span");
       label.textContent = server.displayName || server.name;
       name.appendChild(label);
-      if (server.managed || server.source === "managed") {
+      const tag = server.tag
+        || ((server.managed || server.source === "managed") ? "grok.com managed" : "");
+      if (tag) {
         const badge = document.createElement("span");
         badge.className = "settings-mcp-badge";
-        badge.textContent = "grok.com managed";
+        badge.textContent = tag;
         name.appendChild(badge);
       }
       const detail = document.createElement("div");
@@ -1616,7 +1646,7 @@
     }
 
     function maybeRefreshMcp() {
-      if (mcpChecked || categoryId !== "connectors" || query.trim() || env.isRemote) return;
+      if (mcpChecked || categoryId !== "connectors" || query.trim()) return;
       mcpChecked = true;
       requestMcpRefresh();
     }
@@ -1762,7 +1792,7 @@
         refresh.onclick = (e) => { e.stopPropagation(); requestProvidersRefresh(); };
         headActions.appendChild(refresh);
       }
-      if (!searching && page && page.id === "connectors" && !env.isRemote) {
+      if (!searching && page && page.id === "connectors") {
         const refresh = document.createElement("button");
         refresh.type = "button";
         refresh.className = "settings-refresh";
@@ -2079,6 +2109,7 @@
     CATEGORIES,
     NAV_ICONS,
     TELEMETRY_COPY,
+    THUMBS_COPY,
     ABOUT_DISCLAIMER,
     GITHUB_REPO_URL,
     GROK_CONNECTORS_URL,

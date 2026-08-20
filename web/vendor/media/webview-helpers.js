@@ -24,7 +24,7 @@
   // copy and test/protocol.test.ts asserts the two are set-equal in both
   // directions (and that chat.js actually handles every host type).
   const HOST_MESSAGE_TYPES = [
-    "initialState", "moveViewHint", "providerState", "mcpServers", "mcpConnectors", "codexInstallProgress", "planModeAvailability", "showThinking", "appPurpose", "fontScale", "grokUpdateStatus", "updateAvailable", "updateReady", "telemetryEnabled", "initialized",
+    "initialState", "moveViewHint", "providerState", "mcpServers", "mcpConnectors", "codexInstallProgress", "planModeAvailability", "showThinking", "appPurpose", "fontScale", "grokUpdateStatus", "updateAvailable", "updateReady", "telemetryEnabled", "thumbsFeedback", "initialized",
     "cliUpdating", "session", "sessionName", "modelChanged", "modeChanged", "openModePopover",
     "voiceState", "voiceConfigured", "voicePartial", "voiceSubmit", "voiceTranscript",
     "voiceError", "chips", "commandsUpdate", "mentionResults", "projectDirListing", "projectFileContent", "projectFileWriteResult", "userMessage", "agentStart", "thoughtChunk",
@@ -48,7 +48,7 @@
       "clearAllSessions", "pickFile", "mentionQuery", "addMentionFile", "listProjectDir", "readProjectFile", "writeProjectFile", "pasteImage", "uploadFile", "voiceStart", "voiceStop",
       "remoteVoiceStart", "remoteVoiceChunk", "remoteVoiceStop",
     "queueSend", "dequeueSend", "clearQueuedSends", "steerSend", "turnFeedback", "forkSession", "setSteerByDefault",
-    "setSoundNotifications", "setProcessingSound", "setReadRepliesAloud", "setSummarizeRepliesAloud", "setVoiceSendPhrase", "setVoiceKeyterms", "setTelemetryEnabled", "summarizeSpeech", "requestImageFull", "composerFocus",
+    "setSoundNotifications", "setProcessingSound", "setReadRepliesAloud", "setSummarizeRepliesAloud", "setVoiceSendPhrase", "setVoiceKeyterms", "setTelemetryEnabled", "setThumbsFeedback", "summarizeSpeech", "requestImageFull", "composerFocus",
     "newWorktreeSession", "applyWorktree", "removeWorktree", "rewindSession", "editLastMessage", "uiConfirmAnswer", "workflowControl", "refreshContextDetails",
     "remoteSignIn", "remoteSignOut", "unlinkRemoteDevice", "openRemotePortal",
     "openUpdateRelease", "restartToUpdate",
@@ -59,6 +59,48 @@
    *  drift the sync test is designed to prevent, warned at runtime as a backstop. */
   function isKnownHostMessage(type) {
     return HOST_MESSAGE_TYPE_SET.has(type);
+  }
+
+  function isImplicitChipId(id) {
+    return String(id || "").startsWith("implicit:");
+  }
+
+  /** Explicit (user-staged) visible chips — images, files, @-mentions. */
+  function explicitVisibleChips(chips) {
+    return (chips || []).filter((chip) => chip && !chip.hidden && !isImplicitChipId(chip.id));
+  }
+
+  /** Typed text or a staged attachment — the implicit editor chip is not send-intent. */
+  function composerHasSendIntent(text, chips) {
+    if (String(text || "").trim()) return true;
+    return explicitVisibleChips(chips).length > 0;
+  }
+
+  /**
+   * Prefer additive `queued` entries (text + chips). Fall back to `items: string[]`
+   * so an older host still renders the text-only block.
+   */
+  function normalizeQueuedSends(msg) {
+    if (msg && Array.isArray(msg.queued)) {
+      return msg.queued.map((entry) => ({
+        text: typeof entry?.text === "string" ? entry.text : String(entry || ""),
+        chips: Array.isArray(entry?.chips) ? entry.chips : [],
+      }));
+    }
+    const items = msg && Array.isArray(msg.items) ? msg.items : [];
+    return items.map((text) => ({ text: String(text || ""), chips: [] }));
+  }
+
+  function queuedSendsText(entries) {
+    return (entries || []).map((entry) => entry.text || "").join("\n\n");
+  }
+
+  function queuedSendsChips(entries) {
+    const chips = [];
+    for (const entry of entries || []) {
+      if (Array.isArray(entry.chips)) chips.push(...entry.chips);
+    }
+    return chips;
   }
 
   /**
@@ -1711,7 +1753,7 @@
     return header.join("\n") + (body ? body + "\n" : "");
   }
 
-  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, contextOverheadTokens, nextContextBreakdown, contextBreakdownIsCurrent, createPendingOverlay, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, highlightQueryParts, appendHighlightedText, commandProgramLabel, commandTextPreview, MAX_COMMAND_OUTPUT_CHARS, capCommandOutput, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents };
+  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, composerHasSendIntent, explicitVisibleChips, normalizeQueuedSends, queuedSendsText, queuedSendsChips, contextOverheadTokens, nextContextBreakdown, contextBreakdownIsCurrent, createPendingOverlay, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, highlightQueryParts, appendHighlightedText, commandProgramLabel, commandTextPreview, MAX_COMMAND_OUTPUT_CHARS, capCommandOutput, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents };
 
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;

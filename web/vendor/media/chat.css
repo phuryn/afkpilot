@@ -1699,6 +1699,14 @@ body.turn-busy .queued-steer:hover {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+/* Pending block matches the composer: chips sit above the text. */
+.msg.user.queued .msg-chips {
+  margin-top: 4px;
+  margin-bottom: 2px;
+}
+.msg.user.queued .msg-chips:last-child {
+  margin-bottom: 0;
+}
 .msg.agent {
   background: transparent;
   padding-left: 0;
@@ -4151,10 +4159,23 @@ body.dragging { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -
 }
 
 /* ---- add popover ---- */
+/* Icon + label as a left-aligned pair, same shape as the gear popover's
+   `.gear-lead`. The shared `.toolbar-popover-item` is `space-between`, which
+   would pin the icon left and the label right once the popover is wider than
+   the text. */
+#add-popover .toolbar-popover-item {
+  justify-content: flex-start;
+}
 .add-item-icon {
   display: inline-flex;
   align-items: center;
+  flex: none;
   color: var(--vscode-descriptionForeground);
+}
+.add-item-icon svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
 }
 
 /* ---- LaTeX math (MathJax SVG) ---- */
