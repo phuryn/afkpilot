@@ -2356,12 +2356,29 @@ window.grokRemoteClient = true;
     );
   }
 
+  function socketIsLive(socket) {
+    return !!socket && (
+      socket.readyState === WebSocket.CONNECTING ||
+      socket.readyState === WebSocket.OPEN
+    );
+  }
+
   function connect() {
+    // A second dial while this one is CONNECTING or OPEN would create a
+    // socket whose predecessor's error/close still mutates the successor,
+    // and would reset firstConnect / resyncScrollTop. 4004 re-enters here
+    // only after the current socket has already closed.
+    if (socketIsLive(ws)) return Promise.resolve();
     return finalRemoteTabToken().then(function () {
-    ws = new WebSocket(
+    if (socketIsLive(ws)) return;
+    // Listeners close over this socket, not the module-level `ws`. A stale
+    // error after a redial would otherwise close the healthy successor.
+    var socket = new WebSocket(
       (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/client?device=" + encodeURIComponent(device)
     );
-    ws.addEventListener("open", function () {
+    ws = socket;
+    socket.addEventListener("open", function () {
+      if (ws !== socket) return;
       if (!firstConnect) {
         var m = document.getElementById("messages");
         if (m && m.scrollHeight - m.scrollTop - m.clientHeight > 80) resyncScrollTop = m.scrollTop;
@@ -2370,9 +2387,10 @@ window.grokRemoteClient = true;
       clearOfflineGrace();
       deviceOffline = false;
       beginIdentityRestore();
-      ws.send(JSON.stringify(readyMessage())); // (re)sync on connect/reconnect
+      socket.send(JSON.stringify(readyMessage())); // (re)sync on connect/reconnect
     });
-    ws.addEventListener("message", function (e) {
+    socket.addEventListener("message", function (e) {
+      if (ws !== socket) return;
       var data;
       try { data = JSON.parse(e.data); } catch (_) { return; }
       if (hostBlocked) {
@@ -2465,7 +2483,8 @@ window.grokRemoteClient = true;
         }, 250);
       }
     });
-    ws.addEventListener("close", function (e) {
+    socket.addEventListener("close", function (e) {
+      if (ws !== socket) return;
       clearTimeout(identityTimer);
       identityTimer = null;
       clearIdentityFailTimer();
@@ -2485,7 +2504,10 @@ window.grokRemoteClient = true;
       showReconnecting();
       setTimeout(connect, 1000);
     });
-    ws.addEventListener("error", function () { try { ws.close(); } catch (_) {} });
+    socket.addEventListener("error", function () {
+      if (ws !== socket) return;
+      try { socket.close(); } catch (_) {}
+    });
     });
   }
 

@@ -687,6 +687,39 @@ try {
   );
   log("reconnect restores identity, deduplicates queued submissions by id only, flushes ordinary repeats, and never persists live payloads");
 
+  // A predecessor that errors or closes after the redial must not touch the
+  // live socket: before connection identity, those listeners closed over
+  // the module-level `ws` and would close the successor, which then
+  // scheduled another connect().
+  const staleGen = await page.evaluate(() => {
+    const sockets = window.__legacyTestSockets.filter((s) => String(s.url).includes("/client?"));
+    const stale = sockets[sockets.length - 2];
+    const live = sockets[sockets.length - 1];
+    if (!stale || !live) throw new Error("expected a predecessor and a live client socket");
+    const before = { count: sockets.length, live: live.readyState };
+    stale.dispatchEvent(new Event("error"));
+    stale.dispatchEvent(new CloseEvent("close", { code: 4004, wasClean: false }));
+    return {
+      before,
+      live: live.readyState,
+      count: window.__legacyTestSockets.filter((s) => String(s.url).includes("/client?")).length,
+      overlayReconnecting: !!document.querySelector(".auth-overlay.reconnecting"),
+    };
+  });
+  assert.equal(staleGen.before.live, 1, "the successor must still be OPEN before the stale events");
+  assert.equal(staleGen.live, 1, "a stale error/close must not close the live socket");
+  assert.equal(staleGen.count, staleGen.before.count, "a stale close must not dial a third socket immediately");
+  await page.waitForTimeout(1500);
+  const afterStale = await page.evaluate(() => ({
+    count: window.__legacyTestSockets.filter((s) => String(s.url).includes("/client?")).length,
+    live: [...window.__legacyTestSockets].reverse().find((s) => String(s.url).includes("/client?"))?.readyState,
+    overlayReconnecting: !!document.querySelector(".auth-overlay.reconnecting"),
+  }));
+  assert.equal(afterStale.count, staleGen.before.count, "a stale 4004 must not schedule another connect()");
+  assert.equal(afterStale.live, 1, "the live socket must still be OPEN after the reconnect delay");
+  assert.equal(afterStale.overlayReconnecting, false, "a stale close must not bounce a healthy session into reconnect");
+  log("a stale socket error/close after a redial does not touch the live connection");
+
   // With no remembered identity, the host's default scope is already correct.
   // A fresh tab must therefore be able to send even if its snapshot legitimately
   // omits initialState; there is no restoration confirmation to wait for.
