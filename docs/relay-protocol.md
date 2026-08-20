@@ -160,7 +160,9 @@ shim unchanged):
   `client-ready`, preserving a string token when present (never forwarded
   as-is).
 - browser sends `{type:"transportProbe"}` → the relay answers the same
-  browser with `{type:"transportProbe"}` and never forwards it. This is
+  browser with `{type:"transportProbe"}` and never forwards it. Answered
+  at ingress, not serialized behind other client frames (a metered send
+  waiting on the usage store must not starve the liveness reply). This is
   transport liveness of the browser↔relay socket (including with no
   uplink), not a host-protocol type — do not bump `REMOTE_PROTO_VERSION`.
 - every other browser message wraps into a `msg` frame for the uplink.

@@ -919,6 +919,90 @@ describe("free tier (unentitled users get capped access)", () => {
       await relay5.close();
     }
   });
+
+  it("answers a transport probe while a slow send is still awaiting the usage store", async () => {
+    let markIncrementStarted!: () => void;
+    const incrementStarted = new Promise<void>((resolve) => {
+      markIncrementStarted = resolve;
+    });
+    let releaseIncrement!: () => void;
+    const heldIncrement = new Promise<void>((resolve) => {
+      releaseIncrement = () => resolve();
+    });
+    const slow: UsageStore = {
+      increment: async () => {
+        markIncrementStarted();
+        await heldIncrement;
+        return 1;
+      },
+      peek: async () => 0,
+    };
+    let n6 = 0;
+    const store6 = new LinkStore({ now: Date.now, randomCode: () => makeLinkCode(() => (n6++ * 7) % 32) });
+    const devices6 = new InMemoryDeviceRegistry({
+      now: Date.now,
+      randomUUID: () => `kid6-${++n6}`,
+      randomBytes: (size) => cryptoRandomBytes(size),
+      randomId: () => `dev6-${++n6}`,
+    });
+    const hub6 = new Hub();
+    const relay6 = createRelayServer({
+      host: "127.0.0.1",
+      port: 0,
+      webRoot,
+      store: store6,
+      devices: devices6,
+      sessions: new StrictVerifier(),
+      requiredFeature: "remote",
+      freeTier: { devices: 1, weeklyMsgs: 20, usage: slow },
+      hub: hub6,
+      log: () => {},
+    });
+    await new Promise<void>((r) => relay6.server.once("listening", () => r()));
+    const b6 = `http://127.0.0.1:${relay6.port()}`;
+    const w6 = `ws://127.0.0.1:${relay6.port()}`;
+    try {
+      const { json: started } = await postAuth(b6, "/api/link/start", { name: "probe hol box" });
+      await postAuth(b6, "/api/link/approve", { code: started.code }, "good-C");
+      const token: string = (await postAuth(b6, "/api/link/poll", { code: started.code })).json.token;
+      const up = new WebSocket(`${w6}/uplink?token=${encodeURIComponent(token)}`);
+      const upInbox = new WsInbox(up);
+      await waitOpen(up);
+      up.send(JSON.stringify({ t: "hello", proto: 1, device: { name: "probe hol box" } }));
+      const devId = (
+        await (await fetch(`${b6}/api/devices`, { headers: { authorization: "Bearer good-C" } })).json()
+      ).devices[0].deviceId;
+      const client = new WebSocket(`${w6}/client?device=${encodeURIComponent(devId)}`, {
+        headers: { authorization: "Bearer good-C" },
+      });
+      const clientInbox = new WsInbox(client);
+      await waitOpen(client);
+
+      client.send(JSON.stringify({ type: "send", text: "held by usage store" }));
+      await incrementStarted;
+      client.send(JSON.stringify({ type: TRANSPORT_PROBE_TYPE }));
+      // Must not wait for increment(). Today's frameChain serialises the
+      // probe behind that await, which is how a 2s client timeout declared
+      // a healthy socket dead.
+      expect(await clientInbox.next(400)).toEqual({ type: TRANSPORT_PROBE_TYPE });
+      releaseIncrement();
+      expect((await upInbox.matching((m) => m.t === "msg")).msg).toEqual({
+        type: "send",
+        text: "held by usage store",
+      });
+      client.send(JSON.stringify({ type: "send", text: "after-probe" }));
+      const routed = await upInbox.matching((m) => m.t === "msg" || m.t === "client-ready");
+      expect(routed).toEqual({
+        t: "msg",
+        clientId: expect.any(String),
+        msg: { type: "send", text: "after-probe" },
+      });
+      client.close();
+      up.close();
+    } finally {
+      await relay6.close();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -808,9 +808,9 @@ try {
   await page.evaluate(() => { delete window.__grokProbeTimeoutMs; });
   log("a resume during voice capture does not interrupt the recording");
 
-  // A dead-OPEN socket (send swallowed, the iOS lie) must redial once, and
-  // text sent into that socket just before resume must arrive exactly once
-  // on the successor — not zero times (forgotten as unbounced) and not twice.
+  // A dead-OPEN socket (send swallowed, the iOS lie) must redial once.
+  // This host speaks only the v2.0.4 set: it cannot detect a duplicate live
+  // send, so the in-flight prompt is not replayed (twice is worse than lost).
   const replaceStart = wireEvents.length;
   const socketsBeforeReplace = await clientSocketCount();
   const sendsBeforeReplace = received.filter((m) => m.type === "send" && m.text === "sent-before-replace").length;
@@ -832,13 +832,6 @@ try {
     socketsBeforeReplace + 1,
     { timeout: 5000 },
   );
-  for (
-    let i = 0;
-    i < 160 && received.filter((m) => m.type === "send" && m.text === "sent-before-replace").length < sendsBeforeReplace + 1;
-    i++
-  ) {
-    await page.waitForTimeout(25);
-  }
   await page.waitForTimeout(1500);
   assert.equal(
     await clientSocketCount(),
@@ -852,8 +845,8 @@ try {
   );
   assert.equal(
     received.filter((m) => m.type === "send" && m.text === "sent-before-replace").length,
-    sendsBeforeReplace + 1,
-    "text sent just before a resume-triggered replacement must arrive exactly once",
+    sendsBeforeReplace,
+    "an old host must not receive a replayed in-flight send it cannot deduplicate",
   );
   assert.equal(
     droppedProbeCount(),
@@ -861,7 +854,7 @@ try {
     "a swallowed or answered probe must never be forwarded to the uplink",
   );
   await page.evaluate(() => { delete window.__grokProbeTimeoutMs; });
-  log("an unanswered probe redials once and flushes the in-flight send once");
+  log("an unanswered probe redials once and does not replay the in-flight send on a host that cannot detect a duplicate");
 
   // With no remembered identity, the host's default scope is already correct.
   // A fresh tab must therefore be able to send even if its snapshot legitimately

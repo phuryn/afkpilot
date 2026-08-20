@@ -31,7 +31,7 @@ import { hasDeviceClientInfo, parseDeviceClientFields } from "./device-client.js
 import { countMachines, isRecognizedInstallId, MinuteRateLimiter, type FreeTier, type MessageRate } from "./limits.js";
 import { usageWindow, resetsInText } from "./usage.js";
 import { Hub } from "./hub.js";
-import { parseUplinkFrame, REMOTE_PROTO_VERSION } from "./frames.js";
+import { parseUplinkFrame, REMOTE_PROTO_VERSION, TRANSPORT_PROBE_TYPE } from "./frames.js";
 import { downloadPlatformFromPath, resolveDownload, RELEASES_PAGE_URL } from "./downloads.js";
 import {
   rewriteUpdateYml,
@@ -1077,6 +1077,14 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
           ws.close(1008, "audio chunk rate limit exceeded");
           return;
         }
+      }
+      // frameChain exists to preserve order of frames that reach the host.
+      // The probe is never forwarded, so that order does not apply to it —
+      // a free-tier send awaiting the usage store must not starve the
+      // liveness reply past the client's timeout.
+      if (type === TRANSPORT_PROBE_TYPE) {
+        hub.fromClient(deviceId, clientId, raw);
+        return;
       }
       frameChain = frameChain.then(() => handleFrame(raw, type, authoredText, submissionId)).catch(() => undefined);
     });

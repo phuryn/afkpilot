@@ -184,6 +184,30 @@ function sendRaw(text: string, submissionId: string): string {
   return JSON.stringify({ type: "send", text, submissionId });
 }
 
+/** Resume-triggered replacement: the original frame may still land, and the
+ *  successor may flush parked copies. A host that deduplicates by
+ *  submissionId keeps one copy; an older host keeps every copy. */
+function deliveriesAfterReplacementRedial(opts: {
+  hostDedupes: boolean;
+  originalLanded: boolean;
+}): string[] {
+  const raw = sendRaw("in-flight prompt", "sub-redial");
+  const live = liveOutboundAfterRemember([], raw, JSON.parse(raw));
+  let queue: string[] = [];
+  for (const entry of liveOutboundParkedByReplacement(live)) {
+    queue = outboxAfterPersist(queue, entry.raw, entry.message);
+  }
+  const arrivals = [...(opts.originalLanded ? [raw] : []), ...queue];
+  if (!opts.hostDedupes) return arrivals;
+  const seen = new Set<string>();
+  return arrivals.filter((item) => {
+    const id = JSON.parse(item).submissionId as string;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
 describe("offline live-send hold", () => {
   it("reads an additive error code and ignores host copy", () => {
     expect(errorCodeFromFrame({ type: "error", text: "anything", code: "interrupted-send" })).toBe("interrupted-send");
@@ -714,40 +738,60 @@ describe("offline live-send hold", () => {
     expect(persistFn).not.toContain("flushRestoredOutbox()");
   });
 
-  it("text sent just before a socket replacement is flushed exactly once", () => {
-    // Old behaviour: finishIdentityRestore forgot unbounced liveOutbound
-    // and the successor flushed only the persisted queue, so a live send
-    // that never got an ack arrived zero times. Parking first, then
-    // forgetting, then flushing, lands it once.
+  it("text sent just before a socket replacement is not re-queued", () => {
+    // Replaying an in-flight send treats "unacknowledged" as "not delivered".
+    // The original can still land, and a second copy then runs the prompt
+    // again. Replacement recovers authored leftovers that are not replayable;
+    // queue-release frames stay out of the outbox.
     const raw = sendRaw("sent-before-replace", "sub-replace");
     const live = liveOutboundAfterRemember([], raw, JSON.parse(raw));
-    const parked = liveOutboundParkedByReplacement(live);
-    expect(parked.map((e) => e.raw)).toEqual([raw]);
+    expect(liveOutboundParkedByReplacement(live)).toEqual([]);
 
     let queue: string[] = [];
-    for (const entry of parked) {
+    for (const entry of liveOutboundParkedByReplacement(live)) {
       queue = outboxAfterPersist(queue, entry.raw, entry.message);
     }
-    queue = outboxAfterPersist(queue, raw, JSON.parse(raw));
-    const flushed = queue.slice();
-    expect(flushed).toEqual([raw]);
-    expect(flushed).toHaveLength(1);
+    expect(queue).toEqual([]);
 
     const plan = JSON.stringify({
       type: "exitPlanAnswer", requestId: 1, verdict: "rejected",
     });
     const mixed = liveOutboundAfterRemember(live, plan, JSON.parse(plan), "plan comment");
-    expect(liveOutboundParkedByReplacement(mixed).map((e) => e.raw)).toEqual([raw]);
+    expect(liveOutboundParkedByReplacement(mixed)).toEqual([]);
     expect(liveOutboundRecoveredByReplacement(mixed)).toEqual(["plan comment"]);
   });
 
-  it("replacement parks unacked liveOutbound before the successor restores", () => {
+  it("a send in flight during a resume-triggered redial arrives exactly once on a host that deduplicates", () => {
+    expect(deliveriesAfterReplacementRedial({
+      hostDedupes: true,
+      originalLanded: true,
+    })).toEqual([sendRaw("in-flight prompt", "sub-redial")]);
+  });
+
+  it("on a host that does not deduplicate, the same case does not deliver twice", () => {
+    expect(deliveriesAfterReplacementRedial({
+      hostDedupes: false,
+      originalLanded: true,
+    })).toEqual([sendRaw("in-flight prompt", "sub-redial")]);
+    expect(deliveriesAfterReplacementRedial({
+      hostDedupes: false,
+      originalLanded: false,
+    })).toEqual([]);
+  });
+
+  it("replacement recovers authored leftovers but does not re-queue in-flight sends", () => {
     const abandonSrc = html.slice(
       html.indexOf("function abandonSocketAndRedial"),
       html.indexOf("function onResumeVisible"),
     );
     expect(abandonSrc).toContain("parkLiveOutboundForReplacement()");
     expect(abandonSrc).toMatch(/parkLiveOutboundForReplacement\(\);[\s\S]*\bconnect\(\);/);
+    const parkSrc = html.slice(
+      html.indexOf("function parkLiveOutboundForReplacement"),
+      html.indexOf("var strippedQueue"),
+    );
+    expect(parkSrc).not.toContain("persistOutboxMessage");
+    expect(parkSrc).toContain("liveOutboundRecoveredByReplacement");
     const finishSrc = html.slice(
       html.indexOf("function finishIdentityRestore"),
       html.indexOf("function abandonIdentityRestore"),

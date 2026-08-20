@@ -1226,9 +1226,12 @@ window.grokRemoteClient = true;
     });
   }
   function liveOutboundParkedByReplacement(current) {
-    return current.filter(function (entry) {
-      return isQueueReleaseMessage(entry && entry.message);
-    });
+    // In-flight queue-release frames are not replayed on a replacement.
+    // "Unacknowledged" is not "not delivered": the original can still land,
+    // and the host does not advertise a detector for a duplicate live send.
+    // Replaying then runs the prompt twice. Authored leftovers that are not
+    // replayable still return to the composer.
+    return current.filter(function () { return false; });
   }
   function liveOutboundRecoveredByReplacement(current) {
     var texts = [];
@@ -1322,15 +1325,10 @@ window.grokRemoteClient = true;
     clearInFlightAuthored();
   }
   function parkLiveOutboundForReplacement() {
-    // A deliberate socket replacement must not drop in-flight user text.
-    // finishIdentityRestore on the successor forgets unbounced liveOutbound
-    // (acks may have been lost on a normal reconnect). This path parks
-    // queue-release sends into the outbox so the new connection flushes
-    // them once, and returns other authored leftovers to the composer.
-    var parked = liveOutboundParkedByReplacement(liveOutbound);
-    for (var i = 0; i < parked.length; i++) {
-      persistOutboxMessage(parked[i].raw, parked[i].message);
-    }
+    // Do not persist in-flight queue-release sends. The original frame may
+    // still be in flight and land; replaying it is a second delivery that
+    // the host cannot be shown to drop. Authored leftovers that are not
+    // replayable still return to the composer.
     var recovered = liveOutboundRecoveredByReplacement(liveOutbound);
     recoverAuthoredTexts(recovered);
     if (recovered.length) {
