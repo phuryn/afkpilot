@@ -1211,6 +1211,13 @@ a:hover {
   gap: 10px;
 }
 .messages.stick-to-bottom { overflow-anchor: none; }
+/* +5px above the first transcript item. Welcome stays first in the DOM and is
+   hidden once chat starts, so empty/onboarding keep their own spacing; later
+   messages keep the 10px gap. On the scroller, not the item, so it does not
+   stack per message or per repaint, and stick-to-bottom slack is unchanged. */
+.messages:has(> #welcome[hidden]) {
+  padding-top: calc(var(--pad) + 5px);
+}
 
 /* ---- find in conversation (#99) ----
    Sits under the top bar and pushes the transcript down. Not an overlay:
@@ -1698,14 +1705,6 @@ body.turn-busy .queued-steer:hover {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
-}
-/* Pending block matches the composer: chips sit above the text. */
-.msg.user.queued .msg-chips {
-  margin-top: 4px;
-  margin-bottom: 2px;
-}
-.msg.user.queued .msg-chips:last-child {
-  margin-bottom: 0;
 }
 .msg.agent {
   background: transparent;

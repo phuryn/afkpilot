@@ -12394,21 +12394,21 @@
     actions.appendChild(rmBtn);
     hdr.appendChild(tag);
     hdr.appendChild(actions);
-    // Composer order: attachments above the typed text. The pending block
-    // is that composition, pinned — chips then text, not the reverse.
+    // Same order as a sent user bubble (`addMessage`): header, then text, then
+    // chips. The pending block is a preview of that bubble, not of the composer.
     bubble.appendChild(hdr);
-    if (chips.length) {
-      const chipsRow = document.createElement("div");
-      chipsRow.className = "msg-chips";
-      for (const chip of chips) chipsRow.appendChild(makeMsgChipTag(chip.relPath, chip));
-      bubble.appendChild(chipsRow);
-    }
     if (text) {
       const body = document.createElement("div");
       body.className = "queued-text";
       body.textContent = text;
       body.title = text; // body is line-clamped; full text on hover
       bubble.appendChild(body);
+    }
+    if (chips.length) {
+      const chipsRow = document.createElement("div");
+      chipsRow.className = "msg-chips";
+      for (const chip of chips) chipsRow.appendChild(makeMsgChipTag(chip.relPath, chip));
+      bubble.appendChild(chipsRow);
     }
     msg.appendChild(bubble);
     wrap.appendChild(msg);
