@@ -57,6 +57,12 @@ export const UI_VENDOR_COPIES = [
   // gear's "All settings" entry reads its global at click time.
   ["media/settings.css", "media/settings.css"],
   ["media/settings.js", "media/settings.js"],
+  // Connector vendor marks, fetched lazily by the settings surface as siblings
+  // of settings.js — the same relationship file-icons has to file-panel.js, and
+  // a directory for the same reason (see hashPath). Without this entry the
+  // logos render on the desk and 404 on a phone, which is the failure mode a
+  // vendored UI makes invisible until someone opens the page on the relay.
+  ["media/connector-logos", "media/connector-logos"],
   ["media/webview-helpers.js", "media/webview-helpers.js"],
   ["media/mathjax/tex-svg-full.js", "media/mathjax/tex-svg-full.js"],
   ["media/mermaid/mermaid.min.js", "media/mermaid/mermaid.min.js"],

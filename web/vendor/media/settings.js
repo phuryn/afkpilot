@@ -91,6 +91,20 @@
     "Declared in this machine's Grok config files. Grok only. These are managed on the desk machine only.";
   const ICON_EXTERNAL_LINK =
     '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
+  // lucide `settings` — same path as chat.js ICON.gear. Local Open is config,
+  // not a document, so the cog rather than a file-type glyph.
+  const ICON_SETTINGS =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const CONNECTOR_LOGO_IDS = {
+    atlassian: true,
+    canva: true,
+    cloudflare: true,
+    figma: true,
+    linear: true,
+    notion: true,
+    sentry: true,
+    stripe: true,
+  };
   const GITHUB_ISSUE_BUG_URL = GITHUB_REPO_URL + "/issues/new?labels=bug";
   const GITHUB_ISSUE_FEATURE_URL = GITHUB_REPO_URL + "/issues/new?labels=enhancement";
   const SUPPORT_MAILTO = "mailto:support@productcompass.pm";
@@ -1259,33 +1273,57 @@
     return !!(server && (server.managed === true || server.source === "managed"));
   }
 
-  function settingsFileIconBase() {
+  function settingsMediaSibling(dir) {
     try {
       const scripts = document.getElementsByTagName("script");
       for (let i = 0; i < scripts.length; i++) {
         const src = scripts[i].src || "";
-        if (src.indexOf("settings.js") !== -1) return new URL("file-icons/", src).href;
+        if (src.indexOf("settings.js") !== -1) return new URL(dir, src).href;
       }
     } catch (_) { /* */ }
     return "";
   }
 
-  function configFileIconId(fileName) {
-    const lower = String(fileName || "").replace(/\\/g, "/").split("/").pop().toLowerCase();
-    if (lower.endsWith(".json")) return "json";
-    if (lower.endsWith(".toml")) return "config";
-    return "default";
+  /**
+   * Connected first, then disconnected; each group A–Z by display name.
+   * Display-only — TIER1_CONNECTORS order is left alone (hostMcpServers walks it).
+   */
+  function sortConnectorsForDisplay(connectors) {
+    return (connectors || []).slice().sort((a, b) => {
+      const ac = a && a.connected ? 0 : 1;
+      const bc = b && b.connected ? 0 : 1;
+      if (ac !== bc) return ac - bc;
+      return String(a && a.name || "").localeCompare(String(b && b.name || ""), undefined, { sensitivity: "base" });
+    });
   }
 
-  function renderConfigFileIcon(host, fileName) {
-    const base = settingsFileIconBase();
-    const id = configFileIconId(fileName);
-    if (!base) return;
+  function connectorLogoSrc(id) {
+    if (!CONNECTOR_LOGO_IDS[id]) return "";
+    const base = settingsMediaSibling("connector-logos/");
+    if (!base) return "";
+    return base + id + ".webp";
+  }
+
+  function appendConnectorLogo(titleEl, connector) {
+    const src = connectorLogoSrc(connector && connector.id);
+    if (!src) return;
+    const chip = document.createElement("span");
+    chip.className = "settings-connector-logo";
+    chip.setAttribute("aria-hidden", "true");
     const img = document.createElement("img");
     img.alt = "";
     img.draggable = false;
-    img.src = base + id + ".svg";
-    host.appendChild(img);
+    img.addEventListener("load", function () {
+      chip.classList.add("is-ready");
+    });
+    img.addEventListener("error", function () {
+      if (chip.parentNode) chip.parentNode.removeChild(chip);
+      if (!titleEl.querySelector(".settings-connector-logo")) titleEl.classList.remove("has-logo");
+    });
+    img.src = src;
+    chip.appendChild(img);
+    titleEl.classList.add("has-logo");
+    titleEl.insertBefore(chip, titleEl.firstChild);
   }
 
   function appendMcpServerRows(list, servers, opts) {
@@ -1386,7 +1424,7 @@
       const localIcon = document.createElement("span");
       localIcon.className = "settings-file-icon";
       localIcon.setAttribute("aria-hidden", "true");
-      renderConfigFileIcon(localIcon, "config.toml");
+      localIcon.innerHTML = ICON_SETTINGS;
       localOpen.appendChild(localIcon);
       localOpen.appendChild(document.createTextNode("Open"));
       localHead.appendChild(localOpen);
@@ -1437,7 +1475,9 @@
       ? CONNECTOR_BLURB_HERE_REMOTE
       : CONNECTOR_BLURB_HERE;
     el.appendChild(warning);
-    const connectors = Array.isArray(snapshot.mcpConnectors) ? snapshot.mcpConnectors : [];
+    const connectors = sortConnectorsForDisplay(
+      Array.isArray(snapshot.mcpConnectors) ? snapshot.mcpConnectors : [],
+    );
     if (!connectors.length) {
       const empty = document.createElement("div");
       empty.className = "settings-mcp-state";
@@ -1449,12 +1489,13 @@
     list.className = "settings-mcp-list";
     for (const connector of connectors) {
       const row = document.createElement("div");
-      row.className = "settings-row settings-connector";
+      row.className = "settings-row settings-connector" + (connector.connected ? " is-connected" : "");
       row.dataset.id = "connector-" + connector.id;
       const copy = document.createElement("div");
       copy.className = "settings-row-copy";
       const name = document.createElement("div");
       name.className = "settings-row-title";
+      appendConnectorLogo(name, connector);
       const status = document.createElement("span");
       status.className = "settings-mcp-status" + (connector.connected ? " is-ready" : (connector.status === "error" ? " is-error" : ""));
       status.setAttribute("aria-hidden", "true");
@@ -2225,6 +2266,9 @@
     ABOUT_DISCLAIMER,
     GITHUB_REPO_URL,
     GROK_CONNECTORS_URL,
+    ICON_SETTINGS,
+    CONNECTOR_LOGO_IDS,
+    sortConnectorsForDisplay,
     CONNECTOR_SECTION_HERE,
     CONNECTOR_SECTION_GROK,
     CONNECTOR_SECTION_LOCAL,

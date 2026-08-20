@@ -389,6 +389,35 @@ body.settings-page .settings-surface {
   height: 16px;
 }
 
+/* Vendor marks on On this computer rows. Hidden until the image loads so a
+   missing file never paints an empty chip (e2e:screens blank-icon gate). */
+.settings-connector-logo {
+  display: none;
+  flex: none;
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  padding: 3px;
+  border-radius: 5px;
+  background: #fff;
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--vscode-widget-border, rgba(127, 127, 127, .35)) 70%, transparent);
+}
+.settings-connector-logo.is-ready {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-connector-logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.settings-connector:not(.is-connected) .settings-connector-logo {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+
 .settings-row-desc {
   margin-top: 3px;
   max-width: 48em;
