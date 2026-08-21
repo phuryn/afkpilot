@@ -941,6 +941,20 @@ try {
     assert.ok(lastClientId, `${name}: need a live client to paint a message`);
     host(lastClientId, { type: "userMessage", text: "still reading this" });
     await page.locator(".msg.user", { hasText: "still reading this" }).waitFor({ timeout: 5000 });
+    // Fill the column so the last line sits in the resting gap the indicator
+    // occupies. A short transcript parks that line at the top and the overlap
+    // check would pass even if the indicator covered a pinned last line.
+    const filler = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join("\n\n");
+    host(lastClientId, { type: "messageChunk", text: `${filler}\n\nthe last line a reader is looking at` });
+    await page.locator(".msg", { hasText: "the last line a reader is looking at" }).waitFor({ timeout: 5000 });
+    await page.waitForFunction(() => {
+      const lastBody = [...document.querySelectorAll("#messages .msg .body")].at(-1);
+      const composer = document.querySelector(".composer");
+      if (!lastBody || !composer) return false;
+      const range = document.createRange();
+      range.selectNodeContents(lastBody);
+      return range.getBoundingClientRect().bottom > composer.getBoundingClientRect().top - 80;
+    }, { timeout: 5000 });
     await page.evaluate(() => {
       const socket = [...(window.__screensTestSockets || [])].reverse()
         .find((s) => String(s.url).includes("/client?"));
@@ -953,12 +967,38 @@ try {
     }, { timeout: 5000 });
     const reconnect = await page.evaluate(() => {
       const indicator = document.getElementById("reconnecting-indicator");
+      const messages = document.getElementById("messages");
+      const composer = document.querySelector(".composer");
       const overlay = document.querySelector(".auth-overlay.reconnecting");
       const overlayCs = overlay && !overlay.hidden ? getComputedStyle(overlay) : null;
       const msg = [...document.querySelectorAll(".msg")].find((el) =>
         /still reading this/.test(el.textContent || ""));
-      const i = indicator ? indicator.getBoundingClientRect() : { width: 0, height: 0 };
+      const lastBody = [...document.querySelectorAll("#messages .msg .body")].at(-1);
+      const i = indicator ? indicator.getBoundingClientRect() : { left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 };
       const msgCs = msg ? getComputedStyle(msg) : null;
+      const shownH = messages ? messages.getBoundingClientRect().height : 0;
+      if (indicator) indicator.hidden = true;
+      const hiddenH = messages ? messages.getBoundingClientRect().height : 0;
+      if (indicator) indicator.hidden = false;
+      const shownHAfter = messages ? messages.getBoundingClientRect().height : 0;
+      const overlap = (a, b) => {
+        const dx = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+        const dy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+        return dx > 0.5 && dy > 0.5;
+      };
+      let lastLine = { left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 };
+      if (lastBody) {
+        const range = document.createRange();
+        range.selectNodeContents(lastBody);
+        lastLine = range.getBoundingClientRect();
+      }
+      const hitX = i.left + Math.min(24, Math.max(1, i.width / 2));
+      const hitY = i.top + i.height / 2;
+      const hit = i.height > 0 ? document.elementFromPoint(hitX, hitY) : null;
+      const composerTop = composer ? composer.getBoundingClientRect().top : 0;
+      const indCs = indicator ? getComputedStyle(indicator) : null;
+      const msgPad = messages ? getComputedStyle(messages).paddingLeft : "";
+      const indPad = indCs ? indCs.paddingLeft : "";
       return {
         overlayUp: !!(overlay && overlayCs && overlayCs.display !== "none"),
         indicatorHidden: !indicator || indicator.hidden,
@@ -968,6 +1008,17 @@ try {
         indicatorFullBleed: i.width >= window.innerWidth - 2 && i.height >= window.innerHeight - 2,
         msgVisible: !!(msg && msgCs && msgCs.visibility !== "hidden" && msgCs.display !== "none"),
         msgFilter: msgCs ? msgCs.filter : "",
+        messagesHShown: shownH,
+        messagesHHidden: hiddenH,
+        messagesHReshown: shownHAfter,
+        lastLineCovered: lastBody ? overlap(i, lastLine) : true,
+        lastLineNearComposer: lastLine.bottom > composerTop - 80,
+        pointerEvents: indCs ? indCs.pointerEvents : "",
+        role: indicator ? indicator.getAttribute("role") : "",
+        ariaLive: indicator ? indicator.getAttribute("aria-live") : "",
+        hitIndicator: !!(hit && (hit.id === "reconnecting-indicator" || hit.closest("#reconnecting-indicator"))),
+        composerGap: Math.round(composerTop - i.bottom),
+        padLockstep: msgPad === indPad,
       };
     });
     assert.equal(reconnect.overlayUp, false, `${name}: a painted conversation must not take the reconnect veil — ${JSON.stringify(reconnect)}`);
@@ -983,6 +1034,28 @@ try {
       !reconnect.msgFilter || reconnect.msgFilter === "none",
       `${name}: the transcript must not be blurred (${reconnect.msgFilter})`,
     );
+    assert.equal(
+      reconnect.messagesHShown, reconnect.messagesHHidden,
+      `${name}: #messages height must not change when the indicator hides — ${JSON.stringify(reconnect)}`,
+    );
+    assert.equal(
+      reconnect.messagesHHidden, reconnect.messagesHReshown,
+      `${name}: #messages height must not change when the indicator shows — ${JSON.stringify(reconnect)}`,
+    );
+    assert.equal(
+      reconnect.lastLineNearComposer, true,
+      `${name}: last line must sit at the composer so covering is testable — ${JSON.stringify(reconnect)}`,
+    );
+    assert.equal(reconnect.lastLineCovered, false, `${name}: indicator must not cover the last transcript line — ${JSON.stringify(reconnect)}`);
+    assert.equal(reconnect.pointerEvents, "none", `${name}: indicator must not eat taps — ${JSON.stringify(reconnect)}`);
+    assert.equal(reconnect.hitIndicator, false, `${name}: a point on the indicator must fall through — ${JSON.stringify(reconnect)}`);
+    assert.equal(reconnect.role, "status", `${name}: indicator must keep role=status`);
+    assert.equal(reconnect.ariaLive, "polite", `${name}: indicator must keep aria-live`);
+    assert.ok(
+      Math.abs(reconnect.composerGap) <= 2,
+      `${name}: indicator must sit on the composer, not in its own row (gap ${reconnect.composerGap}px)`,
+    );
+    assert.equal(reconnect.padLockstep, true, `${name}: rail measure padding-inline must match #messages — ${JSON.stringify(reconnect)}`);
     await shot(page, `${name}-10-reconnecting`);
 
     assert.deepEqual(errors, [], `${name}: the page logged errors — ${JSON.stringify(errors)}`);

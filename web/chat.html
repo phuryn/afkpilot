@@ -4378,15 +4378,24 @@ body.quota-exceeded #mic-btn { pointer-events: none; opacity: 0.4; }
   pointer-events: none;
 }
 /* Quiet status while a painted conversation reconnects. Same muted type as
-   Grokking / Clauding, in the gap above the composer so the transcript
-   stays fully legible and scrollable. Not an overlay. */
+   Grokking / Clauding. Out of flow, in the existing resting gap above the
+   composer (#messages padding-bottom), so showing or hiding it cannot
+   resize the transcript. A flex row here is what caused the jump. Vertical
+   padding that would grow the box into the last line is omitted — covering
+   that line is worse than the jump this exists to prevent. pointer-events
+   none: a tap here is for the composer or the last line, not this. */
 #reconnecting-indicator {
-  flex: 0 0 auto;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  box-sizing: border-box;
   pointer-events: none;
   color: var(--vscode-descriptionForeground);
   font-size: 13px;
   line-height: 1.4;
-  padding: 2px 16px 10px;
+  padding: 0 16px;
   user-select: none;
 }
 /* ---- EXPERIMENT: edge scroll-fade (remote only) ---------------------------
@@ -4641,9 +4650,8 @@ body.identity-restore-veil #identity-restoring-note { display: flex; }
        by the shim off scroll position. -->
   <div class="msg-fade msg-fade-top" aria-hidden="true"></div>
   <div class="msg-fade msg-fade-bot" aria-hidden="true"></div>
-  </div>
-
   <div id="reconnecting-indicator" hidden role="status" aria-live="polite">Reconnecting…</div>
+  </div>
 
   <footer class="composer">
     <button id="scroll-bottom-btn" class="scroll-bottom-btn" type="button" title="Scroll to bottom"></button>

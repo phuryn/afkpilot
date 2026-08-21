@@ -325,6 +325,14 @@ const restoreCss = html.slice(
   html.indexOf("/* The identity-restore veil:"),
   html.indexOf("/* Message actions (Copy + timestamp)"),
 );
+const indicatorCss = html.slice(
+  html.indexOf("/* Quiet status while a painted conversation reconnects."),
+  html.indexOf("/* ---- EXPERIMENT: edge scroll-fade"),
+);
+const wrapMarkup = html.slice(
+  html.indexOf('<div id="messages-wrap">'),
+  html.indexOf('<footer class="composer">'),
+);
 const abandonRestoreSrc = html.slice(
   html.indexOf("function abandonIdentityRestore("),
   html.indexOf("function voiceCaptureActive()"),
@@ -877,6 +885,20 @@ describe("reconnect veil", () => {
     expect(veilFns).toContain("clearReconnectPresentation(true)");
     expect(veilFns).toContain("syncReconnectPresentation()");
     expect(veilFns).toContain("new MutationObserver");
+  });
+
+  it("the reconnecting indicator is out of flow so it cannot resize the transcript", () => {
+    expect(indicatorCss).toContain("position: absolute");
+    expect(indicatorCss).toContain("bottom: 0");
+    expect(indicatorCss).toContain("pointer-events: none");
+    expect(indicatorCss).not.toContain("flex: 0 0 auto");
+    expect(wrapMarkup).toContain('id="reconnecting-indicator"');
+    expect(wrapMarkup.trimEnd().endsWith("</div>")).toBe(true);
+  });
+
+  it("stays announced, and the rail reading-measure still applies", () => {
+    expect(html).toContain('id="reconnecting-indicator" hidden role="status" aria-live="polite"');
+    expect(html).toContain("body.has-rail #reconnecting-indicator { padding-inline: max(10px, calc((100% - 800px) / 2)); }");
   });
 });
 
