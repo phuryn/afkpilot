@@ -1909,6 +1909,9 @@ window.grokRemoteClient = true;
     identityTimer = null;
     identityTarget = null;
     identityReplayDepth = 0;
+    pendingResumeReplay = false;
+    connectSnapshotOpen = false;
+    snapshotHadReplay = false;
     document.body.classList.remove("identity-restore-veil");
     document.body.classList.remove("identity-restoring");
     clearIdentityFailTimer();
@@ -1958,6 +1961,13 @@ window.grokRemoteClient = true;
   var identityRestoreComplete = false;
   var heldFileRequests = [];
   var identityReplayDepth = 0;
+  // restoreRememberedRemoteSession posts resumeSession on every initialState,
+  // including a snapshot that already replayed the buffer. Identity can confirm
+  // in the gap; the lock waits for that resumeSession's replay (or for
+  // confirmation when the snapshot had no replay — legacy hosts).
+  var pendingResumeReplay = false;
+  var connectSnapshotOpen = false;
+  var snapshotHadReplay = false;
   var identityEverCompleted = false;
   var voiceTransportReady = false;
   var interruptingVoice = false;
@@ -2765,13 +2775,48 @@ window.grokRemoteClient = true;
     clearCachedViewScroll();
     return kept;
   }
+  function notePendingResumeReplay() {
+    pendingResumeReplay = true;
+  }
+  function noteConnectSnapshot(data) {
+    if (!data) return;
+    if (data.type === "initialState") {
+      connectSnapshotOpen = true;
+      snapshotHadReplay = false;
+      return;
+    }
+    if (
+      data.type !== "repos" &&
+      data.type !== "sessions" &&
+      data.type !== "setBusy"
+    ) return;
+    // A sessions frame after identity is already confirmed is the resumeSession
+    // answer on hosts that do not wrap that load in historyReplay. Must not
+    // fire on the snapshot sessions that confirmed identity — those arrive
+    // while identityRestoreComplete is still false.
+    var resumeAnswered = data.type === "sessions" &&
+      identityRestoreComplete &&
+      pendingResumeReplay;
+    connectSnapshotOpen = false;
+    if (resumeAnswered) {
+      pendingResumeReplay = false;
+      maybeFinishCachedViewScroll();
+    }
+  }
   function maybeFinishCachedViewScroll() {
-    // Hold across snapshot replay AND the resumeSession replay. Disarm only
-    // once identity is confirmed and no replay is still in flight.
+    // Hold across snapshot replay AND the resumeSession replay. Identity can
+    // confirm in the gap between them; an outstanding restore resumeSession
+    // whose snapshot already replayed still has that second replay coming.
+    // A snapshot with no historyReplay (legacy sessions-only confirm) ends
+    // at confirmation — not a timer, and not armed forever.
     if (!cachedViewLive) return false;
     var kept = settleCachedViewScroll();
     if (identityReplayDepth > 0) return kept;
     if (!identityRestoreComplete && identityTarget) return kept;
+    if (pendingResumeReplay) {
+      if (snapshotHadReplay) return kept;
+      pendingResumeReplay = false;
+    }
     finishCachedViewScroll();
     return kept;
   }
@@ -2840,14 +2885,16 @@ window.grokRemoteClient = true;
     if (!data || data.type !== "historyReplay") return;
     if (data.active) {
       identityReplayDepth += 1;
+      if (connectSnapshotOpen) snapshotHadReplay = true;
       return;
     }
     if (identityReplayDepth > 0) identityReplayDepth -= 1;
     if (identityReplayDepth > 0) return;
     // Replay-end is when chat.js force-scrolls to the bottom. Put the
     // reader back if they had moved, but keep the hold for a later swap
-    // (snapshot replay then resumeSession replay). Painted cache has no
-    // veil to lift.
+    // (snapshot replay then resumeSession replay). A replay that starts
+    // after the connect snapshot has closed is the resumeSession answer.
+    if (pendingResumeReplay && !connectSnapshotOpen) pendingResumeReplay = false;
     settleCachedViewScroll();
     if (identityRestoreComplete) revealRestoredTranscript();
     maybeFinishCachedViewScroll();
@@ -2882,6 +2929,9 @@ window.grokRemoteClient = true;
     // A failed restore must still show whatever is in the transcript rather
     // than waiting for a replay that may never end.
     identityReplayDepth = 0;
+    pendingResumeReplay = false;
+    connectSnapshotOpen = false;
+    snapshotHadReplay = false;
     recoverAuthoredFromLiveOutbound();
     reportOutboxFailure(outboxReason);
     failHeldFileRequests();
@@ -3081,8 +3131,12 @@ window.grokRemoteClient = true;
   }
 
   function maybeFinishIdentityRestore(data) {
-    if (!identityTarget) return;
     var failedId = resumeFailedId(data);
+    if (failedId && pendingResumeReplay && (!identityTarget || failedId === identityTarget.id)) {
+      pendingResumeReplay = false;
+      if (!identityTarget) maybeFinishCachedViewScroll();
+    }
+    if (!identityTarget) return;
     if (failedId && failedId === identityTarget.id) {
       abandonIdentityRestore("the conversation could not be restored.");
       return;
@@ -3116,6 +3170,9 @@ window.grokRemoteClient = true;
     }
     identityRestoreComplete = false;
     identityReplayDepth = 0;
+    pendingResumeReplay = false;
+    connectSnapshotOpen = false;
+    snapshotHadReplay = false;
     setVoiceTransportReady(false);
     // Same-tab reload/discard: paint the last rendered window before the
     // host round-trip. Token claim has already settled, so a duplicate tab
@@ -3334,6 +3391,7 @@ window.grokRemoteClient = true;
       // Run after dispatch: chat.js handles initialState synchronously and
       // re-asserts its saved selectRepo/resumeSession through our shim first.
       // We still wait for the resulting host confirmations before flushing.
+      noteConnectSnapshot(data);
       maybeFinishIdentityRestore(data);
       // chat.js force-scrolls on historyReplay end during dispatch. Note the
       // frame after that so a cold restore reveals the settled view, not a
@@ -3880,6 +3938,7 @@ window.grokRemoteClient = true;
           }
           if (m && m.type === "resumeSession" && restoreMsg) {
             armIdentityFailTimer();
+            notePendingResumeReplay();
           }
         } else if (disposition === "abandon-and-send") {
           abandonIdentityRestore("you chose a different repository or conversation.");
@@ -4415,6 +4474,18 @@ body.identity-restore-veil #session-head-title { visibility: hidden; }
   pointer-events: none;
   color: var(--vscode-descriptionForeground);
   font-size: 13px;
+  /* This sits over live transcript text, so the label needs to separate from
+     whatever is behind it. A halo rather than a card: stacked shadows in the
+     widget background follow the glyph shapes, so there is no box to size or
+     position and no layout of any kind. `--vscode-editorWidget-background` is
+     defined for both themes above, so it radiates dark on dark and light on
+     light without a second rule. Deliberately NOT backdrop-filter: that is a
+     compositing layer, and it would appear at the exact moment a phone is
+     already painting a restored transcript. */
+  text-shadow:
+    0 0 4px var(--vscode-editorWidget-background),
+    0 0 8px var(--vscode-editorWidget-background),
+    0 0 16px var(--vscode-editorWidget-background);
 }
 body.identity-restore-veil #identity-restoring-note { display: flex; }
 

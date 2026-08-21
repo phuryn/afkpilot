@@ -763,7 +763,11 @@ describe("write only on hide", () => {
 
 const scrollSrc = html.slice(
   html.indexOf("function armCachedViewScroll()"),
-  html.indexOf("function liftIdentityRestoreVeil()"),
+  html.indexOf("function finishIdentityRestore()"),
+);
+const sendResumeSrc = html.slice(
+  html.indexOf("if (m && m.type === \"resumeSession\" && restoreMsg)"),
+  html.indexOf("} else if (disposition === \"abandon-and-send\")"),
 );
 
 type LayoutRow = {
@@ -904,6 +908,7 @@ function layoutTranscript(opts?: { clientHeight?: number; rowHeight?: number; te
 }
 
 function loadScrollFns(messages: LayoutMessages) {
+  const bodyClasses = new Set<string>();
   const fns = new Function(
     "document",
     "Event",
@@ -918,6 +923,9 @@ function loadScrollFns(messages: LayoutMessages) {
       var identityReplayDepth = 0;
       var identityRestoreComplete = false;
       var identityTarget = null;
+      var pendingResumeReplay = false;
+      var connectSnapshotOpen = false;
+      var snapshotHadReplay = false;
       var resyncScrollTop = null;
       var restoreTimer = null;
       ${scrollSrc}
@@ -927,17 +935,37 @@ function loadScrollFns(messages: LayoutMessages) {
         onCachedViewScroll: onCachedViewScroll,
         applyRestoreScroll: applyRestoreScroll,
         settleCachedViewScroll: settleCachedViewScroll,
+        maybeFinishCachedViewScroll: maybeFinishCachedViewScroll,
         snapshotTranscriptScroll: snapshotTranscriptScroll,
         applyCachedTranscriptScroll: applyCachedTranscriptScroll,
+        notePendingResumeReplay: notePendingResumeReplay,
+        noteConnectSnapshot: noteConnectSnapshot,
+        noteIdentityReplay: noteIdentityReplay,
+        finishIdentity: function () {
+          identityTarget = null;
+          identityRestoreComplete = true;
+          maybeFinishCachedViewScroll();
+        },
+        setIdentityTarget: function (value) { identityTarget = value; },
         userScrolled: function () { return cachedViewUserScrolled; },
         holdPlace: function () { return cachedViewHoldPlace; },
         gesturePending: function () { return cachedViewGesturePending; },
         live: function () { return cachedViewLive; },
         pinnedToBottom: function () { return cachedViewPinnedToBottom; },
+        pendingResume: function () { return pendingResumeReplay; },
       };
     `,
   )(
-    { getElementById: (id: string) => (id === "messages" ? messages : null) },
+    {
+      body: {
+        classList: {
+          add: (c: string) => { bodyClasses.add(c); },
+          remove: (c: string) => { bodyClasses.delete(c); },
+          contains: (c: string) => bodyClasses.has(c),
+        },
+      },
+      getElementById: (id: string) => (id === "messages" ? messages : null),
+    },
     Event,
   ) as {
     armCachedViewScroll: () => void;
@@ -945,17 +973,24 @@ function loadScrollFns(messages: LayoutMessages) {
     onCachedViewScroll: () => void;
     applyRestoreScroll: () => void;
     settleCachedViewScroll: () => boolean;
+    maybeFinishCachedViewScroll: () => boolean;
     snapshotTranscriptScroll: (messages: LayoutMessages) =>
       { atBottom: true } | { atBottom: false; top: number };
     applyCachedTranscriptScroll: (
       messages: LayoutMessages,
       scroll: { atBottom: true } | { atBottom: false; top: number } | null,
     ) => void;
+    notePendingResumeReplay: () => void;
+    noteConnectSnapshot: (data: { type: string }) => void;
+    noteIdentityReplay: (data: { type: string; active?: boolean }) => void;
+    finishIdentity: () => void;
+    setIdentityTarget: (value: { id: string } | null) => void;
     userScrolled: () => boolean;
     holdPlace: () => boolean;
     gesturePending: () => boolean;
     live: () => boolean;
     pinnedToBottom: () => boolean;
+    pendingResume: () => boolean;
   };
   messages.hooks.noteIntent = fns.noteCachedViewUserIntent;
   messages.hooks.onScroll = fns.onCachedViewScroll;
@@ -976,6 +1011,34 @@ function hostYankToBottom(fns: ReturnType<typeof loadScrollFns>, messages: Layou
   // bottom unless the hold was not armed.
   pinToBottom(messages);
   fns.onCachedViewScroll();
+}
+
+function heldRestore(page: ReturnType<typeof layoutTranscript>, top = 100) {
+  const fns = loadScrollFns(page.messages);
+  pinToBottom(page.messages);
+  fns.armCachedViewScroll();
+  userScrollTo(fns, page.messages, top);
+  fns.setIdentityTarget({ id: "s1" });
+  return fns;
+}
+
+function snapshotReplayThenIdentity(fns: ReturnType<typeof loadScrollFns>, page: ReturnType<typeof layoutTranscript>) {
+  // Discarded-tab snapshot: resumeSession is already on the wire, then the
+  // snapshot's own historyReplay runs, then repos/sessions confirm identity.
+  fns.notePendingResumeReplay();
+  fns.noteConnectSnapshot({ type: "initialState" });
+  fns.noteIdentityReplay({ type: "historyReplay", active: true });
+  hostYankToBottom(fns, page.messages);
+  fns.noteIdentityReplay({ type: "historyReplay", active: false });
+  fns.noteConnectSnapshot({ type: "repos" });
+  fns.noteConnectSnapshot({ type: "sessions" });
+  fns.finishIdentity();
+}
+
+function resumeSessionReplay(fns: ReturnType<typeof loadScrollFns>, page: ReturnType<typeof layoutTranscript>) {
+  fns.noteIdentityReplay({ type: "historyReplay", active: true });
+  hostYankToBottom(fns, page.messages);
+  fns.noteIdentityReplay({ type: "historyReplay", active: false });
 }
 
 function userScrollTo(fns: ReturnType<typeof loadScrollFns>, messages: LayoutMessages, top: number) {
@@ -1285,6 +1348,157 @@ describe("cached view scroll across host replay", () => {
     hostYankToBottom(reloadFns, reload.messages);
     reloadFns.applyRestoreScroll();
     expect(reload.messages.scrollTop).toBe(200);
+  });
+
+  it("snapshot replay, identity confirms, then a resumeSession replay: the place survives all of it", () => {
+    const page = layoutTranscript();
+    const fns = heldRestore(page, 100);
+    expect(page.messages.scrollTop).toBe(100);
+
+    snapshotReplayThenIdentity(fns, page);
+    expect(fns.live()).toBe(true);
+    expect(page.messages.scrollTop).toBe(100);
+
+    replayRows(page, {
+      texts: ["one", "two", "three", "four", "five", "six", "seven"],
+      heights: [100, 100, 100, 100, 100, 100, 100],
+    });
+    resumeSessionReplay(fns, page);
+    expect(page.messages.scrollTop).toBe(100);
+    expect(fns.live()).toBe(false);
+    expect(fns.pendingResume()).toBe(false);
+  });
+
+  it("a restore with only one replay still settles once identity confirms", () => {
+    const page = layoutTranscript();
+    const fns = heldRestore(page, 100);
+    fns.notePendingResumeReplay();
+    fns.noteConnectSnapshot({ type: "initialState" });
+    fns.noteConnectSnapshot({ type: "setBusy" });
+    fns.noteIdentityReplay({ type: "historyReplay", active: true });
+    hostYankToBottom(fns, page.messages);
+    fns.noteIdentityReplay({ type: "historyReplay", active: false });
+    expect(page.messages.scrollTop).toBe(100);
+    expect(fns.live()).toBe(true);
+
+    fns.noteConnectSnapshot({ type: "sessions" });
+    fns.finishIdentity();
+    expect(page.messages.scrollTop).toBe(100);
+    expect(fns.live()).toBe(false);
+  });
+
+  it("a restore with no historyReplay settles when identity confirms", () => {
+    const page = layoutTranscript();
+    const fns = heldRestore(page, 100);
+    fns.notePendingResumeReplay();
+    fns.noteConnectSnapshot({ type: "initialState" });
+    fns.noteConnectSnapshot({ type: "setBusy" });
+    fns.noteConnectSnapshot({ type: "sessions" });
+    fns.finishIdentity();
+    expect(page.messages.scrollTop).toBe(100);
+    expect(fns.live()).toBe(false);
+  });
+
+  it("a gesture during the window still wins and ends the lock", () => {
+    const page = layoutTranscript();
+    const fns = heldRestore(page, 100);
+    snapshotReplayThenIdentity(fns, page);
+    expect(fns.live()).toBe(true);
+
+    userScrollTo(fns, page.messages, 50);
+    expect(page.messages.scrollTop).toBe(50);
+    expect(fns.holdPlace()).toBe(true);
+
+    replayRows(page, {
+      texts: ["one", "two", "three", "four", "five", "six"],
+      heights: [100, 100, 100, 100, 100, 100],
+    });
+    resumeSessionReplay(fns, page);
+    expect(page.messages.scrollTop).toBe(50);
+    expect(fns.live()).toBe(false);
+
+    const bottom = layoutTranscript();
+    const bottomFns = heldRestore(bottom, 80);
+    snapshotReplayThenIdentity(bottomFns, bottom);
+    userScrollTo(bottomFns, bottom.messages, bottom.messages.scrollHeight);
+    expect(bottomFns.holdPlace()).toBe(false);
+    replayRows(bottom, {
+      texts: ["one", "two", "three", "four", "five", "arrived-while-away"],
+      heights: [100, 100, 100, 100, 100, 100],
+    });
+    resumeSessionReplay(bottomFns, bottom);
+    expect(isFlushBottom(bottom.messages)).toBe(true);
+    expect(bottomFns.live()).toBe(false);
+  });
+
+  it("the scroll-to-bottom button still works once the restore is over", () => {
+    const page = layoutTranscript();
+    const fns = heldRestore(page, 100);
+    snapshotReplayThenIdentity(fns, page);
+    replayRows(page, {
+      texts: ["one", "two", "three", "four", "five", "six"],
+      heights: [100, 100, 100, 100, 100, 100],
+    });
+    resumeSessionReplay(fns, page);
+    expect(fns.live()).toBe(false);
+    expect(page.messages.scrollTop).toBe(100);
+
+    hostYankToBottom(fns, page.messages);
+    expect(isFlushBottom(page.messages)).toBe(true);
+  });
+
+  it("at-bottom restore stays at the bottom across snapshot then resumeSession replay", () => {
+    const live = layoutTranscript();
+    const liveFns = loadScrollFns(live.messages);
+    pinToBottom(live.messages);
+    liveFns.armCachedViewScroll();
+    const stored = liveFns.snapshotTranscriptScroll(live.messages);
+    expect(stored).toEqual({ atBottom: true });
+
+    const reload = layoutTranscript();
+    const reloadFns = loadScrollFns(reload.messages);
+    reloadFns.applyCachedTranscriptScroll(reload.messages, stored);
+    reloadFns.setIdentityTarget({ id: "s1" });
+    expect(isFlushBottom(reload.messages)).toBe(true);
+    expect(reloadFns.holdPlace()).toBe(false);
+
+    snapshotReplayThenIdentity(reloadFns, reload);
+    expect(isFlushBottom(reload.messages)).toBe(true);
+
+    replayRows(reload, {
+      texts: ["one", "two", "three", "four", "five", "arrived-while-away"],
+      heights: [100, 100, 100, 100, 100, 100],
+    });
+    resumeSessionReplay(reloadFns, reload);
+    expect(isFlushBottom(reload.messages)).toBe(true);
+    expect(reloadFns.live()).toBe(false);
+    const newest = rowByText(reload, "arrived-while-away");
+    expect(newest).toBeTruthy();
+    expect(newest!.getBoundingClientRect().bottom).toBeLessThanOrEqual(reload.messages.clientHeight + 1);
+  });
+
+  it("restore resumeSession arms the lock on the send, not a timer", () => {
+    expect(sendResumeSrc).toContain("notePendingResumeReplay()");
+    expect(sendResumeSrc).toContain("armIdentityFailTimer()");
+    expect(scrollSrc).toContain("pendingResumeReplay");
+    expect(scrollSrc).not.toContain("setTimeout");
+    expect(connectSrc.indexOf("noteConnectSnapshot(data)"))
+      .toBeLessThan(connectSrc.indexOf("maybeFinishIdentityRestore(data)"));
+    expect(connectSrc.indexOf("maybeFinishIdentityRestore(data)"))
+      .toBeLessThan(connectSrc.indexOf("noteIdentityReplay(data)"));
+  });
+
+  it("a sessions frame after identity ends the lock when resumeSession does not replay", () => {
+    const page = layoutTranscript();
+    const fns = heldRestore(page, 100);
+    snapshotReplayThenIdentity(fns, page);
+    expect(fns.live()).toBe(true);
+    expect(fns.pendingResume()).toBe(true);
+
+    fns.noteConnectSnapshot({ type: "sessions" });
+    expect(page.messages.scrollTop).toBe(100);
+    expect(fns.live()).toBe(false);
+    expect(fns.pendingResume()).toBe(false);
   });
 
   it("reload cache paint never calls applyRestoreScroll — a reader who moved is held by the cached-view path", () => {

@@ -449,6 +449,9 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
       var identityTarget = null;
       var identityRestoreComplete = false;
       var identityReplayDepth = 0;
+      var pendingResumeReplay = false;
+      var connectSnapshotOpen = false;
+      var snapshotHadReplay = false;
       var identityTimer = null;
       var identityFailTimer = null;
       var identityRepoConfirmed = false;
@@ -869,6 +872,8 @@ describe("reconnect veil", () => {
       .toBeLessThan(finishRestoreSrc.indexOf("flushHeldFileRequests()"));
     expect(abandonRestoreSrc).toContain("finishIdentityRestore()");
     expect(abandonRestoreSrc).toContain("identityReplayDepth = 0");
+    expect(abandonRestoreSrc).toContain("pendingResumeReplay = false");
+    expect(beginRestoreSrc).toContain("pendingResumeReplay = false");
     expect(abandonRestoreSrc).toContain("failHeldFileRequests(");
     expect(abandonRestoreSrc.indexOf("failHeldFileRequests("))
       .toBeLessThan(abandonRestoreSrc.indexOf("finishIdentityRestore()"));
