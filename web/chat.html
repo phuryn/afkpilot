@@ -4695,6 +4695,52 @@ body.identity-restore-veil #identity-restoring-note { display: flex; }
   </script>
   <script src="/vendor/media/mathjax/tex-svg-full.js"></script>
   <script src="/vendor/media/mermaid/mermaid.min.js"></script>
+  <!-- TEMPORARY diagnostic, opt-in via ?scrolldebug=1. Records every write to
+       #messages.scrollTop with the code that caused it, so a real device can say
+       what moves the view during a restore instead of us reasoning about it.
+       Remove once the restore scroll behaviour is settled. -->
+  <script>
+  (function () {
+    try {
+      if (new URLSearchParams(location.search).get("scrolldebug") !== "1") return;
+      var log = [];
+      window.__grokScrollLog = log;
+      var d = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
+      if (!d || !d.set) return;
+      Object.defineProperty(Element.prototype, "scrollTop", {
+        configurable: true,
+        enumerable: d.enumerable,
+        get: d.get,
+        set: function (v) {
+          if (this && this.id === "messages") {
+            var where = "";
+            try { where = (new Error().stack || "").split("
+").slice(2, 5).join(" | "); } catch (_) {}
+            var row = { t: Math.round(performance.now()), to: Math.round(v),
+                        from: Math.round(d.get.call(this)), h: this.scrollHeight, where: where };
+            log.push(row);
+            console.log("[scroll]", row.t + "ms", row.from + " -> " + row.to, row.where);
+          }
+          return d.set.call(this, v);
+        },
+      });
+      ["identity-restoring", "identity-restore-veil"].forEach(function (cls) {
+        var on = false;
+        setInterval(function () {
+          var now = document.body.classList.contains(cls);
+          if (now !== on) {
+            on = now;
+            var row = { t: Math.round(performance.now()), cls: cls, on: on };
+            log.push(row);
+            console.log("[state]", row.t + "ms", cls, on ? "ON" : "OFF");
+          }
+        }, 30);
+      });
+      window.__grokScrollDump = function () { return JSON.stringify(log, null, 1); };
+      console.log("[scrolldebug] armed - reproduce, then run copy(__grokScrollDump())");
+    } catch (_) {}
+  })();
+  </script>
   <script src="/vendor/media/webview-helpers.js"></script>
   <!-- Before file-panel.js on purpose: the panel reads GrokSyntaxHighlight at
        render time and degrades to plain text if it is not there yet. -->
