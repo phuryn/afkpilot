@@ -26,6 +26,9 @@ export interface Sender {
   /** Present on a real WebSocket. Absent on test fakes, which are treated
    *  as deliverable. Same numeric values as the WebSocket spec. */
   readonly readyState?: number;
+  /** Present on a real WebSocket. The hub calls this when a later client
+   *  presents the same tab token, so the predecessor stops sending. */
+  close?(): void;
 }
 
 /** WebSocket.OPEN. Hub stays free of a `ws` import. */
@@ -71,6 +74,40 @@ export class Hub {
     } catch {
       /* peer mid-teardown; its close handler detaches it */
     }
+  }
+
+  private closeSender(s: Sender): void {
+    try {
+      s.close?.();
+    } catch {
+      /* already closing */
+    }
+  }
+
+  /**
+   * One tab token is one client. A reconnecting socket presenting a token
+   * another client already holds is that same tab, not a rival: evict the
+   * predecessor so its `client-left` reaches the uplink before the
+   * newcomer's `client-ready`. The host then sees the departure before the
+   * arrival and has no conflict to refuse. Match is the exact token only —
+   * never device or address, which would let one tab kill another
+   * legitimate one.
+   *
+   * Returns the evicted senders so the caller can close them AFTER the
+   * successor's `client-ready` is written. Closing first can fire the
+   * socket's close handler, and that path must not be what orders the
+   * uplink frames.
+   */
+  private evictClientsWithTabToken(d: DeviceHub, keepClientId: string, tabToken: string): Sender[] {
+    const evicted: Sender[] = [];
+    for (const [id, client] of [...d.clients]) {
+      if (id === keepClientId) continue;
+      if (client.tabToken !== tabToken) continue;
+      d.clients.delete(id);
+      this.safeSend(d.uplink, JSON.stringify(clientLeftFrame(id)));
+      evicted.push(client.sender);
+    }
+    return evicted;
   }
 
   private notifyClientCount(d: DeviceHub): void {
@@ -185,11 +222,17 @@ export class Hub {
       const client = d.clients.get(clientId);
       const tabToken = typeof msg.tabToken === "string" ? msg.tabToken : undefined;
       if (client) client.tabToken = tabToken;
-      if (!senderDeliverable(d.uplink)) return "offline";
+      const evicted = tabToken ? this.evictClientsWithTabToken(d, clientId, tabToken) : [];
+      if (!senderDeliverable(d.uplink)) {
+        for (const sender of evicted) this.closeSender(sender);
+        return "offline";
+      }
       this.safeSend(
         d.uplink,
         JSON.stringify(clientReadyFrame(clientId, tabToken)),
       );
+      if (evicted.length) this.notifyClientCount(d);
+      for (const sender of evicted) this.closeSender(sender);
       return "routed";
     }
     if (!senderDeliverable(d.uplink)) return "offline";

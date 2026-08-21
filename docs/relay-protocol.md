@@ -134,8 +134,8 @@ Frames **relay → extension** (`RelayFrame`):
 
 | Frame | Shape | Purpose |
 |---|---|---|
-| client-ready | `{t:"client-ready", clientId, tabToken?:string}` | a browser sent `ready`; the optional logical-tab token is preserved, and the extension answers with a snapshot frame for that clientId |
-| client-left | `{t:"client-left", clientId}` | that browser socket departed; release its per-client repo/session ownership and live resources (including voice) |
+| client-ready | `{t:"client-ready", clientId, tabToken?:string}` | a browser sent `ready`; the optional logical-tab token is preserved, and the extension answers with a snapshot frame for that clientId. One token is one client: if another connected client already holds that exact token, the hub evicts it first so this frame is preceded by that predecessor's `client-left` |
+| client-left | `{t:"client-left", clientId}` | that browser socket departed; release its per-client repo/session ownership and live resources (including voice). Also sent when a later client presents the same tab token (the predecessor is closed after this frame is written) |
 | msg | `{t:"msg", clientId, msg:<WebviewMsg>}` | a browser's message; the client applies its policy gate before acting |
 | clients | `{t:"clients", count}` | viewer count (sent on attach and as clients come/go) |
 

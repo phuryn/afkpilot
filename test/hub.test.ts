@@ -5,8 +5,15 @@ import { REMOTE_PROTO_VERSION, TRANSPORT_PROBE_TYPE } from "../src/frames.js";
 class FakeSender {
   sent: string[] = [];
   readyState?: number;
+  closed = false;
+  /** Stand-in for the page's persisted outbox. close() must not touch it. */
+  outbox: string[] = [];
   send(data: string) {
     this.sent.push(data);
+  }
+  close() {
+    this.closed = true;
+    this.readyState = 3;
   }
   json(): unknown[] {
     return this.sent.map((s) => JSON.parse(s));
@@ -138,21 +145,28 @@ describe("Hub routing", () => {
     ]);
 
     // The same logical tab reconnects before the old socket's delayed close.
-    // Both client ids carrying the same token gives the host the predecessor it
-    // needs to transfer ownership instead of rejecting the new client.
+    // The hub evicts the predecessor so the host sees client-left then
+    // client-ready, not two live claims on one token.
     const replacement = hub.addClient("devA", new FakeSender());
     hub.fromClient("devA", replacement, JSON.stringify({ type: "ready", tabToken: "logical-tab-1" }));
-    expect(reconnected.json().at(-1)).toEqual({
+    const frames = reconnected.json();
+    const leftAt = frames.findIndex((frame) =>
+      (frame as { t?: string; clientId?: string }).t === "client-left"
+      && (frame as { clientId?: string }).clientId === id1,
+    );
+    const readyAt = frames.findIndex((frame) =>
+      (frame as { t?: string; clientId?: string }).t === "client-ready"
+      && (frame as { clientId?: string }).clientId === replacement,
+    );
+    expect(leftAt).toBeGreaterThan(-1);
+    expect(readyAt).toBeGreaterThan(leftAt);
+    expect(frames[readyAt]).toEqual({
       t: "client-ready", clientId: replacement, tabToken: "logical-tab-1",
     });
-    hub.removeClient("devA", id1);
-    expect(reconnected.json().slice(-2)).toEqual([
-      { t: "client-left", clientId: id1 },
-      { t: "clients", count: 2 },
-    ]);
+    expect(hub.clientCount("devA")).toBe(2);
   });
 
-  it("a replacement socket's ready-with-token precedes resumeSession while the old socket is still attached", () => {
+  it("a replacement socket's ready-with-token precedes resumeSession; the predecessor has already left", () => {
     const hub = new Hub();
     const up = new FakeSender();
     hub.attachUplink("devA", up);
@@ -165,19 +179,22 @@ describe("Hub routing", () => {
     hub.fromClient("devA", replacement, JSON.stringify({ type: "ready", tabToken: "logical-tab-1" }));
     hub.fromClient("devA", replacement, JSON.stringify({ type: "resumeSession", id: "s1" }));
 
-    expect(up.json()).toEqual([
-      { t: "clients", count: 2 },
-      { t: "client-ready", clientId: replacement, tabToken: "logical-tab-1" },
-      { t: "msg", clientId: replacement, msg: { type: "resumeSession", id: "s1" } },
-    ]);
-    hub.removeClient("devA", old);
-    expect(up.json().some((frame) => (frame as { t?: string }).t === "client-left")).toBe(true);
-    const readyAt = up.json().findIndex((frame) => (frame as { t?: string }).t === "client-ready");
-    const resumeAt = up.json().findIndex((frame) => (frame as { t?: string }).t === "msg");
-    const leftAt = up.json().findIndex((frame) => (frame as { t?: string }).t === "client-left");
-    expect(readyAt).toBeGreaterThan(-1);
+    const frames = up.json();
+    const leftAt = frames.findIndex((frame) => (frame as { t?: string }).t === "client-left");
+    const readyAt = frames.findIndex((frame) => (frame as { t?: string }).t === "client-ready");
+    const resumeAt = frames.findIndex((frame) => (frame as { t?: string }).t === "msg");
+    expect(leftAt).toBeGreaterThan(-1);
+    expect(readyAt).toBeGreaterThan(leftAt);
     expect(resumeAt).toBeGreaterThan(readyAt);
-    expect(leftAt).toBeGreaterThan(resumeAt);
+    expect(frames[leftAt]).toEqual({ t: "client-left", clientId: old });
+    expect(frames[readyAt]).toEqual({
+      t: "client-ready", clientId: replacement, tabToken: "logical-tab-1",
+    });
+    expect(frames[resumeAt]).toEqual({
+      t: "msg", clientId: replacement, msg: { type: "resumeSession", id: "s1" },
+    });
+    hub.removeClient("devA", old);
+    expect(up.json().filter((frame) => (frame as { t?: string }).t === "client-left")).toHaveLength(1);
   });
 
   it("a client that disconnects during an uplink outage is not replayed on reconnect", () => {
@@ -340,5 +357,100 @@ describe("Hub routing", () => {
     expect(hub.fromClient("devA", id, JSON.stringify({ type: TRANSPORT_PROBE_TYPE }))).toBe("answered");
     expect(up.sent).toEqual([]);
     expect(client.json()).toEqual([{ type: TRANSPORT_PROBE_TYPE }]);
+  });
+
+  it("a second client presenting an existing tab token evicts the older; client-left precedes client-ready", () => {
+    const hub = new Hub();
+    const up = new FakeSender();
+    const oldSender = new FakeSender();
+    oldSender.outbox = ["queued-work"];
+    hub.attachUplink("devA", up);
+    hello(hub);
+    const old = hub.addClient("devA", oldSender);
+    hub.fromClient("devA", old, JSON.stringify({ type: "ready", tabToken: "logical-tab-1" }));
+    up.sent = [];
+
+    const replacementSender = new FakeSender();
+    const replacement = hub.addClient("devA", replacementSender);
+    expect(hub.fromClient(
+      "devA",
+      replacement,
+      JSON.stringify({ type: "ready", tabToken: "logical-tab-1" }),
+    )).toBe("routed");
+
+    const frames = up.json();
+    const leftAt = frames.findIndex((frame) => (frame as { t?: string }).t === "client-left");
+    const readyAt = frames.findIndex((frame) => (frame as { t?: string }).t === "client-ready");
+    expect(leftAt).toBeGreaterThan(-1);
+    expect(readyAt).toBeGreaterThan(leftAt);
+    expect(frames[leftAt]).toEqual({ t: "client-left", clientId: old });
+    expect(frames[readyAt]).toEqual({
+      t: "client-ready", clientId: replacement, tabToken: "logical-tab-1",
+    });
+    expect(hub.clientCount("devA")).toBe(1);
+    expect(oldSender.closed).toBe(true);
+    expect(oldSender.sent).toEqual([]);
+    expect(oldSender.outbox).toEqual(["queued-work"]);
+    expect(replacementSender.closed).toBe(false);
+  });
+
+  it("two clients with different tab tokens both stay connected", () => {
+    const hub = new Hub();
+    const up = new FakeSender();
+    const aSender = new FakeSender();
+    const bSender = new FakeSender();
+    hub.attachUplink("devA", up);
+    hello(hub);
+    const a = hub.addClient("devA", aSender);
+    const b = hub.addClient("devA", bSender);
+    hub.fromClient("devA", a, JSON.stringify({ type: "ready", tabToken: "tab-a" }));
+    up.sent = [];
+    hub.fromClient("devA", b, JSON.stringify({ type: "ready", tabToken: "tab-b" }));
+
+    expect(up.json()).toEqual([
+      { t: "client-ready", clientId: b, tabToken: "tab-b" },
+    ]);
+    expect(hub.clientCount("devA")).toBe(2);
+    expect(aSender.closed).toBe(false);
+    expect(bSender.closed).toBe(false);
+  });
+
+  it("the evicted client's socket is closed cleanly and its outbox is not disturbed", () => {
+    const hub = new Hub();
+    const up = new FakeSender();
+    const oldSender = new FakeSender();
+    oldSender.outbox = ["held-send"];
+    hub.attachUplink("devA", up);
+    hello(hub);
+    const old = hub.addClient("devA", oldSender);
+    hub.fromClient("devA", old, JSON.stringify({ type: "ready", tabToken: "same-tab" }));
+    const replacement = hub.addClient("devA", new FakeSender());
+    hub.fromClient("devA", replacement, JSON.stringify({ type: "ready", tabToken: "same-tab" }));
+
+    expect(oldSender.closed).toBe(true);
+    expect(oldSender.readyState).toBe(3);
+    expect(oldSender.sent).toEqual([]);
+    expect(oldSender.outbox).toEqual(["held-send"]);
+    up.sent = [];
+    hub.removeClient("devA", old);
+    expect(up.json().some((frame) => (frame as { t?: string }).t === "client-left")).toBe(false);
+  });
+
+  it("a reconnect with no prior client for that token behaves exactly as today", () => {
+    const hub = new Hub();
+    const up = new FakeSender();
+    const client = new FakeSender();
+    hub.attachUplink("devA", up);
+    hello(hub);
+    const id = hub.addClient("devA", client);
+    up.sent = [];
+
+    expect(hub.fromClient("devA", id, JSON.stringify({ type: "ready", tabToken: "fresh-tab" }))).toBe("routed");
+    expect(up.json()).toEqual([
+      { t: "client-ready", clientId: id, tabToken: "fresh-tab" },
+    ]);
+    expect(hub.clientCount("devA")).toBe(1);
+    expect(client.closed).toBe(false);
+    expect(up.json().some((frame) => (frame as { t?: string }).t === "client-left")).toBe(false);
   });
 });
