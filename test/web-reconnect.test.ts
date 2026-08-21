@@ -311,8 +311,12 @@ const veilFns = html.slice(
   html.indexOf("function readyMessage()"),
 );
 const finishRestoreSrc = html.slice(
-  html.indexOf("function finishIdentityRestore()"),
+  html.indexOf("function applyRestoreScroll()"),
   html.indexOf("function abandonIdentityRestore("),
+);
+const restoreCss = html.slice(
+  html.indexOf("/* The identity-restore veil:"),
+  html.indexOf("/* Message actions (Copy + timestamp)"),
 );
 const abandonRestoreSrc = html.slice(
   html.indexOf("function abandonIdentityRestore("),
@@ -336,9 +340,11 @@ const persistOfflineSrc = html.slice(
 );
 
 type VeilEl = {
+  id: string;
   hidden: boolean;
   className: string;
   innerHTML: string;
+  textContent: string;
   classList: { add: (c: string) => void; remove: (c: string) => void; contains: (c: string) => boolean };
   querySelector: (sel: string) => VeilEl | null;
   appendChild: (child: VeilEl) => VeilEl;
@@ -347,9 +353,11 @@ type VeilEl = {
 function fakeEl(): VeilEl {
   const classes = new Set<string>();
   const el: VeilEl = {
+    id: "",
     hidden: false,
     className: "",
     innerHTML: "",
+    textContent: "",
     classList: {
       add: (c) => { classes.add(c); },
       remove: (c) => { classes.delete(c); },
@@ -372,23 +380,43 @@ function fakeEl(): VeilEl {
 function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } | null; painted?: boolean }) {
   const remembered = { value: opts?.remembered === undefined ? null : opts.remembered };
   let painted = !!opts?.painted;
+  const events: string[] = [];
+  const extraNodes: Record<string, VeilEl> = {};
   const bodyClasses = new Set<string>();
   const body = {
     classList: {
       add: (c: string) => { bodyClasses.add(c); },
-      remove: (c: string) => { bodyClasses.delete(c); },
+      remove: (c: string) => {
+        if (c === "identity-restore-veil" && bodyClasses.has(c)) events.push("reveal");
+        bodyClasses.delete(c);
+      },
       toggle: () => undefined,
       contains: (c: string) => bodyClasses.has(c),
     },
-    appendChild: (_child: VeilEl) => _child,
+    appendChild: (child: VeilEl) => {
+      if (child && child.id) extraNodes[child.id] = child;
+      return child;
+    },
   };
   const msgStub = { className: "msg" };
-  const nodes: Record<string, { textContent: string; hidden: boolean; querySelector: (sel?: string) => unknown }> = {
-    messages: {
-      textContent: "",
-      hidden: false,
-      querySelector: (sel?: string) => (painted && sel === ".msg" ? msgStub : null),
+  let scrollTop = 0;
+  const messagesNode = {
+    textContent: "",
+    hidden: false,
+    scrollHeight: 800,
+    querySelector: (sel?: string) => (painted && sel === ".msg" ? msgStub : null),
+  };
+  Object.defineProperty(messagesNode, "scrollTop", {
+    configurable: true,
+    enumerable: true,
+    get() { return scrollTop; },
+    set(value: number) {
+      events.push("scroll");
+      scrollTop = value;
     },
+  });
+  const nodes: Record<string, { textContent: string; hidden: boolean; querySelector: (sel?: string) => unknown }> = {
+    messages: messagesNode,
     "reconnecting-indicator": { textContent: "Reconnecting…", hidden: true, querySelector: () => null },
     "host-too-old-copy": { textContent: "", hidden: false, querySelector: () => null },
     "host-too-old": { textContent: "", hidden: true, querySelector: () => null },
@@ -405,11 +433,14 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
       var overlayHideTimer = null;
       var identityTarget = null;
       var identityRestoreComplete = false;
+      var identityReplayDepth = 0;
       var identityTimer = null;
       var identityFailTimer = null;
       var identityRepoConfirmed = false;
       var identitySessionConfirmed = false;
       var identityEverCompleted = false;
+      var resyncScrollTop = null;
+      var restoreTimer = null;
       var ws = { readyState: WebSocket.OPEN };
       var deviceOffline = false;
       var offlineHold = null;
@@ -450,7 +481,11 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
         beginIdentityRestore: beginIdentityRestore,
         showHostTooOld: showHostTooOld,
         notice: notice,
+        noteIdentityReplay: noteIdentityReplay,
         identityRestoring: function () { return document.body.classList.contains("identity-restoring"); },
+        restoreVeilUp: function () { return document.body.classList.contains("identity-restore-veil"); },
+        replayDepth: function () { return identityReplayDepth; },
+        setResyncScrollTop: function (value) { resyncScrollTop = value; },
         setHostBlocked: function (v) { hostBlocked = v; },
         veilUp: function () {
           return !!(overlayEl && !overlayEl.hidden && overlayEl.classList.contains("reconnecting"));
@@ -467,7 +502,7 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
   )(WS, {
     body,
     createElement: fakeEl,
-    getElementById: (id: string) => nodes[id] || null,
+    getElementById: (id: string) => extraNodes[id] || nodes[id] || null,
   }, remembered) as {
     showReconnecting: () => void;
     syncReconnectPresentation: () => void;
@@ -477,7 +512,11 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
     beginIdentityRestore: () => void;
     showHostTooOld: (version: string) => void;
     notice: (html: string) => void;
+    noteIdentityReplay: (data: { type: string; active?: boolean }) => void;
     identityRestoring: () => boolean;
+    restoreVeilUp: () => boolean;
+    replayDepth: () => number;
+    setResyncScrollTop: (value: number | null) => void;
     setHostBlocked: (value: boolean) => void;
     veilUp: () => boolean;
     overlayVisible: () => boolean;
@@ -486,6 +525,9 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
 
   return {
     ...runtime,
+    events,
+    extraNodes,
+    scrollTop: () => scrollTop,
     setPainted: (value: boolean) => { painted = value; },
   };
 }
@@ -786,20 +828,165 @@ describe("reconnect veil", () => {
 
   it("keys hide on restore complete, not on the inbound-frame call site", () => {
     expect(connectSrc).toContain("settleReconnectVeil()");
+    expect(connectSrc).toContain("noteIdentityReplay(data)");
+    expect(connectSrc.indexOf("window.dispatchEvent")).toBeLessThan(connectSrc.indexOf("noteIdentityReplay(data)"));
     expect(veilFns).toContain("identityTarget && !identityRestoreComplete");
     expect(finishRestoreSrc).toContain("settleReconnectVeil()");
+    expect(finishRestoreSrc).toContain("revealRestoredTranscript()");
     expect(finishRestoreSrc.indexOf("identityTarget = null"))
       .toBeLessThan(finishRestoreSrc.indexOf("settleReconnectVeil()"));
     expect(finishRestoreSrc.indexOf("identityRestoreComplete = true"))
       .toBeLessThan(finishRestoreSrc.indexOf("settleReconnectVeil()"));
     expect(abandonRestoreSrc).toContain("finishIdentityRestore()");
+    expect(abandonRestoreSrc).toContain("identityReplayDepth = 0");
     expect(beginRestoreSrc).toContain("finishIdentityRestore()");
     expect(showHostTooOldSrc).toContain("clearReconnectPresentation(true)");
+    expect(showHostTooOldSrc).toContain("identity-restore-veil");
     expect(noticeSrc).toContain("clearReconnectPresentation(false)");
     expect(persistOfflineSrc).toContain("clearReconnectPresentation(true)");
+    expect(persistOfflineSrc).toContain("identity-restore-veil");
     expect(veilFns).toContain("messagesEl.querySelector(\".msg\")");
     expect(veilFns).toContain("clearReconnectPresentation(true)");
     expect(veilFns).toContain("syncReconnectPresentation()");
     expect(veilFns).toContain("new MutationObserver");
+  });
+});
+
+describe("cold restore transcript veil", () => {
+  it("hides the transcript for the whole replay, not just while empty", () => {
+    expect(restoreCss).toContain("body.identity-restore-veil #messages { visibility: hidden; }");
+    expect(restoreCss).not.toContain(":has(.msg:not(.error))");
+    expect(html).not.toContain("body.identity-restoring #messages:not(:has(.msg:not(.error)))");
+  });
+
+  it("errors punch through while the rest stays hidden, and the note stays up", () => {
+    expect(restoreCss).toContain("body.identity-restore-veil #messages .msg.error { visibility: visible; }");
+    expect(restoreCss).toContain("body.identity-restore-veil #identity-restoring-note { display: flex; }");
+    expect(restoreCss).toContain("body.identity-restore-veil #session-head-title { visibility: hidden; }");
+  });
+
+  it("does not use a timer to decide the replay is done", () => {
+    const noteReplaySrc = html.slice(
+      html.indexOf("function noteIdentityReplay(data)"),
+      html.indexOf("function finishIdentityRestore()"),
+    );
+    expect(noteReplaySrc).toContain('data.type !== "historyReplay"');
+    expect(noteReplaySrc).not.toContain("setTimeout");
+    expect(noteReplaySrc).not.toContain("restoreTimer");
+  });
+
+  it("applies scroll before lifting the veil, not after", () => {
+    const liftSrc = html.slice(
+      html.indexOf("function liftIdentityRestoreVeil()"),
+      html.indexOf("function revealRestoredTranscript()"),
+    );
+    expect(liftSrc.indexOf("applyRestoreScroll()"))
+      .toBeLessThan(liftSrc.indexOf("identity-restore-veil"));
+  });
+
+  it("cold restore: #messages stays hidden across the whole replay and becomes visible once, after the replay ends", () => {
+    const rt = makeVeilRuntime({ remembered: { id: "sess-1", repoCwd: "/repo" } });
+    rt.beginIdentityRestore();
+    expect(rt.identityRestoring()).toBe(true);
+    expect(rt.restoreVeilUp()).toBe(true);
+    expect(rt.extraNodes["identity-restoring-note"]?.textContent).toBe("Restoring conversation…");
+
+    rt.noteIdentityReplay({ type: "historyReplay", active: true });
+    expect(rt.restoreVeilUp()).toBe(true);
+    rt.setPainted(true);
+    expect(rt.restoreVeilUp()).toBe(true);
+
+    rt.finishIdentityRestore();
+    expect(rt.restoreVeilUp()).toBe(true);
+    expect(rt.identityRestoring()).toBe(true);
+    expect(rt.events).not.toContain("reveal");
+
+    rt.noteIdentityReplay({ type: "historyReplay", active: false });
+    expect(rt.restoreVeilUp()).toBe(false);
+    expect(rt.identityRestoring()).toBe(false);
+    expect(rt.events.filter((e) => e === "reveal")).toEqual(["reveal"]);
+  });
+
+  it("the revealed view is the settled one — scroll is applied before reveal, not after", () => {
+    const rt = makeVeilRuntime({ remembered: { id: "sess-1", repoCwd: "/repo" } });
+    rt.beginIdentityRestore();
+    rt.noteIdentityReplay({ type: "historyReplay", active: true });
+    rt.finishIdentityRestore();
+    expect(rt.events).toEqual([]);
+
+    rt.noteIdentityReplay({ type: "historyReplay", active: false });
+    expect(rt.events).toEqual(["scroll", "reveal"]);
+    expect(rt.scrollTop()).toBe(800);
+  });
+
+  it("a restore that finishes after the replay still scrolls before revealing", () => {
+    const rt = makeVeilRuntime({ remembered: { id: "sess-1", repoCwd: "/repo" } });
+    rt.beginIdentityRestore();
+    rt.noteIdentityReplay({ type: "historyReplay", active: true });
+    rt.noteIdentityReplay({ type: "historyReplay", active: false });
+    expect(rt.restoreVeilUp()).toBe(true);
+    expect(rt.events).toEqual([]);
+
+    rt.finishIdentityRestore();
+    expect(rt.events).toEqual(["scroll", "reveal"]);
+    expect(rt.restoreVeilUp()).toBe(false);
+  });
+
+  it("an error during restore does not lift the veil", () => {
+    const rt = makeVeilRuntime({ remembered: { id: "sess-1", repoCwd: "/repo" } });
+    rt.beginIdentityRestore();
+    rt.noteIdentityReplay({ type: "historyReplay", active: true });
+    rt.setPainted(true);
+    expect(rt.restoreVeilUp()).toBe(true);
+    expect(rt.identityRestoring()).toBe(true);
+    expect(rt.extraNodes["identity-restoring-note"]).toBeTruthy();
+  });
+
+  it("restore abandoned: the transcript is revealed rather than left hidden", () => {
+    const rt = makeVeilRuntime({ remembered: { id: "sess-1", repoCwd: "/repo" } });
+    rt.beginIdentityRestore();
+    rt.noteIdentityReplay({ type: "historyReplay", active: true });
+    expect(rt.restoreVeilUp()).toBe(true);
+
+    rt.abandonIdentityRestore("the conversation could not be restored.");
+    expect(rt.restoreVeilUp()).toBe(false);
+    expect(rt.identityRestoring()).toBe(false);
+    expect(rt.replayDepth()).toBe(0);
+    expect(rt.events).toEqual(["scroll", "reveal"]);
+  });
+
+  it("painted-conversation reconnect is never hidden", () => {
+    const rt = makeVeilRuntime({
+      remembered: { id: "sess-1", repoCwd: "/repo" },
+      painted: true,
+    });
+    rt.beginIdentityRestore();
+    expect(rt.identityRestoring()).toBe(true);
+    expect(rt.restoreVeilUp()).toBe(false);
+    expect(rt.extraNodes["identity-restoring-note"]).toBeUndefined();
+
+    rt.noteIdentityReplay({ type: "historyReplay", active: true });
+    expect(rt.restoreVeilUp()).toBe(false);
+    rt.noteIdentityReplay({ type: "historyReplay", active: false });
+    expect(rt.restoreVeilUp()).toBe(false);
+
+    rt.finishIdentityRestore();
+    expect(rt.identityRestoring()).toBe(false);
+    expect(rt.restoreVeilUp()).toBe(false);
+    expect(rt.events).toEqual([]);
+  });
+
+  it("a cold restore without a replay still reveals on completion", () => {
+    const rt = makeVeilRuntime({ remembered: { id: "sess-1", repoCwd: "/repo" } });
+    rt.beginIdentityRestore();
+    expect(rt.restoreVeilUp()).toBe(true);
+    rt.finishIdentityRestore();
+    expect(rt.restoreVeilUp()).toBe(false);
+    expect(rt.events).toEqual(["scroll", "reveal"]);
+  });
+
+  it("puts the restoring note on screen before hiding the transcript", () => {
+    expect(beginRestoreSrc.indexOf("identity-restoring-note"))
+      .toBeLessThan(beginRestoreSrc.indexOf('classList.add("identity-restore-veil")'));
   });
 });

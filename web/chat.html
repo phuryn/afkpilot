@@ -1815,6 +1815,8 @@ window.grokRemoteClient = true;
     clearTimeout(identityTimer);
     identityTimer = null;
     identityTarget = null;
+    identityReplayDepth = 0;
+    document.body.classList.remove("identity-restore-veil");
     document.body.classList.remove("identity-restoring");
     clearIdentityFailTimer();
     // The reconnect overlay sits on top of this notice (same z-index, later
@@ -1847,6 +1849,7 @@ window.grokRemoteClient = true;
   var identityRepoConfirmed = false;
   var identitySessionConfirmed = false;
   var identityRestoreComplete = false;
+  var identityReplayDepth = 0;
   var identityEverCompleted = false;
   var voiceTransportReady = false;
   var interruptingVoice = false;
@@ -2233,6 +2236,48 @@ window.grokRemoteClient = true;
     }, identityRestoreFailMs());
   }
 
+  // Cold-restore visual veil: hide #messages until the replay has ended AND
+  // scroll has been applied, then reveal once. Painted reconnects never set
+  // identity-restore-veil, so they stay visible throughout.
+  function applyRestoreScroll() {
+    var messagesEl = document.getElementById("messages");
+    if (!messagesEl) return;
+    clearTimeout(restoreTimer);
+    restoreTimer = null;
+    if (resyncScrollTop !== null) {
+      messagesEl.scrollTop = resyncScrollTop;
+      resyncScrollTop = null;
+    } else {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+  }
+  function liftIdentityRestoreVeil() {
+    // Scroll first so the first painted frame is the settled view, not a
+    // mid-replay offset that then jumps.
+    applyRestoreScroll();
+    document.body.classList.remove("identity-restore-veil");
+    document.body.classList.remove("identity-restoring");
+  }
+  function revealRestoredTranscript() {
+    if (!document.body.classList.contains("identity-restore-veil")) {
+      document.body.classList.remove("identity-restoring");
+      return;
+    }
+    if (identityReplayDepth > 0) return;
+    liftIdentityRestoreVeil();
+  }
+  function noteIdentityReplay(data) {
+    // The host's historyReplay frames are the replay-done signal — not a timer.
+    if (!data || data.type !== "historyReplay") return;
+    if (data.active) {
+      identityReplayDepth += 1;
+      return;
+    }
+    if (identityReplayDepth > 0) identityReplayDepth -= 1;
+    if (identityReplayDepth > 0) return;
+    if (identityRestoreComplete) revealRestoredTranscript();
+  }
+
   function finishIdentityRestore() {
     clearTimeout(identityTimer);
     identityTimer = null;
@@ -2243,7 +2288,7 @@ window.grokRemoteClient = true;
     identityRestoreComplete = true;
     identityEverCompleted = true;
     forgetUnbouncedLiveOutbound();
-    document.body.classList.remove("identity-restoring");
+    revealRestoredTranscript();
     setVoiceTransportReady(
       !!ws && ws.readyState === WebSocket.OPEN && !deviceOffline && !offlineHold
     );
@@ -2253,6 +2298,9 @@ window.grokRemoteClient = true;
   }
 
   function abandonIdentityRestore(outboxReason) {
+    // A failed restore must still show whatever is in the transcript rather
+    // than waiting for a replay that may never end.
+    identityReplayDepth = 0;
     recoverAuthoredFromLiveOutbound();
     reportOutboxFailure(outboxReason);
     finishIdentityRestore();
@@ -2310,6 +2358,7 @@ window.grokRemoteClient = true;
     // transcript is still empty. Drop the reconnect overlay (and the small
     // indicator) for the same reason: either would compete with the
     // in-transcript offline copy.
+    document.body.classList.remove("identity-restore-veil");
     document.body.classList.remove("identity-restoring");
     clearTimeout(overlayHideTimer);
     overlayHideTimer = null;
@@ -2446,23 +2495,32 @@ window.grokRemoteClient = true;
       return;
     }
     identityRestoreComplete = false;
+    identityReplayDepth = 0;
     setVoiceTransportReady(false);
     // identity-restoring is the restore-in-flight signal for chat.js (it
-    // holds a pending-clear across the round trip). The visual veil — hidden
-    // transcript + "Restoring conversation…" — stays empty-only. A mid-session
-    // socket blip re-runs this handshake over an already-painted conversation;
-    // veiling that would flash the other way. The composer stays usable — the
-    // outbox holds anything typed until identity confirms.
-    // "Empty" means no conversation content — the container always holds the
-    // (hidden) welcome node, so childElementCount would never be zero.
+    // holds a pending-clear across the round trip). The visual veil —
+    // identity-restore-veil, hidden transcript + "Restoring conversation…"
+    // — is cold-restore only: an empty transcript at handshake start. It
+    // stays up for the whole replay, not just while empty, and lifts once
+    // after historyReplay ends and scroll is applied. A mid-session socket
+    // blip re-runs this handshake over an already-painted conversation;
+    // veiling that would flash the other way. The composer stays usable —
+    // the outbox holds anything typed until identity confirms.
+    // "Empty" means no conversation content — the container always holds
+    // the (hidden) welcome node, so childElementCount would never be zero.
     document.body.classList.add("identity-restoring");
-    if (!transcriptHasConversation()) {
+    if (transcriptHasConversation()) {
+      document.body.classList.remove("identity-restore-veil");
+    } else {
+      // Note first, then the hide — a veiled transcript without the note
+      // is a blank screen with no explanation.
       if (!document.getElementById("identity-restoring-note")) {
         var restoringNote = document.createElement("div");
         restoringNote.id = "identity-restoring-note";
         restoringNote.textContent = "Restoring conversation…";
         document.body.appendChild(restoringNote);
       }
+      document.body.classList.add("identity-restore-veil");
     }
     identityTimer = setTimeout(function () {
       identityTimer = null;
@@ -2645,6 +2703,11 @@ window.grokRemoteClient = true;
       // re-asserts its saved selectRepo/resumeSession through our shim first.
       // We still wait for the resulting host confirmations before flushing.
       maybeFinishIdentityRestore(data);
+      // chat.js force-scrolls on historyReplay end during dispatch. Note the
+      // frame after that so a cold restore reveals the settled view, not a
+      // mid-replay offset. Finish/abandon also reveal; this is the
+      // "replay just ended" half of that handshake. Not a timer.
+      noteIdentityReplay(data);
       applyRememberedHostReturnIfIdle();
       if (resyncScrollTop !== null) {
         clearTimeout(restoreTimer);
@@ -3655,19 +3718,21 @@ textarea#input,
   .mermaid-block.show-actions .expr-actions { opacity: 1; pointer-events: auto; }
 }
 /* The identity-restore veil: body.identity-restoring is set for the whole
-   restore so chat.js can hold a pending-clear. The visual veil — hidden
-   transcript + "Restoring conversation…" — applies only while there is no
-   conversation content (pending-clear .msg still counts). Lifted by
-   finish/abandon. pointer-events none — the composer underneath stays usable. */
-body.identity-restoring #messages:not(:has(.msg:not(.error))) { visibility: hidden; }
+   restore so chat.js can hold a pending-clear. The visual veil —
+   body.identity-restore-veil — is cold-restore only (empty transcript at
+   handshake start) and stays up for the whole replay, not just while empty.
+   Lifted once after historyReplay ends and scroll is applied, or on
+   finish/abandon so a failed restore cannot leave a hidden transcript.
+   pointer-events none — the composer underneath stays usable. */
+body.identity-restore-veil #messages { visibility: hidden; }
 /* Errors punch through the veil (visibility, unlike display, lets a
    descendant reassert itself): the delay notice, a refusal, offline text —
    the user must see those mid-restore. Only ordinary transcript paint hides. */
-body.identity-restoring #messages .msg.error { visibility: visible; }
+body.identity-restore-veil #messages .msg.error { visibility: visible; }
 /* The top bar's session name is the same intermediate paint — it read
    "New session" for the restore window after the transcript was already
    veiled (owner, 2026-08-15). Same veil, same lift. */
-body.identity-restoring:not(:has(#messages .msg:not(.error))) #session-head-title { visibility: hidden; }
+body.identity-restore-veil #session-head-title { visibility: hidden; }
 #identity-restoring-note {
   display: none;
   position: fixed;
@@ -3679,7 +3744,7 @@ body.identity-restoring:not(:has(#messages .msg:not(.error))) #session-head-titl
   color: var(--vscode-descriptionForeground);
   font-size: 13px;
 }
-body.identity-restoring:not(:has(#messages .msg:not(.error))) #identity-restoring-note { display: flex; }
+body.identity-restore-veil #identity-restoring-note { display: flex; }
 
 /* Message actions (Copy + timestamp) need NO touch rule here anymore: the
    vendored chat.css rests them dimmed (0.4) and tappable on every surface —

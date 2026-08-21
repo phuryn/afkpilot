@@ -592,6 +592,7 @@ try {
   assert.equal(
     await heldPage.evaluate(() =>
       document.body.classList.contains("identity-restoring") &&
+      document.body.classList.contains("identity-restore-veil") &&
       getComputedStyle(document.getElementById("messages")).visibility === "hidden" &&
       // The top bar's session name is the same intermediate paint — "New
       // session" sat there for the restore window after the transcript was
@@ -600,6 +601,74 @@ try {
       getComputedStyle(document.getElementById("identity-restoring-note")).display !== "none"),
     true,
     "a pending restore must veil the empty transcript AND the header title, and show the restoring note",
+  );
+
+  await waitFor(
+    () => messages.some((message) => message.type === "resumeSession" && message.id === "held-pending-session"),
+    "held restore resumeSession",
+  );
+  const heldClientId = messages.find(
+    (message) => message.type === "resumeSession" && message.id === "held-pending-session",
+  ).clientId;
+
+  sendHostTo(heldClientId, { type: "error", text: "restore hiccup" });
+  await heldPage.locator(".msg.error", { hasText: "restore hiccup" }).waitFor({ timeout: 5000 });
+  assert.deepEqual(
+    await heldPage.evaluate(() => ({
+      messages: getComputedStyle(document.getElementById("messages")).visibility,
+      error: getComputedStyle(document.querySelector(".msg.error")).visibility,
+      note: getComputedStyle(document.getElementById("identity-restoring-note")).display,
+      veil: document.body.classList.contains("identity-restore-veil"),
+    })),
+    { messages: "hidden", error: "visible", note: "flex", veil: true },
+    "an error during restore is visible while the rest stays hidden",
+  );
+
+  sendHostTo(heldClientId, { type: "historyReplay", active: true });
+  sendHostTo(heldClientId, { type: "userMessage", text: "replayed-a" });
+  sendHostTo(heldClientId, { type: "userMessage", text: "replayed-b" });
+  await heldPage.waitForFunction(
+    () => document.querySelectorAll("#messages .msg.user").length >= 2,
+    null,
+    { timeout: 5000 },
+  );
+  assert.deepEqual(
+    await heldPage.evaluate(() => ({
+      messages: getComputedStyle(document.getElementById("messages")).visibility,
+      note: getComputedStyle(document.getElementById("identity-restoring-note")).display,
+      veil: document.body.classList.contains("identity-restore-veil"),
+    })),
+    { messages: "hidden", note: "flex", veil: true },
+    "the transcript stays hidden while replay is still in flight",
+  );
+
+  sendHostTo(heldClientId, { type: "historyReplay", active: false });
+  await heldPage.waitForTimeout(150);
+  assert.equal(
+    await heldPage.evaluate(() => document.body.classList.contains("identity-restore-veil")),
+    true,
+    "replay end alone must not reveal — identity restore is still in flight",
+  );
+
+  sendHostTo(heldClientId, {
+    type: "sessions",
+    entries: [{ id: "held-pending-session", displayName: "held conversation", updatedAt: 1, cwd }],
+    activeId: "held-pending-session",
+    dots: {}, offset: 0, total: 1, hasMore: false, nextOffset: 1, query: "",
+  });
+  await heldPage.waitForFunction(
+    () => !document.body.classList.contains("identity-restore-veil"),
+    null,
+    { timeout: 5000 },
+  );
+  assert.deepEqual(
+    await heldPage.evaluate(() => ({
+      messages: getComputedStyle(document.getElementById("messages")).visibility,
+      veil: document.body.classList.contains("identity-restore-veil"),
+      restoring: document.body.classList.contains("identity-restoring"),
+    })),
+    { messages: "visible", veil: false, restoring: false },
+    "the transcript is revealed once after replay ends and restore completes",
   );
   await heldPage.close();
   log("a pending restore veils the empty transcript until identity resolves");
