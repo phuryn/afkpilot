@@ -654,7 +654,15 @@ async function readTranscript(page) {
       input: document.querySelector("#input")?.value || "",
       restoring: document.body.classList.contains("identity-restoring"),
       sendTitle: document.querySelector("#send-btn")?.getAttribute("title") || "",
-      welcome: document.querySelector("#welcome-version")?.textContent || "",
+      // Only what the reader can actually SEE. The empty state is no longer
+      // stamped over a conversation that is on screen, so a hidden #welcome
+      // keeps whatever it last said - reading its text regardless of
+      // visibility asserts on a node nobody is looking at.
+      welcome: (function () {
+        var w = document.querySelector("#welcome");
+        if (!w || w.hidden || w.offsetParent === null) return "";
+        return document.querySelector("#welcome-version")?.textContent || "";
+      })(),
     };
   });
 }
@@ -823,7 +831,15 @@ async function readClientDump(page) {
       input: document.querySelector("#input")?.value || "",
       restoring: document.body.classList.contains("identity-restoring"),
       sendTitle: document.querySelector("#send-btn")?.getAttribute("title") || "",
-      welcome: document.querySelector("#welcome-version")?.textContent || "",
+      // Only what the reader can actually SEE. The empty state is no longer
+      // stamped over a conversation that is on screen, so a hidden #welcome
+      // keeps whatever it last said - reading its text regardless of
+      // visibility asserts on a node nobody is looking at.
+      welcome: (function () {
+        var w = document.querySelector("#welcome");
+        if (!w || w.hidden || w.offsetParent === null) return "";
+        return document.querySelector("#welcome-version")?.textContent || "";
+      })(),
       railNewIntent: window.__grokRailNewIntent || null,
       remembered,
       outbox,
