@@ -1872,6 +1872,14 @@ window.grokRemoteClient = true;
   var firstConnect = true;
   var resyncScrollTop = null;
   var restoreTimer = null;
+  // Cached paint → host replay. A programmatic scrollTop (paint, replay) is
+  // not the reader asking to move; only a gesture is. Same 80px slack as the
+  // reconnect capture below.
+  var cachedViewLive = false;
+  var cachedViewUserScrolled = false;
+  var cachedViewGesturePending = false;
+  var cachedViewPinnedToBottom = false;
+  var cachedViewAnchor = null;
   var offlineHold = null;
   var hostReturnDuringCapture = null;
   var deviceOffline = false;
@@ -2227,6 +2235,7 @@ window.grokRemoteClient = true;
       if (titleEl && !String(titleEl.textContent || "").trim()) titleEl.textContent = cache.title;
     }
     messagesEl.scrollTop = messagesEl.scrollHeight;
+    armCachedViewScroll();
     return true;
   }
 
@@ -2478,11 +2487,174 @@ window.grokRemoteClient = true;
   // Cold-restore visual veil: hide #messages until the replay has ended AND
   // scroll has been applied, then reveal once. Painted reconnects never set
   // identity-restore-veil, so they stay visible throughout.
+  function armCachedViewScroll() {
+    cachedViewLive = true;
+    cachedViewUserScrolled = false;
+    cachedViewGesturePending = false;
+    cachedViewPinnedToBottom = false;
+    cachedViewAnchor = null;
+  }
+  function clearCachedViewScroll() {
+    cachedViewLive = false;
+    cachedViewUserScrolled = false;
+    cachedViewGesturePending = false;
+    cachedViewPinnedToBottom = false;
+    cachedViewAnchor = null;
+  }
+  function transcriptScrollRows(messagesEl) {
+    var rows = [];
+    if (!messagesEl) return rows;
+    var children = messagesEl.children;
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i];
+      var id = child.id || "";
+      if (id === "welcome" || id === "history-head") continue;
+      if (child.getAttribute && child.getAttribute("data-pending-clear") === "1") continue;
+      rows.push(child);
+    }
+    return rows;
+  }
+  function rowAnchorKey(row) {
+    if (!row) return "";
+    var body = null;
+    try { body = row.querySelector && row.querySelector(".body"); } catch (_) { body = null; }
+    var text = body && body.textContent != null ? body.textContent : row.textContent;
+    return String(text || "").replace(/\s+/g, " ").trim();
+  }
+  function rowIsConnected(row) {
+    if (!row) return false;
+    if (typeof row.isConnected === "boolean") return row.isConnected;
+    return !!(row.parentNode || row.parentElement);
+  }
+  function findTranscriptRowByKey(messagesEl, key) {
+    if (!key) return null;
+    var rows = transcriptScrollRows(messagesEl);
+    for (var i = 0; i < rows.length; i++) {
+      if (rowAnchorKey(rows[i]) === key) return rows[i];
+    }
+    return null;
+  }
+  function captureTranscriptScrollAnchor(messagesEl) {
+    if (!messagesEl || typeof messagesEl.getBoundingClientRect !== "function") return null;
+    var view = messagesEl.getBoundingClientRect();
+    var rows = transcriptScrollRows(messagesEl);
+    var sentinel = null;
+    var index = -1;
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      if (typeof row.getBoundingClientRect !== "function") continue;
+      if (row.getBoundingClientRect().bottom > view.top) {
+        sentinel = row;
+        index = i;
+        break;
+      }
+    }
+    if (!sentinel) return null;
+    return {
+      node: sentinel,
+      key: rowAnchorKey(sentinel),
+      index: index,
+      y: sentinel.getBoundingClientRect().top,
+    };
+  }
+  function resolveCachedViewSentinel(messagesEl, anchor) {
+    if (!anchor) return null;
+    var node = anchor.node;
+    if (rowIsConnected(node) && (node.parentElement === messagesEl || node.parentNode === messagesEl)) {
+      return node;
+    }
+    var byKey = findTranscriptRowByKey(messagesEl, anchor.key);
+    if (byKey) return byKey;
+    var rows = transcriptScrollRows(messagesEl);
+    if (anchor.index >= 0 && anchor.index < rows.length) return rows[anchor.index];
+    return null;
+  }
+  function restoreTranscriptScrollAnchor(messagesEl, anchor) {
+    if (!messagesEl || !anchor) return false;
+    var sentinel = resolveCachedViewSentinel(messagesEl, anchor);
+    if (!sentinel || typeof sentinel.getBoundingClientRect !== "function") return false;
+    var delta = sentinel.getBoundingClientRect().top - anchor.y;
+    if (delta) messagesEl.scrollTop += delta;
+    return true;
+  }
+  function cachedViewIsPinnedToBottom(messagesEl) {
+    if (!messagesEl) return true;
+    return messagesEl.scrollHeight - messagesEl.scrollTop - (messagesEl.clientHeight || 0) <= 80;
+  }
+  function signalUserScrollToRenderer(messagesEl) {
+    // chat.js only unpins stick-to-bottom on a gesture, then a scroll.
+    // Replay-end force-scrolls and re-pins; without this the restored
+    // row would be yanked to the bottom on the next mutation.
+    if (!messagesEl || typeof messagesEl.dispatchEvent !== "function") return;
+    try {
+      messagesEl.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    } catch (_) { /* tests / older UAs */ }
+  }
+  function noteCachedViewUserIntent() {
+    if (!cachedViewLive) return;
+    cachedViewGesturePending = true;
+  }
+  function onCachedViewScroll() {
+    if (!cachedViewLive || !cachedViewGesturePending) return;
+    cachedViewGesturePending = false;
+    cachedViewUserScrolled = true;
+    var messagesEl = document.getElementById("messages");
+    if (!messagesEl) return;
+    cachedViewAnchor = captureTranscriptScrollAnchor(messagesEl);
+    cachedViewPinnedToBottom = cachedViewIsPinnedToBottom(messagesEl);
+  }
+  function settleCachedViewScroll() {
+    if (!cachedViewLive) return false;
+    var keep = cachedViewUserScrolled && cachedViewAnchor && !cachedViewPinnedToBottom;
+    var messagesEl = document.getElementById("messages");
+    cachedViewLive = false;
+    if (keep && messagesEl) {
+      signalUserScrollToRenderer(messagesEl);
+      restoreTranscriptScrollAnchor(messagesEl, cachedViewAnchor);
+      clearCachedViewScroll();
+      return true;
+    }
+    clearCachedViewScroll();
+    return false;
+  }
+  function bindCachedViewScrollListeners() {
+    if (bindCachedViewScrollListeners.bound) return;
+    bindCachedViewScrollListeners.bound = true;
+    function onIntent(e) {
+      var m = document.getElementById("messages");
+      if (!m || !cachedViewLive) return;
+      var t = e && e.target;
+      if (e.type === "pointerdown") {
+        if (t !== m) return;
+      } else if (e.type === "keydown") {
+        if (t !== m) return;
+        var key = e.key;
+        if (key !== "PageUp" && key !== "PageDown" && key !== "Home" && key !== "End" &&
+            key !== "ArrowUp" && key !== "ArrowDown" && key !== " ") return;
+      } else if (t !== m && !(m.contains && m.contains(t))) {
+        return;
+      }
+      noteCachedViewUserIntent();
+    }
+    document.addEventListener("wheel", onIntent, { capture: true, passive: true });
+    document.addEventListener("touchstart", onIntent, { capture: true, passive: true });
+    document.addEventListener("pointerdown", onIntent, { capture: true });
+    document.addEventListener("keydown", onIntent, { capture: true });
+    document.addEventListener("scroll", function (e) {
+      var m = document.getElementById("messages");
+      if (!m || e.target !== m) return;
+      onCachedViewScroll();
+    }, true);
+  }
   function applyRestoreScroll() {
     var messagesEl = document.getElementById("messages");
     if (!messagesEl) return;
     clearTimeout(restoreTimer);
     restoreTimer = null;
+    if (settleCachedViewScroll()) {
+      resyncScrollTop = null;
+      return;
+    }
     if (resyncScrollTop !== null) {
       messagesEl.scrollTop = resyncScrollTop;
       resyncScrollTop = null;
@@ -2514,6 +2686,10 @@ window.grokRemoteClient = true;
     }
     if (identityReplayDepth > 0) identityReplayDepth -= 1;
     if (identityReplayDepth > 0) return;
+    // Replay-end is when chat.js force-scrolls to the bottom. Settle the
+    // cached-view decision here, after that write, whether or not the
+    // handshake has finished (painted cache has no veil to lift).
+    settleCachedViewScroll();
     if (identityRestoreComplete) revealRestoredTranscript();
   }
 
@@ -3286,6 +3462,7 @@ window.grokRemoteClient = true;
   // over the first FADE_RAMP px of scroll away. rAF-throttled; recomputed on
   // scroll and on viewport resize.
   var FADE_RAMP = 16;
+  bindCachedViewScrollListeners();
   domReady().then(function () {
     var m = document.getElementById("messages");
     var wrap = document.getElementById("messages-wrap");

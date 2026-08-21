@@ -351,7 +351,8 @@ function loadFns(opts: {
     "TRANSCRIPT_CACHE_VERSION",
     "rememberedIdentity",
     "transcriptHasConversation",
-    `${cacheSrc}; return {
+    `function armCachedViewScroll() {}
+    ${cacheSrc}; return {
       parseTranscriptCache,
       cacheMatchesSession,
       snapshotRenderedTranscript,
@@ -597,5 +598,319 @@ describe("write only on hide", () => {
     expect(snapshotSrc).not.toContain("state.historyPrefix");
     expect(cacheSrc).not.toContain("loadEarlierHistory");
     expect(cacheSrc).not.toContain("addEventListener(\"scroll\"");
+  });
+});
+
+const scrollSrc = html.slice(
+  html.indexOf("function armCachedViewScroll()"),
+  html.indexOf("function liftIdentityRestoreVeil()"),
+);
+
+type LayoutRow = {
+  id: string;
+  className: string;
+  textContent: string;
+  height: number;
+  isConnected: boolean;
+  parentElement: LayoutMessages | null;
+  parentNode: LayoutMessages | null;
+  bodyText: string;
+  get offsetTop(): number;
+  getBoundingClientRect: () => { top: number; bottom: number; height: number };
+  querySelector: (sel: string) => { textContent: string } | null;
+  getAttribute: (name: string) => string | null;
+};
+
+type LayoutMessages = {
+  id: string;
+  children: LayoutRow[];
+  clientHeight: number;
+  get scrollHeight(): number;
+  get scrollTop(): number;
+  set scrollTop(value: number);
+  getBoundingClientRect: () => { top: number; bottom: number; height: number };
+  contains: (node: unknown) => boolean;
+  dispatchEvent: (event: unknown) => boolean;
+};
+
+function layoutTranscript(opts?: { clientHeight?: number; rowHeight?: number; texts?: string[] }) {
+  const clientHeight = opts?.clientHeight ?? 250;
+  const rowHeight = opts?.rowHeight ?? 100;
+  const events: string[] = [];
+  let scrollTop = 0;
+  const children: LayoutRow[] = [];
+  const messages: LayoutMessages = {
+    id: "messages",
+    children,
+    clientHeight,
+    get scrollHeight() {
+      return children.reduce((sum, row) => sum + row.height, 0);
+    },
+    get scrollTop() {
+      return scrollTop;
+    },
+    set scrollTop(value: number) {
+      events.push("scroll");
+      const max = Math.max(0, this.scrollHeight - this.clientHeight);
+      scrollTop = Math.max(0, Math.min(Number(value) || 0, max));
+    },
+    getBoundingClientRect() {
+      return { top: 0, bottom: clientHeight, height: clientHeight };
+    },
+    contains(node: unknown) {
+      return children.includes(node as LayoutRow);
+    },
+    dispatchEvent() {
+      events.push("pointerdown");
+      return true;
+    },
+  };
+  function relayout() {
+    for (const row of children) {
+      row.parentElement = messages;
+      row.parentNode = messages;
+    }
+  }
+  function addRow(text: string, height = rowHeight): LayoutRow {
+    const row: LayoutRow = {
+      id: "",
+      className: "msg",
+      textContent: text,
+      height,
+      isConnected: true,
+      parentElement: messages,
+      parentNode: messages,
+      bodyText: text,
+      get offsetTop() {
+        let y = 0;
+        for (const child of children) {
+          if (child === row) return y;
+          y += child.height;
+        }
+        return y;
+      },
+      getBoundingClientRect() {
+        const top = this.offsetTop - messages.scrollTop;
+        return { top, bottom: top + this.height, height: this.height };
+      },
+      querySelector(sel: string) {
+        return sel === ".body" ? { textContent: this.bodyText } : null;
+      },
+      getAttribute() {
+        return null;
+      },
+    };
+    children.push(row);
+    relayout();
+    return row;
+  }
+  const welcome: LayoutRow = {
+    id: "welcome",
+    className: "welcome",
+    textContent: "",
+    height: 0,
+    isConnected: true,
+    parentElement: messages,
+    parentNode: messages,
+    bodyText: "",
+    get offsetTop() { return 0; },
+    getBoundingClientRect() {
+      return { top: 0, bottom: 0, height: 0 };
+    },
+    querySelector() { return null; },
+    getAttribute() { return null; },
+  };
+  children.push(welcome);
+  for (const text of opts?.texts || ["one", "two", "three", "four", "five"]) {
+    addRow(text);
+  }
+  return { messages, children, events, addRow };
+}
+
+function loadScrollFns(messages: LayoutMessages) {
+  return new Function(
+    "document",
+    "Event",
+    `
+      var cachedViewLive = false;
+      var cachedViewUserScrolled = false;
+      var cachedViewGesturePending = false;
+      var cachedViewPinnedToBottom = false;
+      var cachedViewAnchor = null;
+      var resyncScrollTop = null;
+      var restoreTimer = null;
+      ${scrollSrc}
+      return {
+        armCachedViewScroll: armCachedViewScroll,
+        noteCachedViewUserIntent: noteCachedViewUserIntent,
+        onCachedViewScroll: onCachedViewScroll,
+        applyRestoreScroll: applyRestoreScroll,
+        settleCachedViewScroll: settleCachedViewScroll,
+        userScrolled: function () { return cachedViewUserScrolled; },
+        live: function () { return cachedViewLive; },
+      };
+    `,
+  )(
+    { getElementById: (id: string) => (id === "messages" ? messages : null) },
+    Event,
+  ) as {
+    armCachedViewScroll: () => void;
+    noteCachedViewUserIntent: () => void;
+    onCachedViewScroll: () => void;
+    applyRestoreScroll: () => void;
+    settleCachedViewScroll: () => boolean;
+    userScrolled: () => boolean;
+    live: () => boolean;
+  };
+}
+
+function pinToBottom(messages: LayoutMessages) {
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function userScrollTo(fns: ReturnType<typeof loadScrollFns>, messages: LayoutMessages, top: number) {
+  fns.noteCachedViewUserIntent();
+  messages.scrollTop = top;
+  fns.onCachedViewScroll();
+}
+
+function replayRows(
+  page: ReturnType<typeof layoutTranscript>,
+  spec: { texts: string[]; heights: number[] },
+) {
+  for (const row of page.children.slice()) {
+    if (row.id === "welcome") continue;
+    row.isConnected = false;
+    row.parentElement = null;
+    row.parentNode = null;
+    page.children.splice(page.children.indexOf(row), 1);
+  }
+  for (let i = 0; i < spec.texts.length; i++) {
+    page.addRow(spec.texts[i], spec.heights[i]);
+  }
+}
+
+function rowByText(page: ReturnType<typeof layoutTranscript>, text: string) {
+  return page.children.find((row) => row.id !== "welcome" && row.bodyText === text);
+}
+
+describe("cached view scroll across host replay", () => {
+  it("keeps the same content under the reader when they scrolled the cache", () => {
+    const page = layoutTranscript();
+    const fns = loadScrollFns(page.messages);
+    pinToBottom(page.messages);
+    fns.armCachedViewScroll();
+    userScrollTo(fns, page.messages, 100);
+    const viewed = rowByText(page, "two");
+    expect(viewed).toBeTruthy();
+    const savedY = viewed!.getBoundingClientRect().top;
+    expect(savedY).toBe(0);
+
+    replayRows(page, {
+      texts: ["one", "two", "three", "four", "five", "six"],
+      heights: [180, 100, 100, 100, 100, 100],
+    });
+    pinToBottom(page.messages);
+    fns.applyRestoreScroll();
+
+    const same = rowByText(page, "two");
+    expect(same).toBeTruthy();
+    expect(Math.abs(same!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+  });
+
+  it("lands at the bottom when the cache was painted and the reader did not scroll", () => {
+    const page = layoutTranscript();
+    const fns = loadScrollFns(page.messages);
+    pinToBottom(page.messages);
+    fns.armCachedViewScroll();
+    replayRows(page, {
+      texts: ["one", "two", "three", "four", "five"],
+      heights: [100, 100, 100, 100, 100],
+    });
+    fns.applyRestoreScroll();
+    expect(page.messages.scrollTop).toBe(page.messages.scrollHeight - page.messages.clientHeight);
+  });
+
+  it("stays at the bottom when replay brings new messages", () => {
+    const page = layoutTranscript();
+    const fns = loadScrollFns(page.messages);
+    pinToBottom(page.messages);
+    fns.armCachedViewScroll();
+    replayRows(page, {
+      texts: ["one", "two", "three", "four", "five", "six", "seven"],
+      heights: [100, 100, 100, 100, 100, 100, 100],
+    });
+    fns.applyRestoreScroll();
+    expect(page.messages.scrollTop).toBe(page.messages.scrollHeight - page.messages.clientHeight);
+    const newest = rowByText(page, "seven");
+    expect(newest).toBeTruthy();
+    const rect = newest!.getBoundingClientRect();
+    expect(rect.bottom).toBeLessThanOrEqual(page.messages.clientHeight + 1);
+    expect(rect.top).toBeLessThan(page.messages.clientHeight);
+  });
+
+  it("settle without a user scroll does not move the view", () => {
+    const page = layoutTranscript();
+    const fns = loadScrollFns(page.messages);
+    pinToBottom(page.messages);
+    fns.armCachedViewScroll();
+    const top = page.messages.scrollTop;
+    expect(fns.settleCachedViewScroll()).toBe(false);
+    expect(page.messages.scrollTop).toBe(top);
+  });
+
+  it("does not treat a programmatic paint scroll as the reader moving", () => {
+    const page = layoutTranscript();
+    const fns = loadScrollFns(page.messages);
+    fns.armCachedViewScroll();
+    pinToBottom(page.messages);
+    fns.onCachedViewScroll();
+    expect(fns.userScrolled()).toBe(false);
+    userScrollTo(fns, page.messages, 50);
+    expect(fns.userScrolled()).toBe(true);
+  });
+
+  it("a gesture that leaves the reader at the bottom still lands on new messages", () => {
+    const page = layoutTranscript();
+    const fns = loadScrollFns(page.messages);
+    pinToBottom(page.messages);
+    fns.armCachedViewScroll();
+    userScrollTo(fns, page.messages, 80);
+    userScrollTo(fns, page.messages, page.messages.scrollHeight);
+    replayRows(page, {
+      texts: ["one", "two", "three", "four", "five", "arrived-while-away"],
+      heights: [100, 100, 100, 100, 100, 100],
+    });
+    pinToBottom(page.messages);
+    fns.applyRestoreScroll();
+    expect(page.messages.scrollTop).toBe(page.messages.scrollHeight - page.messages.clientHeight);
+    const newest = rowByText(page, "arrived-while-away");
+    expect(newest!.getBoundingClientRect().bottom).toBeLessThanOrEqual(page.messages.clientHeight + 1);
+  });
+
+  it("decides from a user gesture and a node, not a timer or a stored offset", () => {
+    expect(scrollSrc).toContain("cachedViewGesturePending");
+    expect(scrollSrc).toContain("getBoundingClientRect().top");
+    expect(scrollSrc).toContain("messagesEl.scrollTop += delta");
+    expect(scrollSrc).not.toContain("setTimeout");
+    expect(scrollSrc).not.toContain("sessionStorage");
+    expect(html).toContain("bindCachedViewScrollListeners()");
+    expect(scrollSrc).toContain('addEventListener("wheel"');
+    expect(scrollSrc).toContain('addEventListener("touchstart"');
+    expect(scrollSrc).toContain('addEventListener("pointerdown"');
+    expect(scrollSrc).toContain('addEventListener("keydown"');
+    const noteReplaySrc = html.slice(
+      html.indexOf("function noteIdentityReplay(data)"),
+      html.indexOf("function finishIdentityRestore()"),
+    );
+    expect(noteReplaySrc).toContain("settleCachedViewScroll()");
+    expect(noteReplaySrc.indexOf("settleCachedViewScroll()"))
+      .toBeLessThan(noteReplaySrc.indexOf("revealRestoredTranscript()"));
+    const revealSrc = html.slice(
+      html.indexOf("function revealRestoredTranscript()"),
+      html.indexOf("function noteIdentityReplay(data)"),
+    );
+    expect(revealSrc).not.toContain("settleCachedViewScroll");
+    expect(revealSrc).not.toContain("applyRestoreScroll");
   });
 });

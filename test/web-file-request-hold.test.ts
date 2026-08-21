@@ -13,7 +13,7 @@ const helpersEnd = html.indexOf("function persistOutboxMessage(raw, message, aut
 const helpers = html.slice(helpersStart, helpersEnd);
 const holdFns = html.slice(
   html.indexOf("function holdReadOnlyFileRequest(raw, message)"),
-  html.indexOf("function applyRestoreScroll()"),
+  html.indexOf("function armCachedViewScroll()"),
 );
 const sendPath = html.slice(
   html.indexOf("var authored = takePendingUiAuthored"),

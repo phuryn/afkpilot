@@ -318,7 +318,7 @@ const veilFns = html.slice(
   html.indexOf("function readyMessage()"),
 );
 const finishRestoreSrc = html.slice(
-  html.indexOf("function applyRestoreScroll()"),
+  html.indexOf("function armCachedViewScroll()"),
   html.indexOf("function abandonIdentityRestore("),
 );
 const restoreCss = html.slice(
@@ -448,6 +448,11 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
       var identityEverCompleted = false;
       var resyncScrollTop = null;
       var restoreTimer = null;
+      var cachedViewLive = false;
+      var cachedViewUserScrolled = false;
+      var cachedViewGesturePending = false;
+      var cachedViewPinnedToBottom = false;
+      var cachedViewAnchor = null;
       var ws = { readyState: WebSocket.OPEN };
       var deviceOffline = false;
       var offlineHold = null;
@@ -513,6 +518,7 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
     body,
     createElement: fakeEl,
     getElementById: (id: string) => extraNodes[id] || nodes[id] || null,
+    addEventListener: () => undefined,
   }, remembered) as {
     showReconnecting: () => void;
     syncReconnectPresentation: () => void;
@@ -892,6 +898,7 @@ describe("cold restore transcript veil", () => {
     expect(noteReplaySrc).toContain('data.type !== "historyReplay"');
     expect(noteReplaySrc).not.toContain("setTimeout");
     expect(noteReplaySrc).not.toContain("restoreTimer");
+    expect(noteReplaySrc).toContain("settleCachedViewScroll()");
   });
 
   it("applies scroll before lifting the veil, not after", () => {
