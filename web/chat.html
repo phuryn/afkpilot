@@ -2699,39 +2699,96 @@ window.grokRemoteClient = true;
       else document.addEventListener("DOMContentLoaded", function () { r(); });
     });
   }
-  // Remote onboarding — /link lands here with &linked=1, while the extension's
-  // "Continue remotely" entry point arrives via the picker with &remoteHint=1.
-  // Strip the trigger so reloads stay quiet. Skipped in an installed app.
-  // This is deliberately an in-chat banner rather than an overlay: linking
-  // already succeeded, so the newly-live composer should stay usable.
+  // /link arrives with linked=1 — a device really just linked. Continue
+  // remotely and the picker arrive with remoteHint=1, which is only an
+  // install nudge: never a claim that a link just happened. Both flags are
+  // stripped so a reload stays quiet. Standalone (now or previously on this
+  // device) shows nothing; a dismissed hint stays dismissed. linked=1 may
+  // still show — that is a real event. In-chat, not an overlay: the composer
+  // stays usable.
+  var ONBOARD_DISMISS_KEY = "grok-remote-onboard-dismissed";
+  var ONBOARD_INSTALLED_KEY = "grok-remote-app-installed";
   var installPrompt = null;
   window.addEventListener("beforeinstallprompt", function (e) { e.preventDefault(); installPrompt = e; });
-  function maybeOnboard() {
-    var params = new URLSearchParams(location.search);
+  function onboardRead(key) {
+    try { return localStorage.getItem(key); } catch (_) { return null; }
+  }
+  function onboardWrite(key, value) {
+    try { localStorage.setItem(key, value); } catch (_) { /* private mode */ }
+  }
+  function isStandaloneDisplay(env) {
+    return !!(env && (env.standalone || env.iosStandalone));
+  }
+  function consumeOnboardParams(search, pathname, hash, replaceState) {
+    var params = new URLSearchParams(search);
     var linked = params.get("linked") === "1";
     var remoteHint = params.get("remoteHint") === "1";
-    if (!linked && !remoteHint) return;
+    if (!linked && !remoteHint) return { linked: false, remoteHint: false };
     if (linked) params.delete("linked");
     if (remoteHint) params.delete("remoteHint");
     var remaining = params.toString();
-    history.replaceState(null, "", location.pathname + (remaining ? "?" + remaining : "") + location.hash);
-    if (matchMedia("(display-mode: standalone)").matches || navigator.standalone) return;
+    replaceState(null, "", pathname + (remaining ? "?" + remaining : "") + (hash || ""));
+    return { linked: linked, remoteHint: remoteHint };
+  }
+  function decideOnboardKind(input) {
+    if (input.standalone) return "none";
+    if (input.linked) return "linked";
+    if (input.remoteHint && !input.dismissed && !input.installed) return "hint";
+    return "none";
+  }
+  function onboardBannerTitle(kind, mobile) {
+    if (kind === "linked") return "Device linked";
+    return mobile ? "Install AFK Pilot" : "Use it on your phone";
+  }
+  function onboardCloseLabel(kind) {
+    return kind === "linked" ? "Dismiss device linked message" : "Dismiss install suggestion";
+  }
+  function persistStandaloneInstall() {
+    if (isStandaloneDisplay({
+      standalone: window.matchMedia && matchMedia("(display-mode: standalone)").matches,
+      iosStandalone: !!navigator.standalone,
+    })) onboardWrite(ONBOARD_INSTALLED_KEY, "1");
+  }
+  persistStandaloneInstall();
+  function maybeOnboard() {
+    var consumed = consumeOnboardParams(
+      location.search,
+      location.pathname,
+      location.hash,
+      function (state, title, url) { history.replaceState(state, title, url); }
+    );
+    persistStandaloneInstall();
+    var kind = decideOnboardKind({
+      linked: consumed.linked,
+      remoteHint: consumed.remoteHint,
+      standalone: isStandaloneDisplay({
+        standalone: window.matchMedia && matchMedia("(display-mode: standalone)").matches,
+        iosStandalone: !!navigator.standalone,
+      }),
+      dismissed: onboardRead(ONBOARD_DISMISS_KEY) === "1",
+      installed: onboardRead(ONBOARD_INSTALLED_KEY) === "1",
+    });
+    if (kind === "none") return;
     var ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
     var mobile = ios || /Android/i.test(navigator.userAgent);
     var banner = document.createElement("section");
     banner.id = "link-onboarding";
+    if (kind === "hint") banner.className = "is-hint";
     banner.setAttribute("aria-labelledby", "link-onboarding-title");
     banner.innerHTML =
-      '<button class="link-onboarding-close" type="button" aria-label="Dismiss device linked message" title="Dismiss">&times;</button>' +
+      '<button class="link-onboarding-close" type="button" aria-label="' + onboardCloseLabel(kind) + '" title="Dismiss">&times;</button>' +
       '<div class="link-onboarding-copy">' +
-      '<p id="link-onboarding-title" class="link-onboarding-title">Device linked</p>' +
+      '<p id="link-onboarding-title" class="link-onboarding-title">' + onboardBannerTitle(kind, mobile) + "</p>" +
       (mobile
         ? '<p>Add AFK Pilot to your home screen and this chat stays one tap away — work 100% remotely, right from your phone.</p>'
         : '<p>You can also open <b>afkpilot.com</b> on your phone to work 100% remotely.</p>') +
       "</div>";
     var actions = document.createElement("div");
     actions.className = "link-onboarding-actions";
-    function dismissOnboarding() { banner.remove(); }
+    function dismissOnboarding() {
+      onboardWrite(ONBOARD_DISMISS_KEY, "1");
+      banner.remove();
+    }
     banner.querySelector(".link-onboarding-close").onclick = dismissOnboarding;
     if (mobile && (installPrompt || ios)) {
       var install = document.createElement("button");
@@ -2743,6 +2800,11 @@ window.grokRemoteClient = true;
           installPrompt = null;
           dismissOnboarding();
           p.prompt();
+          if (p.userChoice) {
+            p.userChoice.then(function (choice) {
+              if (choice && choice.outcome === "accepted") onboardWrite(ONBOARD_INSTALLED_KEY, "1");
+            });
+          }
         } else {
           // iOS has no install API — swap in the share-sheet steps.
           banner.querySelector(".link-onboarding-copy p:last-child").innerHTML =
@@ -3389,6 +3451,11 @@ body.quota-exceeded #mic-btn { pointer-events: none; opacity: 0.4; }
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16);
   font-size: 14px;
   line-height: 1.45;
+}
+#link-onboarding.is-hint {
+  background: var(--vscode-editorWidget-background);
+  border-color: var(--vscode-editorWidget-border);
+  box-shadow: none;
 }
 .link-onboarding-copy { flex: 1; min-width: 0; }
 #link-onboarding p { margin: 0; }

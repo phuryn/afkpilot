@@ -184,6 +184,7 @@ try {
     true,
     "post-link onboarding must sit at the top of the transcript",
   );
+  assert.match(await mobileOnboarding.innerText(), /Device linked/);
   assert.match(await mobileOnboarding.innerText(), /100% remotely/);
   assert.equal(await mobileOnboarding.getByText(/Copy "afkpilot\.com"/).count(), 0, "mobile needs no domain copy action");
   assert.equal(await page.locator(".auth-overlay:visible").count(), 0, "onboarding must not reuse the blocking overlay");
@@ -207,6 +208,7 @@ try {
   await waitForNextClientReady(previousClientReadyCount);
   const iosOnboarding = iosPage.locator("#link-onboarding");
   await iosOnboarding.waitFor({ state: "visible" });
+  assert.match(await iosOnboarding.innerText(), /Device linked/);
   await iosOnboarding.getByRole("button", { name: "Install app" }).click();
   assert.match(await iosOnboarding.innerText(), /Tap Share, then "Add to Home Screen"/);
   assert.match(await iosOnboarding.innerText(), /100% remotely/);
@@ -488,6 +490,7 @@ try {
   await waitForNextClientReady(previousClientReadyCount);
   const desktopOnboarding = dpage.locator("#link-onboarding");
   await desktopOnboarding.waitFor({ state: "visible" });
+  assert.match(await desktopOnboarding.innerText(), /Device linked/);
   assert.match(await desktopOnboarding.innerText(), /You can also open afkpilot\.com on your phone/);
   assert.match(await desktopOnboarding.innerText(), /100% remotely/);
   const domainCopy = desktopOnboarding.locator(".link-onboarding-copy-btn");
@@ -505,7 +508,7 @@ try {
   // The extension's "Continue remotely" URL starts at / because it does not
   // know the device id. A one-device account must skip the picker without even
   // flashing it, preserve the hint through the redirect, and let /chat consume
-  // that hint by showing this same banner.
+  // that hint as an install nudge — never as a claim that a device just linked.
   const single = await browser.newContext({ ...devices["Pixel 5"] });
   const singlePage = await single.newPage();
   await singlePage.route("**/api/devices", async (route) => {
@@ -533,6 +536,12 @@ try {
   await singlePage.waitForURL((url) => url.pathname === "/chat" && url.searchParams.get("device") === deviceId);
   await waitForNextClientReady(previousClientReadyCount);
   await singlePage.locator("#link-onboarding").waitFor({ state: "visible" });
+  assert.doesNotMatch(
+    await singlePage.locator("#link-onboarding").innerText(),
+    /Device linked/,
+    "remoteHint must not claim a device was just linked",
+  );
+  assert.match(await singlePage.locator("#link-onboarding").innerText(), /Install AFK Pilot/);
   assert.equal(
     new URL(singlePage.url()).searchParams.has("remoteHint"),
     false,
@@ -561,6 +570,7 @@ try {
   await linkedForwardPage.waitForURL((url) => url.pathname === "/chat" && url.searchParams.get("device") === deviceId);
   await waitForNextClientReady(previousClientReadyCount);
   await linkedForwardPage.locator("#link-onboarding").waitFor({ state: "visible" });
+  assert.match(await linkedForwardPage.locator("#link-onboarding").innerText(), /Device linked/);
   assert.equal(
     new URL(linkedForwardPage.url()).searchParams.has("linked"),
     false,
@@ -657,6 +667,11 @@ try {
   ]);
   await waitForNextClientReady(previousClientReadyCount);
   await selectedPage.locator("#link-onboarding").waitFor({ state: "visible" });
+  assert.doesNotMatch(
+    await selectedPage.locator("#link-onboarding").innerText(),
+    /Device linked/,
+    "a picker-carried remoteHint must not claim a device was just linked",
+  );
   assert.equal(
     new URL(selectedPage.url()).searchParams.get("device"),
     deviceId,
@@ -669,6 +684,79 @@ try {
   );
   await multiple.close();
   log("remoteHint=1 stays on the multi-device picker until selection, then opens chat onboarding");
+
+  // A dismissed install nudge stays dismissed on this device. A genuine new
+  // linked=1 may still say so — that is a real event.
+  const persist = await browser.newContext({ ...devices["Pixel 5"] });
+  const persistPage = await persist.newPage();
+  previousClientReadyCount = clientReadyCount;
+  await persistPage.goto(`${BASE}/chat?device=${encodeURIComponent(deviceId)}&remoteHint=1`);
+  await waitForNextClientReady(previousClientReadyCount);
+  await persistPage.locator("#link-onboarding").waitFor({ state: "visible" });
+  assert.doesNotMatch(await persistPage.locator("#link-onboarding").innerText(), /Device linked/);
+  await persistPage.locator(".link-onboarding-close").click();
+  assert.equal(await persistPage.locator("#link-onboarding").count(), 0);
+  previousClientReadyCount = clientReadyCount;
+  await persistPage.goto(`${BASE}/chat?device=${encodeURIComponent(deviceId)}&remoteHint=1`);
+  await waitForNextClientReady(previousClientReadyCount);
+  assert.equal(
+    await persistPage.locator("#link-onboarding").count(),
+    0,
+    "a dismissed remoteHint nudge must not return on the same device",
+  );
+  assert.equal(new URL(persistPage.url()).searchParams.has("remoteHint"), false, "remoteHint=1 must still be stripped");
+  previousClientReadyCount = clientReadyCount;
+  await persistPage.goto(`${BASE}/chat?device=${encodeURIComponent(deviceId)}&linked=1`);
+  await waitForNextClientReady(previousClientReadyCount);
+  await persistPage.locator("#link-onboarding").waitFor({ state: "visible" });
+  assert.match(await persistPage.locator("#link-onboarding").innerText(), /Device linked/);
+  assert.equal(new URL(persistPage.url()).searchParams.has("linked"), false, "linked=1 must still be stripped");
+  await persist.close();
+  log("a dismissed remoteHint stays dismissed; a later linked=1 may still show");
+
+  // Standalone (installed app) shows nothing, even for linked=1. Recording
+  // that install also keeps the remoteHint nudge off later browser visits.
+  const stand = await browser.newContext({ ...devices["Pixel 5"] });
+  await stand.addInitScript(() => {
+    const orig = window.matchMedia.bind(window);
+    window.matchMedia = (query) => {
+      if (String(query).includes("display-mode: standalone")) {
+        return {
+          matches: true,
+          media: query,
+          addEventListener() {},
+          removeEventListener() {},
+          addListener() {},
+          removeListener() {},
+          dispatchEvent() { return false; },
+          onchange: null,
+        };
+      }
+      return orig(query);
+    };
+    Object.defineProperty(navigator, "standalone", { configurable: true, get: () => true });
+  });
+  const standPage = await stand.newPage();
+  previousClientReadyCount = clientReadyCount;
+  await standPage.goto(`${BASE}/chat?device=${encodeURIComponent(deviceId)}&linked=1`);
+  await waitForNextClientReady(previousClientReadyCount);
+  assert.equal(await standPage.locator("#link-onboarding").count(), 0, "standalone display mode must show no onboard banner");
+  assert.equal(new URL(standPage.url()).searchParams.has("linked"), false, "linked=1 must still be stripped in standalone");
+  const installedStorage = await stand.storageState();
+  await stand.close();
+  const afterInstall = await browser.newContext({ ...devices["Pixel 5"], storageState: installedStorage });
+  const afterPage = await afterInstall.newPage();
+  previousClientReadyCount = clientReadyCount;
+  await afterPage.goto(`${BASE}/chat?device=${encodeURIComponent(deviceId)}&remoteHint=1`);
+  await waitForNextClientReady(previousClientReadyCount);
+  assert.equal(
+    await afterPage.locator("#link-onboarding").count(),
+    0,
+    "a previously installed app must not get the remoteHint nudge in the browser",
+  );
+  assert.equal(new URL(afterPage.url()).searchParams.has("remoteHint"), false);
+  await afterInstall.close();
+  log("standalone shows nothing, and a previous install keeps the hint off");
 
   await dpage.evaluate(() => {
     const style = document.createElement("style");
