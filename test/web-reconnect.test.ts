@@ -305,3 +305,254 @@ describe("resume probe", () => {
     expect(connectSrc).toContain("onTransportProbeReply()");
   });
 });
+
+const veilFns = html.slice(
+  html.indexOf("function showReconnecting()"),
+  html.indexOf("function readyMessage()"),
+);
+const finishRestoreSrc = html.slice(
+  html.indexOf("function finishIdentityRestore()"),
+  html.indexOf("function abandonIdentityRestore("),
+);
+const abandonRestoreSrc = html.slice(
+  html.indexOf("function abandonIdentityRestore("),
+  html.indexOf("function voiceCaptureActive()"),
+);
+const beginRestoreSrc = html.slice(
+  html.indexOf("function beginIdentityRestore()"),
+  html.indexOf("function isIdentityRestoreMessage("),
+);
+const showHostTooOldSrc = html.slice(
+  html.indexOf("function showHostTooOld(version)"),
+  html.indexOf("var firstConnect = true"),
+);
+const noticeSrc = html.slice(
+  html.indexOf("function notice(html)"),
+  html.indexOf("function gateSignIn()"),
+);
+const persistOfflineSrc = html.slice(
+  html.indexOf("function handlePersistentDeviceOffline"),
+  html.indexOf("function beginDeviceOfflineGrace"),
+);
+
+type VeilEl = {
+  hidden: boolean;
+  className: string;
+  innerHTML: string;
+  classList: { add: (c: string) => void; remove: (c: string) => void; contains: (c: string) => boolean };
+  querySelector: (sel: string) => VeilEl | null;
+  appendChild: (child: VeilEl) => VeilEl;
+};
+
+function fakeEl(): VeilEl {
+  const classes = new Set<string>();
+  const el: VeilEl = {
+    hidden: false,
+    className: "",
+    innerHTML: "",
+    classList: {
+      add: (c) => { classes.add(c); },
+      remove: (c) => { classes.delete(c); },
+      contains: (c) => classes.has(c),
+    },
+    querySelector: (sel) => sel === ".panel" ? panel : null,
+    appendChild: (child) => child,
+  };
+  const panel = {
+    hidden: false,
+    className: "",
+    innerHTML: "",
+    classList: el.classList,
+    querySelector: () => null,
+    appendChild: (child: VeilEl) => child,
+  } as VeilEl;
+  return el;
+}
+
+function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } | null }) {
+  const remembered = { value: opts?.remembered === undefined ? null : opts.remembered };
+  const bodyClasses = new Set<string>();
+  const body = {
+    classList: {
+      add: (c: string) => { bodyClasses.add(c); },
+      remove: (c: string) => { bodyClasses.delete(c); },
+      toggle: () => undefined,
+      contains: (c: string) => bodyClasses.has(c),
+    },
+    appendChild: (_child: VeilEl) => _child,
+  };
+  const nodes: Record<string, { textContent: string; hidden: boolean; querySelector: () => null }> = {
+    messages: { textContent: "", hidden: false, querySelector: () => null },
+    "host-too-old-copy": { textContent: "", hidden: false, querySelector: () => null },
+    "host-too-old": { textContent: "", hidden: true, querySelector: () => null },
+    app: { textContent: "", hidden: false, querySelector: () => null },
+  };
+
+  const runtime = new Function(
+    "WebSocket",
+    "document",
+    "remembered",
+    `
+      var hostBlocked = false;
+      var overlayEl = null;
+      var overlayHideTimer = null;
+      var identityTarget = null;
+      var identityRestoreComplete = false;
+      var identityTimer = null;
+      var identityFailTimer = null;
+      var identityRepoConfirmed = false;
+      var identitySessionConfirmed = false;
+      var identityEverCompleted = false;
+      var ws = { readyState: WebSocket.OPEN };
+      var deviceOffline = false;
+      var offlineHold = null;
+      function overlay() {
+        if (!overlayEl) {
+          overlayEl = document.createElement("div");
+          overlayEl.className = "auth-overlay";
+          overlayEl.innerHTML = '<div class="panel"></div>';
+          document.body.appendChild(overlayEl);
+        }
+        overlayEl.hidden = false;
+        return overlayEl.querySelector(".panel");
+      }
+      function hideOverlay() { if (overlayEl) overlayEl.hidden = true; }
+      function forgetUnbouncedLiveOutbound() {}
+      function setVoiceTransportReady() {}
+      function recoverAuthoredFromLiveOutbound() {}
+      function reportOutboxFailure() {}
+      function rememberedIdentity() { return remembered.value; }
+      function clearIdentityFailTimer() {
+        if (identityFailTimer) { clearTimeout(identityFailTimer); identityFailTimer = null; }
+      }
+      function armIdentityFailTimer() {}
+      function identityRestoreTimeoutMs() { return 15000; }
+      function reportOutboxDelay() {}
+      ${showHostTooOldSrc}
+      ${veilFns}
+      ${finishRestoreSrc}
+      ${abandonRestoreSrc}
+      ${beginRestoreSrc}
+      return {
+        showReconnecting: showReconnecting,
+        settleReconnectVeil: settleReconnectVeil,
+        finishIdentityRestore: finishIdentityRestore,
+        abandonIdentityRestore: abandonIdentityRestore,
+        beginIdentityRestore: beginIdentityRestore,
+        showHostTooOld: showHostTooOld,
+        setHostBlocked: function (v) { hostBlocked = v; },
+        veilUp: function () {
+          return !!(overlayEl && !overlayEl.hidden && overlayEl.classList.contains("reconnecting"));
+        },
+      };
+    `,
+  )(WS, {
+    body,
+    createElement: fakeEl,
+    getElementById: (id: string) => nodes[id] || null,
+  }, remembered) as {
+    showReconnecting: () => void;
+    settleReconnectVeil: () => void;
+    finishIdentityRestore: () => void;
+    abandonIdentityRestore: (reason: string) => void;
+    beginIdentityRestore: () => void;
+    showHostTooOld: (version: string) => void;
+    setHostBlocked: (value: boolean) => void;
+    veilUp: () => boolean;
+  };
+
+  return runtime;
+}
+
+describe("reconnect veil", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("an inbound frame during an in-progress restore does not lift the veil", () => {
+    vi.useFakeTimers();
+    const rt = makeVeilRuntime({ remembered: { id: "sess-1", repoCwd: "/repo" } });
+    rt.showReconnecting();
+    rt.beginIdentityRestore();
+    expect(rt.veilUp()).toBe(true);
+
+    rt.settleReconnectVeil();
+    vi.advanceTimersByTime(450);
+    expect(rt.veilUp()).toBe(true);
+  });
+
+  it("lifts the veil when the restore completes", () => {
+    vi.useFakeTimers();
+    const rt = makeVeilRuntime({ remembered: { id: "sess-1", repoCwd: "/repo" } });
+    rt.showReconnecting();
+    rt.beginIdentityRestore();
+    rt.settleReconnectVeil();
+    vi.advanceTimersByTime(450);
+    expect(rt.veilUp()).toBe(true);
+
+    rt.finishIdentityRestore();
+    expect(rt.veilUp()).toBe(true);
+    vi.advanceTimersByTime(449);
+    expect(rt.veilUp()).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(rt.veilUp()).toBe(false);
+  });
+
+  it("lifts the veil when the restore is abandoned", () => {
+    vi.useFakeTimers();
+    const rt = makeVeilRuntime({ remembered: { id: "sess-1", repoCwd: "/repo" } });
+    rt.showReconnecting();
+    rt.beginIdentityRestore();
+    rt.settleReconnectVeil();
+    vi.advanceTimersByTime(450);
+    expect(rt.veilUp()).toBe(true);
+
+    rt.abandonIdentityRestore("the conversation could not be restored.");
+    vi.advanceTimersByTime(450);
+    expect(rt.veilUp()).toBe(false);
+  });
+
+  it("a reconnect with nothing to restore still lifts the veil", () => {
+    vi.useFakeTimers();
+    const rt = makeVeilRuntime({ remembered: null });
+    rt.showReconnecting();
+    expect(rt.veilUp()).toBe(true);
+
+    rt.beginIdentityRestore();
+    expect(rt.veilUp()).toBe(true);
+    vi.advanceTimersByTime(450);
+    expect(rt.veilUp()).toBe(false);
+  });
+
+  it("hostBlocked still suppresses the veil", () => {
+    vi.useFakeTimers();
+    const blocked = makeVeilRuntime({ remembered: null });
+    blocked.setHostBlocked(true);
+    blocked.showReconnecting();
+    expect(blocked.veilUp()).toBe(false);
+
+    const rt = makeVeilRuntime({ remembered: { id: "sess-1", repoCwd: "/repo" } });
+    rt.showReconnecting();
+    rt.beginIdentityRestore();
+    expect(rt.veilUp()).toBe(true);
+    rt.showHostTooOld("2.0.4");
+    expect(rt.veilUp()).toBe(false);
+    vi.advanceTimersByTime(450);
+    expect(rt.veilUp()).toBe(false);
+  });
+
+  it("keys hide on restore complete, not on the inbound-frame call site", () => {
+    expect(connectSrc).toContain("settleReconnectVeil()");
+    expect(veilFns).toContain("identityTarget && !identityRestoreComplete");
+    expect(finishRestoreSrc).toContain("settleReconnectVeil()");
+    expect(finishRestoreSrc.indexOf("identityTarget = null"))
+      .toBeLessThan(finishRestoreSrc.indexOf("settleReconnectVeil()"));
+    expect(finishRestoreSrc.indexOf("identityRestoreComplete = true"))
+      .toBeLessThan(finishRestoreSrc.indexOf("settleReconnectVeil()"));
+    expect(abandonRestoreSrc).toContain("finishIdentityRestore()");
+    expect(beginRestoreSrc).toContain("finishIdentityRestore()");
+    expect(showHostTooOldSrc).toContain('classList.remove("reconnecting")');
+    expect(noticeSrc).toContain('classList.remove("reconnecting")');
+    expect(persistOfflineSrc).toContain('classList.remove("reconnecting")');
+  });
+});

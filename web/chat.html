@@ -1771,6 +1771,7 @@ window.grokRemoteClient = true;
   // ClerkJS keeps the __session cookie fresh on our origin; the same-origin
   // upgrade carries it automatically. NEVER put the session token in the URL.
   var overlayEl = null;
+  var overlayHideTimer = null;
   function overlay() {
     if (!overlayEl) {
       overlayEl = document.createElement("div");
@@ -1782,9 +1783,22 @@ window.grokRemoteClient = true;
     return overlayEl.querySelector(".panel");
   }
   function hideOverlay() { if (overlayEl) overlayEl.hidden = true; }
-  function notice(html) { overlay().innerHTML = html; }
+  function notice(html) {
+    var panel = overlay();
+    // Terminal closes (4003/4005) reuse this overlay. Drop veil styling and
+    // cancel a pending hide so "Reconnecting…" cannot cover or dismiss the
+    // notice, and so the link stays clickable (reconnecting is pointer-events
+    // none).
+    clearTimeout(overlayHideTimer);
+    overlayHideTimer = null;
+    overlayEl.classList.remove("reconnecting");
+    panel.innerHTML = html;
+  }
   function gateSignIn() {
     var panel = overlay();
+    clearTimeout(overlayHideTimer);
+    overlayHideTimer = null;
+    overlayEl.classList.remove("reconnecting");
     panel.innerHTML = "";
     return window.grokAuth.requireSignIn(panel).then(hideOverlay);
   }
@@ -1801,6 +1815,15 @@ window.grokRemoteClient = true;
     identityTarget = null;
     document.body.classList.remove("identity-restoring");
     clearIdentityFailTimer();
+    // The reconnect overlay sits on top of this notice (same z-index, later
+    // in the DOM). Drop it so "update your extension" stays readable; a
+    // dropped socket is expected here and must not veil the instruction.
+    clearTimeout(overlayHideTimer);
+    overlayHideTimer = null;
+    if (overlayEl && overlayEl.classList.contains("reconnecting")) {
+      overlayEl.classList.remove("reconnecting");
+      hideOverlay();
+    }
     var copy = document.getElementById("host-too-old-copy");
     if (copy) {
       copy.textContent = "Update the Grok Build extension on your computer to use remote control — this device runs v" + String(version) + ".";
@@ -1887,20 +1910,27 @@ window.grokRemoteClient = true;
   }
 
   // Reconnect veil: old content stays visible under a light overlay while the
-  // snapshot replays; hidden once the replay stream settles.
-  var overlayHideTimer = null;
+  // previous conversation is restored. Hidden when identity restore finishes
+  // or is abandoned — not on the first inbound frame, which is often a boot
+  // snapshot and would flash chat.js's "Starting" welcome through the gap.
   function showReconnecting() {
     // While the update-your-extension notice is up, the veil would cover the
     // one instruction the user needs — and a dropped socket is EXPECTED there
     // (updating the extension restarts the host). Keep the notice on top; the
     // reconnect still happens underneath and self-heals on the new snapshot.
     if (hostBlocked) return;
+    clearTimeout(overlayHideTimer);
+    overlayHideTimer = null;
     var panel = overlay();
     panel.innerHTML = '<p class="muted">Reconnecting…</p>';
     overlayEl.classList.add("reconnecting");
   }
   function settleReconnectVeil() {
+    if (hostBlocked) return;
     if (!overlayEl || !overlayEl.classList.contains("reconnecting")) return;
+    // Restore is the "previous state is back" signal. An arbitrary inbound
+    // frame must not start the hide while that is still in flight.
+    if (identityTarget && !identityRestoreComplete) return;
     clearTimeout(overlayHideTimer);
     overlayHideTimer = setTimeout(function () {
       overlayEl.classList.remove("reconnecting");
@@ -2135,6 +2165,9 @@ window.grokRemoteClient = true;
     setVoiceTransportReady(
       !!ws && ws.readyState === WebSocket.OPEN && !deviceOffline && !offlineHold
     );
+    // Abandon reaches here too. Target is already cleared so the in-flight
+    // guard above does not keep the veil up after the client has settled.
+    settleReconnectVeil();
   }
 
   function abandonIdentityRestore(outboxReason) {
@@ -2192,8 +2225,15 @@ window.grokRemoteClient = true;
     // The offline notice paints into the transcript — the restore veil must
     // not hide it. The flash the veil exists for only happens device-online;
     // reconnect re-runs beginIdentityRestore and re-engages it if the
-    // transcript is still empty.
+    // transcript is still empty. Drop the reconnect overlay for the same
+    // reason: it would cover the in-transcript offline copy.
     document.body.classList.remove("identity-restoring");
+    if (overlayEl && overlayEl.classList.contains("reconnecting")) {
+      clearTimeout(overlayHideTimer);
+      overlayHideTimer = null;
+      overlayEl.classList.remove("reconnecting");
+      hideOverlay();
+    }
     clearIdentityFailTimer();
     setVoiceTransportReady(false);
     // Re-entry exists so a host that returns during grace can confirm
