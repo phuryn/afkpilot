@@ -1937,7 +1937,6 @@ window.grokRemoteClient = true;
   var resyncScrollTop = null;
   var readerScrollTop = null;
   var readerAwayFromBottom = false;
-  var restoreTimer = null;
   // Feeds the TEMPORARY ?scrolldebug=1 panel and is inert without it. The
   // panel could only see scrollTop writes, which cannot show why a restore
   // decided to do nothing. Goes when the probe goes.
@@ -2888,8 +2887,6 @@ window.grokRemoteClient = true;
   function applyRestoreScroll() {
     var messagesEl = document.getElementById("messages");
     if (!messagesEl) return;
-    clearTimeout(restoreTimer);
-    restoreTimer = null;
     if (finishCachedViewScroll()) {
       resyncScrollTop = null;
       return;
@@ -3460,16 +3457,12 @@ window.grokRemoteClient = true;
       // "replay just ended" half of that handshake. Not a timer.
       noteIdentityReplay(data);
       applyRememberedHostReturnIfIdle();
-      if (resyncScrollTop !== null) {
-        clearTimeout(restoreTimer);
-        restoreTimer = setTimeout(function () {
-          var m = document.getElementById("messages");
-          // The restore fires the scroll listener, so chat.js re-learns the
-          // reader is off the bottom and stops sticking new chunks there.
-          if (m) m.scrollTop = resyncScrollTop;
-          resyncScrollTop = null;
-        }, 250);
-      }
+      // No timer re-applies the offset here. A 250ms one used to, re-armed on
+      // every frame, and it fired mid-replay: it wrote the offset into a
+      // half-rebuilt transcript, where it clamped to the top, and consumed
+      // the value so the real restore at replay-end had nothing to put back.
+      // Replay-end is a signal the host actually sends; that is what drives
+      // the restore now.
     });
     socket.addEventListener("close", function (e) {
       if (ws !== socket) return;
