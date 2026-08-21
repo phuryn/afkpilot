@@ -371,6 +371,7 @@ function fakeEl(): VeilEl {
 
 function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } | null; painted?: boolean }) {
   const remembered = { value: opts?.remembered === undefined ? null : opts.remembered };
+  let painted = !!opts?.painted;
   const bodyClasses = new Set<string>();
   const body = {
     classList: {
@@ -386,7 +387,7 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
     messages: {
       textContent: "",
       hidden: false,
-      querySelector: (sel?: string) => (opts?.painted && sel === ".msg" ? msgStub : null),
+      querySelector: (sel?: string) => (painted && sel === ".msg" ? msgStub : null),
     },
     "reconnecting-indicator": { textContent: "Reconnecting…", hidden: true, querySelector: () => null },
     "host-too-old-copy": { textContent: "", hidden: false, querySelector: () => null },
@@ -442,6 +443,7 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
       ${beginRestoreSrc}
       return {
         showReconnecting: showReconnecting,
+        syncReconnectPresentation: syncReconnectPresentation,
         settleReconnectVeil: settleReconnectVeil,
         finishIdentityRestore: finishIdentityRestore,
         abandonIdentityRestore: abandonIdentityRestore,
@@ -467,6 +469,7 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
     getElementById: (id: string) => nodes[id] || null,
   }, remembered) as {
     showReconnecting: () => void;
+    syncReconnectPresentation: () => void;
     settleReconnectVeil: () => void;
     finishIdentityRestore: () => void;
     abandonIdentityRestore: (reason: string) => void;
@@ -479,7 +482,10 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
     indicatorUp: () => boolean;
   };
 
-  return runtime;
+  return {
+    ...runtime,
+    setPainted: (value: boolean) => { painted = value; },
+  };
 }
 
 describe("reconnect veil", () => {
@@ -629,6 +635,11 @@ describe("reconnect veil", () => {
     expect(rt.veilUp()).toBe(false);
     expect(rt.overlayVisible()).toBe(false);
     expect(rt.indicatorUp()).toBe(true);
+
+    rt.beginIdentityRestore();
+    rt.syncReconnectPresentation();
+    expect(rt.veilUp()).toBe(false);
+    expect(rt.indicatorUp()).toBe(true);
   });
 
   it("an empty transcript still takes today's veil", () => {
@@ -637,6 +648,73 @@ describe("reconnect veil", () => {
     rt.showReconnecting();
     expect(rt.veilUp()).toBe(true);
     expect(rt.indicatorUp()).toBe(false);
+  });
+
+  it("a painted reconnect that then empties takes the overlay", () => {
+    vi.useFakeTimers();
+    const rt = makeVeilRuntime({
+      remembered: { id: "sess-1", repoCwd: "/repo" },
+      painted: true,
+    });
+    rt.showReconnecting();
+    rt.beginIdentityRestore();
+    expect(rt.veilUp()).toBe(false);
+    expect(rt.indicatorUp()).toBe(true);
+
+    rt.setPainted(false);
+    rt.syncReconnectPresentation();
+    expect(rt.veilUp()).toBe(true);
+    expect(rt.indicatorUp()).toBe(false);
+    expect(rt.overlayVisible()).toBe(true);
+
+    rt.finishIdentityRestore();
+    expect(rt.veilUp()).toBe(true);
+    vi.advanceTimersByTime(450);
+    expect(rt.veilUp()).toBe(false);
+    expect(rt.indicatorUp()).toBe(false);
+  });
+
+  it("an empty reconnect does not flash the indicator when content arrives", () => {
+    vi.useFakeTimers();
+    const rt = makeVeilRuntime({ remembered: { id: "sess-1", repoCwd: "/repo" } });
+    rt.showReconnecting();
+    rt.beginIdentityRestore();
+    expect(rt.veilUp()).toBe(true);
+    expect(rt.indicatorUp()).toBe(false);
+
+    rt.setPainted(true);
+    rt.syncReconnectPresentation();
+    expect(rt.veilUp()).toBe(true);
+    expect(rt.indicatorUp()).toBe(false);
+
+    rt.finishIdentityRestore();
+    vi.advanceTimersByTime(449);
+    expect(rt.veilUp()).toBe(true);
+    expect(rt.indicatorUp()).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(rt.veilUp()).toBe(false);
+    expect(rt.indicatorUp()).toBe(false);
+  });
+
+  it("a terminal notice still wins after the overlay takes over an emptied transcript", () => {
+    vi.useFakeTimers();
+    const rt = makeVeilRuntime({
+      remembered: { id: "sess-1", repoCwd: "/repo" },
+      painted: true,
+    });
+    rt.showReconnecting();
+    rt.setPainted(false);
+    rt.syncReconnectPresentation();
+    expect(rt.veilUp()).toBe(true);
+    expect(rt.indicatorUp()).toBe(false);
+
+    rt.notice("Device not found.");
+    expect(rt.veilUp()).toBe(false);
+    expect(rt.indicatorUp()).toBe(false);
+    expect(rt.overlayVisible()).toBe(true);
+    vi.advanceTimersByTime(450);
+    expect(rt.overlayVisible()).toBe(true);
+    expect(rt.veilUp()).toBe(false);
   });
 
   it("the indicator clears on restore complete, abandon, and notice", () => {
@@ -716,5 +794,7 @@ describe("reconnect veil", () => {
     expect(persistOfflineSrc).toContain("clearReconnectPresentation(true)");
     expect(veilFns).toContain("messagesEl.querySelector(\".msg\")");
     expect(veilFns).toContain("clearReconnectPresentation(true)");
+    expect(veilFns).toContain("syncReconnectPresentation()");
+    expect(veilFns).toContain("new MutationObserver");
   });
 });

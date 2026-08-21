@@ -1916,18 +1916,42 @@ window.grokRemoteClient = true;
   function transcriptHasConversation() {
     // Same emptiness test beginIdentityRestore uses: the container always
     // holds the (hidden) welcome node, so only a real .msg counts as content.
+    // Pending-clear nodes still match .msg until the renderer actually
+    // removes them — they count as content for this decision too.
     var messagesEl = document.getElementById("messages");
     return !!(messagesEl && messagesEl.querySelector(".msg"));
   }
+  function reconnectVeilIsShowing() {
+    return !!(overlayEl && !overlayEl.hidden && overlayEl.classList.contains("reconnecting"));
+  }
   function reconnectPresentationIsUp() {
-    if (overlayEl && overlayEl.classList.contains("reconnecting")) return true;
+    if (reconnectVeilIsShowing()) return true;
     var el = document.getElementById("reconnecting-indicator");
     return !!(el && !el.hidden);
+  }
+  var reconnectTranscriptObserver = null;
+  function stopReconnectTranscriptWatch() {
+    if (!reconnectTranscriptObserver) return;
+    reconnectTranscriptObserver.disconnect();
+    reconnectTranscriptObserver = null;
+  }
+  function watchReconnectTranscript() {
+    if (reconnectTranscriptObserver) return;
+    if (typeof MutationObserver !== "function") return;
+    var messagesEl = document.getElementById("messages");
+    // A real element. Stubs (and a missing node) have no nodeType, and
+    // observe() would throw.
+    if (!messagesEl || messagesEl.nodeType !== 1) return;
+    reconnectTranscriptObserver = new MutationObserver(function () {
+      syncReconnectPresentation();
+    });
+    reconnectTranscriptObserver.observe(messagesEl, { childList: true, subtree: true });
   }
   // hideVeil: also hide the overlay when it was the reconnecting veil.
   // notice() / gateSignIn() pass false — they reuse the overlay for a
   // terminal panel and must not dismiss it.
   function clearReconnectPresentation(hideVeil) {
+    stopReconnectTranscriptWatch();
     hideReconnectIndicator();
     if (!overlayEl) return;
     var wasVeil = overlayEl.classList.contains("reconnecting");
@@ -1935,14 +1959,40 @@ window.grokRemoteClient = true;
     if (hideVeil && wasVeil) hideOverlay();
   }
 
-  // Reconnect presentation: a dropped socket is real (iOS kills backgrounded
-  // ones), but the full-screen veil is only for an empty transcript — there
-  // is nothing to read behind it. A painted conversation keeps its content
-  // fully legible and gets a small "Reconnecting…" status instead, in the
-  // spirit of the Grokking / Clauding activity row. Hidden when identity
-  // restore finishes or is abandoned — not on the first inbound frame,
-  // which is often a boot snapshot and would flash chat.js's "Starting"
-  // welcome through the gap.
+  // Pick the presentation for the CURRENT transcript. Overlay is sticky
+  // once shown: falling back to the indicator when content arrives would
+  // flash a status line the overlay is about to give way to anyway.
+  function applyReconnectPresentation() {
+    if (hostBlocked) return;
+    if (!transcriptHasConversation()) {
+      hideReconnectIndicator();
+      var wasVeil = reconnectVeilIsShowing();
+      var panel = overlay();
+      if (!wasVeil) panel.innerHTML = '<p class="muted">Reconnecting…</p>';
+      overlayEl.classList.add("reconnecting");
+      return;
+    }
+    if (reconnectVeilIsShowing()) return;
+    var el = document.getElementById("reconnecting-indicator");
+    if (el) el.hidden = false;
+  }
+  // In-flight re-eval. Does not cancel a scheduled dismiss — calling
+  // showReconnecting from the observer would restart the hide on every
+  // mutation, pinning the presentation for the whole replay.
+  function syncReconnectPresentation() {
+    if (hostBlocked) return;
+    if (!reconnectPresentationIsUp()) return;
+    if (overlayHideTimer) return;
+    applyReconnectPresentation();
+  }
+
+  // Reconnect presentation follows the transcript, not a one-shot at start.
+  // Empty → overlay (covers a transcript with nothing to read). Painted →
+  // small "Reconnecting…" status, like Grokking / Clauding. Watched while
+  // the presentation is up so an emptying mid-reconnect upgrades to the
+  // overlay. Hidden when identity restore finishes or is abandoned — not
+  // on the first inbound frame, which is often a boot snapshot and would
+  // flash chat.js's "Starting" welcome through the gap.
   function showReconnecting() {
     // While the update-your-extension notice is up, either presentation
     // would cover the one instruction the user needs — and a dropped socket
@@ -1952,16 +2002,8 @@ window.grokRemoteClient = true;
     if (hostBlocked) return;
     clearTimeout(overlayHideTimer);
     overlayHideTimer = null;
-    if (transcriptHasConversation()) {
-      clearReconnectPresentation(true);
-      var el = document.getElementById("reconnecting-indicator");
-      if (el) el.hidden = false;
-      return;
-    }
-    hideReconnectIndicator();
-    var panel = overlay();
-    panel.innerHTML = '<p class="muted">Reconnecting…</p>';
-    overlayEl.classList.add("reconnecting");
+    applyReconnectPresentation();
+    watchReconnectTranscript();
   }
   function settleReconnectVeil() {
     if (hostBlocked) return;
@@ -3515,8 +3557,9 @@ body.quota-exceeded #mic-btn { pointer-events: none; opacity: 0.4; }
 }
 /* Reconnect: a light veil over the old content while the snapshot replays
    under it — no visible clear/rebuild, no jump. Non-blocking on purpose.
-   Used only when the transcript is empty; a painted conversation uses
-   #reconnecting-indicator instead. */
+   Shown while the transcript has no conversation content; a painted
+   conversation uses #reconnecting-indicator instead. Follows the
+   transcript for the whole reconnect, not only at the start. */
 .auth-overlay.reconnecting {
   background: rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(2px);
