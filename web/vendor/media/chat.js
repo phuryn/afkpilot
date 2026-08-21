@@ -6823,6 +6823,9 @@
    *  tell "the conversation finished loading" from "startup finished" without
    *  comparing display strings. */
   function setWelcomeStatus(text, busy) {
+    // body.identity-restoring: the wrapper's "Restoring conversation…" is the
+    // only copy. Call sites already skip a painted-conversation hold.
+    if (identityRestoring()) return;
     const ver = $("welcome-version");
     if (!ver) return;
     ver.classList.toggle("welcome-status-busy", !!busy);
@@ -6856,7 +6859,7 @@
     }
     // A host clear already owns these nodes; revealing the empty state on top
     // of them is the reconnect flash. The click path veils *before* that clear.
-    if (welcome && !hasPendingClearNodes()) {
+    if (welcome && !hasPendingClearNodes() && !identityRestoring()) {
       welcome.hidden = false;
       state.welcomeVisible = true;
     }
@@ -6981,8 +6984,9 @@
   let pendingTranscriptClear = false;
   let pendingTranscriptClearRaf = 0;
   // Status resetForNewSession would have stamped immediately. Held while a
-  // conversation is still on screen (pending-clear or not); applied in the
-  // flush if nothing replaces them, dropped if a replacement arrives.
+  // conversation is still on screen (pending-clear or not) or while
+  // body.identity-restoring is set; applied in the flush if nothing replaces
+  // them, dropped if a replacement arrives.
   // "loading" / "no-project" / "starting" match the three special cases at
   // the welcome block.
   let pendingWelcomeReveal = null;
@@ -7022,7 +7026,16 @@
     state.welcomeVisible = true;
   }
 
+  function identityRestoring() {
+    return !!(document.body && document.body.classList.contains("identity-restoring"));
+  }
+
   function welcomeHoldActive() {
+    // Cold load of a remembered conversation: the wrapper owns the wait
+    // ("Restoring conversation…") and the welcome starts visible with no .msg
+    // nodes, so the painted-conversation hold below would not apply. Hide it
+    // in syncIdentityRestoreHold — this predicate only refuses to stamp/reveal.
+    if (identityRestoring()) return true;
     const welcome = $("welcome");
     if (!welcome || !welcome.hidden) return false;
     // A painted conversation, whether already marked pending-clear or not.
@@ -7083,6 +7096,8 @@
     // has not landed yet. Keep the conversation until it does, or until the
     // replay ends empty and calls us again.
     if (state.replaying) return;
+    // Same for the wrapper's restore veil: stay armed until the class lifts.
+    if (identityRestoring()) return;
     pendingTranscriptClear = false;
     const kind = pendingWelcomeReveal;
     pendingWelcomeReveal = null;
@@ -7097,6 +7112,47 @@
     }
     if (chrome) resetSessionChrome();
     revealWelcome();
+  }
+
+  // The relay wrapper sets body.identity-restoring while it restores a
+  // remembered session on a fresh page. Both layers share this document, so
+  // read the class rather than waiting for a host frame.
+  let identityRestoreHeld = false;
+
+  function scheduleEmptyWelcomeFlush() {
+    pendingTranscriptClear = true;
+    pendingWelcomeReveal = welcomeRevealKind();
+    if (pendingTranscriptClearRaf) return;
+    pendingTranscriptClearRaf = requestAnimationFrame(() => {
+      pendingTranscriptClearRaf = 0;
+      flushPendingTranscriptClear();
+    });
+  }
+
+  function syncIdentityRestoreHold() {
+    const now = identityRestoring();
+    if (now) {
+      const welcome = $("welcome");
+      if (welcome) welcome.hidden = true;
+      if (pendingWelcomeReveal == null) pendingWelcomeReveal = welcomeRevealKind();
+      identityRestoreHeld = true;
+      return;
+    }
+    if (!identityRestoreHeld) return;
+    identityRestoreHeld = false;
+    if (welcomeHoldActive()) {
+      pendingWelcomeReveal = null;
+      return;
+    }
+    scheduleEmptyWelcomeFlush();
+  }
+
+  syncIdentityRestoreHold();
+  if (typeof MutationObserver === "function" && document.body) {
+    new MutationObserver(syncIdentityRestoreHold).observe(document.body, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
   }
 
   /** Append replacement content. Drops pending-clear nodes in the same task
@@ -7332,7 +7388,7 @@
     // unless a replay is already putting the conversation back, in which case
     // revealing now is the reconnect flash (a buffered provider-connected
     // confirmation used to unhide on top of the messages still waiting to go).
-    const holdWelcome = state.replaying && welcomeHoldActive();
+    const holdWelcome = identityRestoring() || (state.replaying && welcomeHoldActive());
     if (!holdWelcome) {
       flushPendingTranscriptClear();
       revealWelcome();
