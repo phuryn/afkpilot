@@ -2880,8 +2880,28 @@ window.grokRemoteClient = true;
     document.body.classList.remove("identity-restore-veil");
     document.body.classList.remove("identity-restoring");
   }
+  function restorePaintedScroll() {
+    // A painted reconnect has no veil to lift, so applyRestoreScroll never
+    // runs — but the replay still rebuilt the transcript underneath, which
+    // drops the reader wherever the append left them. Wait for the last
+    // replay to end (a mid-replay scrollHeight would clamp the offset), then
+    // put them back. Nothing to do for a reader who was at the bottom:
+    // resyncScrollTop is only captured when they had scrolled away, and
+    // chat.js's own pin follows the new content for them.
+    if (identityReplayDepth > 0) return;
+    var messagesEl = document.getElementById("messages");
+    if (!messagesEl) return;
+    if (finishCachedViewScroll()) {
+      resyncScrollTop = null;
+      return;
+    }
+    if (resyncScrollTop === null) return;
+    messagesEl.scrollTop = resyncScrollTop;
+    resyncScrollTop = null;
+  }
   function revealRestoredTranscript() {
     if (!document.body.classList.contains("identity-restore-veil")) {
+      restorePaintedScroll();
       document.body.classList.remove("identity-restoring");
       return;
     }
