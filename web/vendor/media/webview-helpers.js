@@ -1495,6 +1495,26 @@
     };
   }
 
+  /**
+   * Cards whose `afterUserMessage` falls in `[startUserCount, endUserCount]`
+   * belong to this hydrated chunk. The rest stay deferred for later prepends.
+   */
+  function partitionHistoryCards(cards, startUserCount, endUserCount) {
+    const inChunk = [];
+    const rest = [];
+    const start = Number(startUserCount);
+    const end = Number(endUserCount);
+    for (const card of Array.isArray(cards) ? cards : []) {
+      const pos = card && card.afterUserMessage;
+      if (typeof pos === "number" && Number.isFinite(pos) && pos >= start && pos <= end) {
+        inChunk.push(card);
+      } else {
+        rest.push(card);
+      }
+    }
+    return { inChunk, rest };
+  }
+
   /** Counters the live replay handlers would have reached after `messages`. */
   function countHistoryReplayCounters(messages) {
     const flat = flattenHistoryMessages(messages);
@@ -1861,7 +1881,7 @@
     return header.join("\n") + (body ? body + "\n" : "");
   }
 
-  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, composerHasSendIntent, explicitVisibleChips, normalizeQueuedSends, queuedSendsText, queuedSendsChips, contextOverheadTokens, nextContextBreakdown, contextBreakdownIsCurrent, createPendingOverlay, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, highlightQueryParts, appendHighlightedText, commandProgramLabel, commandTextPreview, MAX_COMMAND_OUTPUT_CHARS, capCommandOutput, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents, flattenHistoryMessages, splitHistoryWindow, countHistoryReplayCounters };
+  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, composerHasSendIntent, explicitVisibleChips, normalizeQueuedSends, queuedSendsText, queuedSendsChips, contextOverheadTokens, nextContextBreakdown, contextBreakdownIsCurrent, createPendingOverlay, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, highlightQueryParts, appendHighlightedText, commandProgramLabel, commandTextPreview, MAX_COMMAND_OUTPUT_CHARS, capCommandOutput, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents, flattenHistoryMessages, splitHistoryWindow, countHistoryReplayCounters, partitionHistoryCards };
 
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;

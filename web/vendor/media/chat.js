@@ -1052,7 +1052,7 @@
 
   // ---------- markdown ----------
 
-  const { looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, appendHighlightedText, commandProgramLabel, commandTextPreview, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage, composerHasSendIntent, explicitVisibleChips, normalizeQueuedSends, queuedSendsText, queuedSendsChips, contextOverheadTokens, nextContextBreakdown, contextBreakdownIsCurrent, createPendingOverlay, getMentionQuery, applyMentionPick, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents, flattenHistoryMessages, splitHistoryWindow, countHistoryReplayCounters } = globalThis.GrokWebviewHelpers;
+  const { looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, appendHighlightedText, commandProgramLabel, commandTextPreview, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage, composerHasSendIntent, explicitVisibleChips, normalizeQueuedSends, queuedSendsText, queuedSendsChips, contextOverheadTokens, nextContextBreakdown, contextBreakdownIsCurrent, createPendingOverlay, getMentionQuery, applyMentionPick, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents, flattenHistoryMessages, splitHistoryWindow, countHistoryReplayCounters, partitionHistoryCards } = globalThis.GrokWebviewHelpers;
 
   function escapeAttr(s) {
     return String(s == null ? "" : s)
@@ -7396,17 +7396,24 @@
     state.userMsgCount = startUserCount;
     state.interjectionCount = remainCounters.interjectionCount;
     state.historyEventCount = remainCounters.historyEventCount;
-    state.planHistoryQueue = state.historyPrefixPlans.slice();
-    state.permissionHistoryQueue = state.historyPrefixPermissions.slice();
+    const endUserCount = startUserCount + countHistoryReplayCounters(chunk).userMsgCount;
+    const plans = partitionHistoryCards(state.historyPrefixPlans, startUserCount, endUserCount);
+    const perms = partitionHistoryCards(state.historyPrefixPermissions, startUserCount, endUserCount);
+    state.planHistoryQueue = plans.inChunk;
+    state.permissionHistoryQueue = perms.inChunk;
     for (const m of chunk) handleHostMessage(m);
+    flushPlanHistory();
+    flushPermissionHistory();
     if (!state.historyPrefix.length) {
+      state.planHistoryQueue = plans.rest;
+      state.permissionHistoryQueue = perms.rest;
       flushPlanHistory();
       flushPermissionHistory();
     }
     const nodes = [...historyPark.children];
     historyPark = null;
-    state.historyPrefixPlans = state.planHistoryQueue.slice();
-    state.historyPrefixPermissions = state.permissionHistoryQueue.slice();
+    state.historyPrefixPlans = state.historyPrefix.length ? plans.rest : [];
+    state.historyPrefixPermissions = state.historyPrefix.length ? perms.rest : [];
     state.userMsgCount = saved.userMsgCount;
     state.interjectionCount = saved.interjectionCount;
     state.historyEventCount = saved.historyEventCount;
