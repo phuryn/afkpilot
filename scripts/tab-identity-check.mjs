@@ -627,23 +627,24 @@ try {
   sendHostTo(heldClientId, { type: "historyReplay", active: true });
   sendHostTo(heldClientId, { type: "userMessage", text: "replayed-a" });
   sendHostTo(heldClientId, { type: "userMessage", text: "replayed-b" });
+  await heldPage.waitForTimeout(150);
+  assert.deepEqual(
+    await heldPage.evaluate(() => ({
+      users: document.querySelectorAll("#messages .msg.user").length,
+      messages: getComputedStyle(document.getElementById("messages")).visibility,
+      note: getComputedStyle(document.getElementById("identity-restoring-note")).display,
+      veil: document.body.classList.contains("identity-restore-veil"),
+    })),
+    { users: 0, messages: "hidden", note: "flex", veil: true },
+    "the open-path window holds the replay; the veil stays up while it is in flight",
+  );
+
+  sendHostTo(heldClientId, { type: "historyReplay", active: false });
   await heldPage.waitForFunction(
     () => document.querySelectorAll("#messages .msg.user").length >= 2,
     null,
     { timeout: 5000 },
   );
-  assert.deepEqual(
-    await heldPage.evaluate(() => ({
-      messages: getComputedStyle(document.getElementById("messages")).visibility,
-      note: getComputedStyle(document.getElementById("identity-restoring-note")).display,
-      veil: document.body.classList.contains("identity-restore-veil"),
-    })),
-    { messages: "hidden", note: "flex", veil: true },
-    "the transcript stays hidden while replay is still in flight",
-  );
-
-  sendHostTo(heldClientId, { type: "historyReplay", active: false });
-  await heldPage.waitForTimeout(150);
   assert.equal(
     await heldPage.evaluate(() => document.body.classList.contains("identity-restore-veil")),
     true,

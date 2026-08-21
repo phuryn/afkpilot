@@ -300,7 +300,14 @@ describe("resume probe", () => {
     expect(resumeSrc).not.toContain("readyMessage");
     expect(resumeSrc).toContain('document.addEventListener("visibilitychange"');
     expect(resumeSrc).toContain('window.addEventListener("pageshow"');
-    expect(resumeSrc).not.toContain("pagehide");
+    expect(resumeSrc).toContain('window.addEventListener("pagehide"');
+    const pagehideSrc = resumeSrc.slice(
+      resumeSrc.indexOf('window.addEventListener("pagehide"'),
+      resumeSrc.indexOf('window.addEventListener("pageshow"'),
+    );
+    expect(pagehideSrc).toContain("persistRenderedTranscript()");
+    expect(pagehideSrc).not.toContain("onResumeVisible");
+    expect(pagehideSrc).not.toContain("abandonSocketAndRedial");
     expect(connectSrc).toContain("isTransportProbeMessage(data)");
     expect(connectSrc).toContain("onTransportProbeReply()");
   });
@@ -467,6 +474,7 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
       function armIdentityFailTimer() {}
       function identityRestoreTimeoutMs() { return 15000; }
       function reportOutboxDelay() {}
+      function restoreRenderedTranscript() { return false; }
       ${showHostTooOldSrc}
       ${veilFns}
       ${finishRestoreSrc}
@@ -840,6 +848,9 @@ describe("reconnect veil", () => {
     expect(abandonRestoreSrc).toContain("finishIdentityRestore()");
     expect(abandonRestoreSrc).toContain("identityReplayDepth = 0");
     expect(beginRestoreSrc).toContain("finishIdentityRestore()");
+    expect(beginRestoreSrc).toContain("restoreRenderedTranscript()");
+    expect(beginRestoreSrc.indexOf("restoreRenderedTranscript()"))
+      .toBeLessThan(beginRestoreSrc.indexOf('classList.add("identity-restoring")'));
     expect(showHostTooOldSrc).toContain("clearReconnectPresentation(true)");
     expect(showHostTooOldSrc).toContain("identity-restore-veil");
     expect(noticeSrc).toContain("clearReconnectPresentation(false)");

@@ -810,6 +810,10 @@ window.grokRemoteClient = true;
   var QKEY = "afk-outbox:" + device;
   var REMOTE_SESSION_KEY = "grok.remote.tabSession:" + (device || "default");
   var REMOTE_TAB_TOKEN_KEY = "grok.remote.tabToken:" + (device || "default");
+  // Rendered-window cache: the tab session IS the expiry. Keyed per device;
+  // the payload's session id is what makes a different conversation ignorable.
+  var TRANSCRIPT_CACHE_KEY = "grok.remote.transcript:" + (device || "default");
+  var TRANSCRIPT_CACHE_VERSION = 1;
   var initialRemoteTabToken = null;
   var remoteTabToken = null;
   var remoteTabTokenPromise = null;
@@ -2044,6 +2048,176 @@ window.grokRemoteClient = true;
     }
   }
 
+  function parseTranscriptCache(raw) {
+    if (typeof raw !== "string" || !raw) return null;
+    var value;
+    try { value = JSON.parse(raw); } catch (_) { return null; }
+    if (!value || value.v !== TRANSCRIPT_CACHE_VERSION) return null;
+    if (typeof value.sessionId !== "string" || !value.sessionId) return null;
+    if (typeof value.html !== "string" || !value.html) return null;
+    return {
+      sessionId: value.sessionId,
+      html: value.html,
+      hasOlder: value.hasOlder === true,
+      title: typeof value.title === "string" ? value.title : "",
+    };
+  }
+
+  function cacheMatchesSession(cache, sessionId) {
+    return !!(cache && sessionId && cache.sessionId === sessionId);
+  }
+
+  function historyPrefixRemaining() {
+    try {
+      var api = window.__grokHistory;
+      if (api && typeof api.prefixRemaining === "function") {
+        var n = Number(api.prefixRemaining());
+        return n > 0 && isFinite(n) ? n : 0;
+      }
+    } catch (_) { /* vendor not loaded, or private mode */ }
+    return 0;
+  }
+
+  function sanitizeTranscriptTree(root) {
+    if (!root) return;
+    function sanitizeEl(el) {
+      if (!el) return;
+      if (el.tagName && String(el.tagName).toLowerCase() === "script" && el.remove) {
+        el.remove();
+        return;
+      }
+      var attrs = el.attributes;
+      if (attrs) {
+        for (var ai = attrs.length - 1; ai >= 0; ai--) {
+          var name = attrs[ai].name;
+          if (name && name.length > 2 &&
+              (name.charAt(0) === "o" || name.charAt(0) === "O") &&
+              (name.charAt(1) === "n" || name.charAt(1) === "N")) {
+            el.removeAttribute(name);
+          }
+        }
+      }
+      var src = el.getAttribute ? el.getAttribute("src") : "";
+      if (src && src.indexOf("blob:") === 0) el.removeAttribute("src");
+    }
+    sanitizeEl(root);
+    if (!root.querySelectorAll) return;
+    var scripts = root.querySelectorAll("script");
+    for (var si = 0; si < scripts.length; si++) scripts[si].remove();
+    var nodes = root.querySelectorAll("*");
+    for (var ni = 0; ni < nodes.length; ni++) sanitizeEl(nodes[ni]);
+  }
+
+  function snapshotRenderedTranscript(messagesEl) {
+    if (!messagesEl) return null;
+    var html = "";
+    var hasOlder = historyPrefixRemaining() > 0;
+    var children = messagesEl.children;
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i];
+      var id = child.id || "";
+      if (id === "welcome") continue;
+      if (id === "history-head") {
+        hasOlder = true;
+        continue;
+      }
+      if (child.getAttribute && child.getAttribute("data-pending-clear") === "1") continue;
+      if (child.hasAttribute && child.hasAttribute("data-pending-open-hide")) continue;
+      var copy = child.cloneNode ? child.cloneNode(true) : child;
+      if (copy !== child) sanitizeTranscriptTree(copy);
+      var piece = copy.outerHTML;
+      if (typeof piece === "string" && piece) html += piece;
+    }
+    if (!html) return null;
+    var titleEl = document.getElementById("session-head-title");
+    return {
+      html: html,
+      hasOlder: hasOlder,
+      title: titleEl ? String(titleEl.textContent || "") : "",
+    };
+  }
+
+  function persistRenderedTranscript() {
+    var identity = rememberedIdentity();
+    if (!identity || !identity.id) return false;
+    var snapshot = snapshotRenderedTranscript(document.getElementById("messages"));
+    if (!snapshot) return false;
+    try {
+      sessionStorage.setItem(TRANSCRIPT_CACHE_KEY, JSON.stringify({
+        v: TRANSCRIPT_CACHE_VERSION,
+        sessionId: identity.id,
+        html: snapshot.html,
+        hasOlder: snapshot.hasOlder,
+        title: snapshot.title,
+      }));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function ensureHistoryHead(messagesEl) {
+    var doc = (messagesEl && messagesEl.ownerDocument) || document;
+    if (doc.getElementById("history-head")) return;
+    var head = doc.createElement("div");
+    head.id = "history-head";
+    head.setAttribute("aria-hidden", "true");
+    var welcome = doc.getElementById("welcome");
+    if (welcome && welcome.parentElement === messagesEl) {
+      messagesEl.insertBefore(head, welcome.nextSibling);
+    } else if (messagesEl.firstChild) {
+      messagesEl.insertBefore(head, messagesEl.firstChild);
+    } else {
+      messagesEl.appendChild(head);
+    }
+  }
+
+  function applyTranscriptCache(messagesEl, cache) {
+    if (!messagesEl || !cache || !cache.html) return false;
+    var doc = messagesEl.ownerDocument || document;
+    var holder = doc.createElement("div");
+    try { holder.innerHTML = cache.html; } catch (_) { return false; }
+    sanitizeTranscriptTree(holder);
+    if (!holder.querySelector(".msg")) return false;
+    var stale = [];
+    for (var i = 0; i < messagesEl.children.length; i++) {
+      var child = messagesEl.children[i];
+      if (child.id === "welcome") continue;
+      stale.push(child);
+    }
+    for (var s = 0; s < stale.length; s++) {
+      if (stale[s].remove) stale[s].remove();
+      else if (stale[s].parentNode) stale[s].parentNode.removeChild(stale[s]);
+    }
+    while (holder.firstChild) messagesEl.appendChild(holder.firstChild);
+    if (cache.hasOlder) ensureHistoryHead(messagesEl);
+    var welcome = doc.getElementById("welcome");
+    if (welcome) welcome.hidden = true;
+    if (cache.title) {
+      var titleEl = doc.getElementById("session-head-title");
+      if (titleEl && !String(titleEl.textContent || "").trim()) titleEl.textContent = cache.title;
+    }
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return true;
+  }
+
+  function restoreRenderedTranscript() {
+    if (transcriptHasConversation()) return false;
+    var identity = rememberedIdentity();
+    if (!identity || !identity.id) return false;
+    var raw;
+    try { raw = sessionStorage.getItem(TRANSCRIPT_CACHE_KEY); } catch (_) { return false; }
+    var cache = parseTranscriptCache(raw);
+    if (!cacheMatchesSession(cache, identity.id)) return false;
+    var messagesEl = document.getElementById("messages");
+    if (!messagesEl) return false;
+    try {
+      return applyTranscriptCache(messagesEl, cache);
+    } catch (_) {
+      return false;
+    }
+  }
+
   function queuedSendTexts() {
     var texts = [];
     for (var i = 0; i < queue.length; i++) {
@@ -2497,6 +2671,11 @@ window.grokRemoteClient = true;
     identityRestoreComplete = false;
     identityReplayDepth = 0;
     setVoiceTransportReady(false);
+    // Same-tab reload/discard: paint the last rendered window before the
+    // host round-trip. Token claim has already settled, so a duplicate tab
+    // that dropped the remembered session will not show someone else's
+    // conversation. Miss, mismatch, or corrupt cache: stay empty and veil.
+    restoreRenderedTranscript();
     // identity-restoring is the restore-in-flight signal for chat.js (it
     // holds a pending-clear across the round trip). The visual veil —
     // identity-restore-veil, hidden transcript + "Restoring conversation…"
@@ -2599,6 +2778,10 @@ window.grokRemoteClient = true;
     if (socketIsLive(ws)) return Promise.resolve();
     return finalRemoteTabToken().then(function () {
     if (socketIsLive(ws)) return;
+    // Identity is settled (a duplicate has already dropped the copied
+    // session). Paint before the socket exists so the conversation is on
+    // screen for the handshake, not waiting on the host's replay.
+    restoreRenderedTranscript();
     // Listeners close over this socket, not the module-level `ws`. A stale
     // error after a redial would otherwise close the healthy successor.
     var socket = new WebSocket(
@@ -2789,8 +2972,14 @@ window.grokRemoteClient = true;
     }, probeTimeoutMs());
   }
   document.addEventListener("visibilitychange", function () {
-    if (document.visibilityState === "hidden") return;
+    if (document.visibilityState === "hidden") {
+      persistRenderedTranscript();
+      return;
+    }
     onResumeVisible();
+  });
+  window.addEventListener("pagehide", function () {
+    persistRenderedTranscript();
   });
   window.addEventListener("pageshow", function () {
     onResumeVisible();
@@ -2802,6 +2991,14 @@ window.grokRemoteClient = true;
       else document.addEventListener("DOMContentLoaded", function () { r(); });
     });
   }
+  // Earliest safe paint: DOM is up and the tab-token claim has settled, so
+  // a duplicate cannot flash the opener's conversation. Does not wait for
+  // the socket or the host.
+  domReady().then(function () {
+    return finalRemoteTabToken().then(function () {
+      restoreRenderedTranscript();
+    });
+  });
   // /link arrives with linked=1 — a device really just linked. Continue
   // remotely and the picker arrive with remoteHint=1, which is only an
   // install nudge: never a claim that a link just happened. Both flags are
