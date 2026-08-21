@@ -6841,12 +6841,15 @@
   /**
    * Hide the current transcript without deleting it. Opening B must not leave
    * A's messages under B's title; aborting B must be able to put A's messages
-   * back. Host `clearMessages` still destroys the nodes when the open is real.
+   * back. Host `clearMessages` marks nodes pending-clear; they are destroyed
+   * when replacement content arrives (`appendTranscriptChild`) or on the next
+   * frame (`flushPendingTranscriptClear`) if none does.
    */
   function veilTranscriptForPendingOpen() {
     const welcome = $("welcome");
     for (const child of Array.from(messagesEl.children)) {
       if (child.id === "welcome") continue;
+      if (child.getAttribute("data-pending-clear") === "1") continue;
       if (child.hasAttribute("data-pending-open-hide")) continue;
       child.setAttribute("data-pending-open-hide", "1");
       child.hidden = true;
@@ -6861,6 +6864,9 @@
     let restored = 0;
     for (const child of Array.from(messagesEl.children)) {
       if (child.getAttribute("data-pending-open-hide") !== "1") continue;
+      // A committed host clear owns these nodes now; putting them back would
+      // resurrect a conversation the next-frame flush is about to drop.
+      if (child.getAttribute("data-pending-clear") === "1") continue;
       child.removeAttribute("data-pending-open-hide");
       child.hidden = false;
       restored++;
@@ -6960,6 +6966,73 @@
     }
   }
 
+  // clearMessages marks existing transcript nodes instead of destroying them.
+  // Destroy at the first replacement append (same task) or on the next frame
+  // if nothing replaces it — otherwise a resync paints "Starting" for a frame.
+  const PENDING_CLEAR_ATTR = "data-pending-clear";
+  let pendingTranscriptClear = false;
+  let pendingTranscriptClearRaf = 0;
+
+  function isPendingClearNode(el) {
+    return !!(el && typeof el.closest === "function" && el.closest("[" + PENDING_CLEAR_ATTR + "]"));
+  }
+
+  function liveTranscriptQueryAll(sel) {
+    return [...messagesEl.querySelectorAll(sel)].filter((el) => !isPendingClearNode(el));
+  }
+
+  function cancelPendingTranscriptClearRaf() {
+    if (!pendingTranscriptClearRaf) return;
+    cancelAnimationFrame(pendingTranscriptClearRaf);
+    pendingTranscriptClearRaf = 0;
+  }
+
+  function markTranscriptPendingClear() {
+    pendingTranscriptClear = true;
+    for (const child of Array.from(messagesEl.children)) {
+      if (child.id === "welcome") continue;
+      child.setAttribute(PENDING_CLEAR_ATTR, "1");
+    }
+    cancelPendingTranscriptClearRaf();
+    pendingTranscriptClearRaf = requestAnimationFrame(() => {
+      pendingTranscriptClearRaf = 0;
+      flushPendingTranscriptClear();
+    });
+  }
+
+  /** Empty-state path: no replacement arrived, so the welcome must appear. */
+  function flushPendingTranscriptClear() {
+    if (!pendingTranscriptClear) return;
+    pendingTranscriptClear = false;
+    cancelPendingTranscriptClearRaf();
+    for (const child of Array.from(messagesEl.children)) {
+      if (child.getAttribute(PENDING_CLEAR_ATTR) === "1") child.remove();
+    }
+    const welcome = $("welcome");
+    if (welcome) {
+      welcome.hidden = false;
+      state.welcomeVisible = true;
+    }
+  }
+
+  /** Append replacement content. Drops pending-clear nodes in the same task
+   *  AFTER the new node is in, so the transcript is never empty mid-paint. */
+  function appendTranscriptChild(el) {
+    if (!pendingTranscriptClear) {
+      HTMLElement.prototype.appendChild.call(messagesEl, el);
+      return el;
+    }
+    const scrollTop = messagesEl.scrollTop;
+    pendingTranscriptClear = false;
+    cancelPendingTranscriptClearRaf();
+    HTMLElement.prototype.appendChild.call(messagesEl, el);
+    for (const child of Array.from(messagesEl.children)) {
+      if (child.getAttribute(PENDING_CLEAR_ATTR) === "1") child.remove();
+    }
+    messagesEl.scrollTop = scrollTop;
+    return el;
+  }
+
   function resetForNewSession() {
     stopProcessingCue();
     cancelPendingSpeech();
@@ -6978,12 +7051,12 @@
     // (an automatic restart) can arrive while the user is typing in the editor,
     // and focusing then would yank keyboard focus across panels.
     if (typeof document.hasFocus !== "function" || document.hasFocus()) input.focus();
-    for (const child of Array.from(messagesEl.children)) {
-      if (child.id !== "welcome") child.remove();
-    }
+    markTranscriptPendingClear();
     const welcome = $("welcome");
     if (welcome) {
-      welcome.hidden = false;
+      // Do not unhide #welcome here. That paints "Starting" over a transcript
+      // that a same-burst replay is about to put back. flushPendingTranscriptClear
+      // unhides it on the next frame if no replacement arrives.
       const onb = $("welcome-onboarding");
       // Keep a just-shown "Connected" confirmation. Connecting an agent starts a
       // fresh session for it, and that session swap arrives as clearMessages —
@@ -7057,9 +7130,11 @@
     state.busy = false;
     state.busyLocked = false;
     // The send queue is HOST-owned per session — do NOT post a clear here.
-    // Reset only the local render mirror (the transcript wipe above removed the
-    // blocks); the replay delivers the focused session's own queuedSends
-    // snapshot, so its queued messages reappear when you swap back.
+    // Reset only the local render mirror. The deferred transcript wipe would
+    // otherwise leave the queued block visible until the next frame; the replay
+    // delivers the focused session's own queuedSends snapshot, so its queued
+    // messages reappear when you swap back.
+    if (state.queuedWrapEl) state.queuedWrapEl.remove();
     state.sendQueue = [];
     state.queuedWrapEl = null;
     state.queuedSubmissionPending = false;
@@ -7169,6 +7244,9 @@
     state.onboardingMode = mode;
     state.onboardingInfo = info;
     if (beforeRender) beforeRender();
+    // Onboarding is the empty-state card. Flush a pending transcript wipe so
+    // the card cannot sit above leftover conversation nodes for a frame.
+    flushPendingTranscriptClear();
     const welcome = $("welcome");
     if (welcome) welcome.hidden = false;
     state.welcomeVisible = true;
@@ -7530,7 +7608,7 @@
       }
     }
 
-    messagesEl.appendChild(el);
+    appendTranscriptChild(el);
     if (role === "user") refreshUserRewindButtons();
     scrollToBottom();
     if (role === "user" && text) {
@@ -7550,7 +7628,7 @@
   // as the rewind map counts them). Sent with every rewind/edit so the host can
   // verify its point list still lines up before acting — see bubbleMapIsConsistent.
   function visibleUserBubbleCount() {
-    return [...messagesEl.querySelectorAll(".msg.user:not(.queued)")]
+    return liveTranscriptQueryAll(".msg.user:not(.queued)")
       .filter((el) => el.dataset.steer !== "1").length;
   }
 
@@ -7560,9 +7638,9 @@
     // Rewind at the wrong turn (and reverted the wrong files) and made Edit
     // fail outright. Both actions are hidden on a steer bubble for the same
     // reason: there is nothing on the wire to roll back to.
-    const users = [...messagesEl.querySelectorAll(".msg.user:not(.queued)")]
+    const users = liveTranscriptQueryAll(".msg.user:not(.queued)")
       .filter((el) => el.dataset.steer !== "1");
-    for (const el of messagesEl.querySelectorAll('.msg.user[data-steer="1"]')) {
+    for (const el of liveTranscriptQueryAll('.msg.user[data-steer="1"]')) {
       delete el.dataset.userBubbleIndex;
       const r = el.querySelector(".msg-rewind-btn");
       const ed = el.querySelector(".msg-edit-btn");
@@ -7661,7 +7739,7 @@
 
   function syncFeedbackButtons() {
     const live = liveTurnActions();
-    for (const actions of messagesEl.querySelectorAll(".msg.agent .msg-actions")) {
+    for (const actions of liveTranscriptQueryAll(".msg.agent .msg-actions")) {
       if (actions === live && feedbackOffered()) {
         if (!actions.querySelector(".msg-thumbs")) insertTurnThumbs(actions);
         else paintTurnThumbs(actions);
@@ -7676,7 +7754,7 @@
     if (state.replaying) return;
     const a = state.turnAgentActionsEl;
     if (!a) return;
-    for (const other of messagesEl.querySelectorAll(".msg.agent .msg-actions")) {
+    for (const other of liveTranscriptQueryAll(".msg.agent .msg-actions")) {
       if (other !== a) retireLiveTurnFeedback(other);
     }
     a.dataset.feedbackLive = "1";
@@ -8052,7 +8130,7 @@
       body.hidden = true;
       el.appendChild(hdr);
       el.appendChild(body);
-      messagesEl.appendChild(el);
+      appendTranscriptChild(el);
       state.activeToolGroupEl = el;
       // Expand-all latched → open the group the moment it appears, mid-run
       // (setGroupExpanded's `.expanded` class also reveals the chevron via CSS).
@@ -8182,10 +8260,10 @@
   // the latch via the effective helpers; touches the in-progress group too so a
   // running batch opens/closes live (the reported gap).
   function applyExpandCommandOutputs() {
-    for (const row of messagesEl.querySelectorAll(".has-details")) {
+    for (const row of liveTranscriptQueryAll(".has-details")) {
       setDetailExpanded(row, detailShouldExpand());
     }
-    for (const group of messagesEl.querySelectorAll(".tool-group")) {
+    for (const group of liveTranscriptQueryAll(".tool-group")) {
       setGroupExpanded(group, groupShouldExpand(group));
     }
   }
@@ -8972,7 +9050,7 @@
     const el = document.createElement("div");
     el.className = "session-context-banner";
     el.textContent = "Context from previous session applied";
-    messagesEl.appendChild(el);
+    appendTranscriptChild(el);
     scrollToBottom();
   }
 
@@ -8982,7 +9060,7 @@
     el.className = "msg error";
     el.textContent = text;
     if (typeof code === "string" && code) el.setAttribute("data-error-code", code);
-    messagesEl.appendChild(el);
+    appendTranscriptChild(el);
     scrollToBottom();
   }
 
@@ -9129,7 +9207,7 @@
       link.onclick = () => vscode.postMessage({ type: "openUrl", url: msg.url });
       el.appendChild(link);
     }
-    messagesEl.appendChild(el);
+    appendTranscriptChild(el);
     scrollToBottom();
   }
 
@@ -9415,7 +9493,7 @@
     // card with the new run's duration/output. Mark them so live spawn-tagging
     // and the no-id finish fallback skip them.
     if (state.replaying) el.dataset.subagentReplayed = "1";
-    messagesEl.appendChild(el);
+    appendTranscriptChild(el);
     if (call && call.toolCallId) state.subagentCards.set(call.toolCallId, el);
     applySubagentUpdate(call, el); // a replayed call may already be completed
     scrollToBottom();
@@ -9550,7 +9628,7 @@
         `<div class="run-progress-detail" hidden></div>` +
         `<div class="run-progress-actions" hidden></div>`;
       state.runProgressCards.set(id, el);
-      messagesEl.appendChild(el);
+      appendTranscriptChild(el);
     }
 
     const kindLabel = update.kind === "goal" ? "Goal" : "Workflow";
@@ -9642,7 +9720,7 @@
     const el = document.createElement("div");
     el.className = "plan-notice";
     el.innerHTML = `${ICON.listTree}<span>${escapeHtml(text)}</span>`;
-    messagesEl.appendChild(el);
+    appendTranscriptChild(el);
     scrollToBottom();
   }
 
@@ -9660,7 +9738,7 @@
     const el = document.createElement("div");
     el.className = "plan-notice";
     el.innerHTML = `${ICON.zap}<span>${escapeHtml(text)}</span>`;
-    messagesEl.appendChild(el);
+    appendTranscriptChild(el);
     scrollToBottom();
   }
 
@@ -9692,7 +9770,7 @@
       };
       el.appendChild(hdr);
       el.appendChild(body);
-      messagesEl.appendChild(el);
+      appendTranscriptChild(el);
       state.activeThoughtEl = body;
       state.activeThoughtHdrEl = hdr;
     }
@@ -9920,7 +9998,7 @@
     // The agent copy affordance identifies the newest narration segment for the
     // current turn. Use that same pointer so neither plain nor summarized speech
     // can target an older rendered message.
-    const agentActions = messagesEl.querySelectorAll(".msg.agent .msg-actions");
+    const agentActions = liveTranscriptQueryAll(".msg.agent .msg-actions");
     if (
       !state.turnAgentActionsEl ||
       agentActions[agentActions.length - 1] !== state.turnAgentActionsEl
@@ -10133,7 +10211,7 @@
     clearWelcome();
     const el = document.createElement("div");
     collapsePermissionCard(el, outcome === "rejected" ? "reject_once" : "allow_once", title);
-    messagesEl.appendChild(el);
+    appendTranscriptChild(el);
     scrollToBottom();
   }
 
@@ -10192,7 +10270,7 @@
     el.innerHTML = `<span class="grokking-icon">${ICON.orbit}</span><span class="grokking-label">${verb}</span>`;
     el.setAttribute("aria-label", activityAriaLabel());
     el.title = "Waiting for response";
-    messagesEl.appendChild(el);
+    appendTranscriptChild(el);
     state.grokkingEl = el;
     scrollToBottom();
   }
@@ -10239,7 +10317,7 @@
     el.className = "thinking-indicator";
     el.innerHTML = `<span class="thinking-indicator-icon">${ICON.brain}</span><span class="thinking-indicator-label">Thinking</span>${BLINK_DOTS}`;
     el.setAttribute("aria-label", "Grok is thinking");
-    messagesEl.appendChild(el);
+    appendTranscriptChild(el);
     state.thinkingIndicatorEl = el;
     scrollToBottom();
   }
@@ -10273,7 +10351,7 @@
       state.activeToolGroupEl ||
       (state.activeAgentEl && (state.activeAgentRaw || "").trim()) ||
       (effectiveShowThinking() && state.activeThoughtEl) ||
-      messagesEl.querySelector(".card:not(.resolved)")
+      liveTranscriptQueryAll(".card:not(.resolved)")[0]
     );
   }
 
@@ -10549,7 +10627,7 @@
   }
 
   function updatePermissionOptions(requestId, options) {
-    const cards = [...messagesEl.querySelectorAll(".card.permission")];
+    const cards = liveTranscriptQueryAll(".card.permission");
     const el = cards.find((card) =>
       card.dataset.permReqId === String(requestId) &&
       !card.classList.contains("perm-resolved") &&
@@ -10599,7 +10677,7 @@
 
     const { buttons, defaultIndex } =
       renderPermissionActions(el, req.id, el._permTitle, req.options);
-    messagesEl.appendChild(el);
+    appendTranscriptChild(el);
     el.querySelectorAll("pre").forEach((pre) => pre._syncOverflowAffordance?.());
     forceScrollToBottom();
     if (
@@ -10666,7 +10744,7 @@
 
     const { buttons, defaultIndex } =
       renderPermissionActions(el, req.id, cardTitle, req.options);
-    messagesEl.appendChild(el);
+    appendTranscriptChild(el);
     el.querySelectorAll("pre").forEach((pre) => pre._syncOverflowAffordance?.());
     forceScrollToBottom(); // a pending permission must be visible (#16)
 
@@ -10947,7 +11025,7 @@
     };
     el.appendChild(skip);
 
-    messagesEl.appendChild(el);
+    appendTranscriptChild(el);
     forceScrollToBottom(); // a pending question must be visible (#16)
   }
 
@@ -11052,7 +11130,7 @@
       block.appendChild(qText);
       el.appendChild(block);
     });
-    messagesEl.appendChild(el);
+    appendTranscriptChild(el);
     if (answerText) fillRestoredAnswer(el, answerText);
     scrollToBottom();
     return el;
@@ -11206,7 +11284,7 @@
     actions.appendChild(mk("Reject", "", "rejected", true));
     actions.appendChild(mk("Cancel", "secondary", "abandoned", true));
     el.appendChild(actions);
-    messagesEl.appendChild(el);
+    appendTranscriptChild(el);
     scrollToBottom();
   }
 
@@ -11260,7 +11338,7 @@
       el.appendChild(status);
     }
 
-    messagesEl.appendChild(el);
+    appendTranscriptChild(el);
     scrollToBottom();
   }
 
@@ -12412,7 +12490,7 @@
     }
     msg.appendChild(bubble);
     wrap.appendChild(msg);
-    messagesEl.appendChild(wrap); // (re)pin to the end of the conversation
+    appendTranscriptChild(wrap); // (re)pin to the end of the conversation
     scrollToBottom();
   }
 
@@ -12555,6 +12633,7 @@
           const tag = parent.tagName;
           if (tag === "SCRIPT" || tag === "STYLE") return REJECT;
           if (parent.closest("#welcome, .welcome")) return REJECT;
+          if (parent.closest("[" + PENDING_CLEAR_ATTR + "]")) return REJECT;
           if (parent.closest(FIND_SKIP_SEL)) return REJECT;
           return ACCEPT;
         },
@@ -12578,6 +12657,7 @@
       const tag = el.tagName;
       if (tag === "SCRIPT" || tag === "STYLE") continue;
       if (el.id === "welcome" || el.classList.contains("welcome")) continue;
+      if (el.getAttribute && el.getAttribute(PENDING_CLEAR_ATTR) === "1") continue;
       if (typeof el.matches === "function" && el.matches(FIND_SKIP_SEL)) continue;
       for (let i = el.childNodes.length - 1; i >= 0; i--) stack.push(el.childNodes[i]);
     }
@@ -13499,7 +13579,10 @@
         // panel and replaying the whole conversation (which flashed the welcome
         // logo and re-rendered everything). The surviving messages are already
         // correct on screen — there is nothing to rebuild.
-        const users = [...messagesEl.querySelectorAll(".msg.user:not(.queued)")]
+        // A pending clearMessages is logically empty already; flush so
+        // lastElementChild is not a stale node we are about to drop.
+        flushPendingTranscriptClear();
+        const users = liveTranscriptQueryAll(".msg.user:not(.queued)")
           .filter((el) => el.dataset.steer !== "1");
         const firstGone = users[msg.surviving];
         if (firstGone) {
@@ -13535,7 +13618,7 @@
         hideThinkingIndicator();
         // The newest surviving agent message ends a finished turn, so its
         // copy/timestamp footer belongs visible.
-        const agents = messagesEl.querySelectorAll(".msg.agent .msg-actions");
+        const agents = liveTranscriptQueryAll(".msg.agent .msg-actions");
         const lastFooter = agents[agents.length - 1];
         if (lastFooter) lastFooter.hidden = false;
         refreshUserRewindButtons();
@@ -14159,7 +14242,7 @@
         // Replayed (on re-focus) right after the buffered permissionRequest, or
         // live right after the user answers — collapse the matching card if it's
         // still active. Idempotent: a live click already collapsed it.
-        const cards = [...messagesEl.querySelectorAll(".card.permission")];
+        const cards = liveTranscriptQueryAll(".card.permission");
         const el = cards.find((c) =>
           c.dataset.permReqId === String(msg.requestId) &&
           !c.classList.contains("perm-resolved") &&
@@ -14178,7 +14261,7 @@
         // Replayed (on re-focus) right after the buffered exitPlanRequest, or
         // live right after the user's verdict — collapse the matching card if
         // it's still actionable. Idempotent: a live click already collapsed it.
-        const cards = [...messagesEl.querySelectorAll(".card.plan")];
+        const cards = liveTranscriptQueryAll(".card.plan");
         const el = cards.find((c) => c.dataset.planReqId === String(msg.requestId) && !c.classList.contains("resolved"));
         if (el) resolvePlanCardEl(el, msg.verdict);
         break;
@@ -14463,7 +14546,7 @@
       case "feedbackAvailability":
         state.feedbackAvailable = msg.available === true;
         if (!state.feedbackAvailable) {
-          for (const actions of messagesEl.querySelectorAll(".msg.agent .msg-actions")) {
+          for (const actions of liveTranscriptQueryAll(".msg.agent .msg-actions")) {
             delete actions.dataset.feedbackPending;
           }
         }
@@ -14511,7 +14594,7 @@
         si.className = "session-context-banner";
         si.textContent = "Summarizing";
         si.insertAdjacentHTML("beforeend", BLINK_DOTS);
-        messagesEl.appendChild(si);
+        appendTranscriptChild(si);
         scrollToBottom();
         break;
       }
@@ -14866,7 +14949,7 @@
       ensureActivityIndicator();
       // Queued blocks live at the END of the conversation — re-pin them under
       // freshly streamed content.
-      if (state.sendQueue.length && state.queuedWrapEl) messagesEl.appendChild(state.queuedWrapEl);
+      if (state.sendQueue.length && state.queuedWrapEl) appendTranscriptChild(state.queuedWrapEl);
     }
     if (find.open && (
       TURN_PROGRESS_MSGS.has(msg.type) ||
@@ -15279,6 +15362,7 @@
       e.stopPropagation();
       if (msgRewindBtn.hidden) return;
       const msgEl = msgRewindBtn.closest(".msg.user");
+      if (isPendingClearNode(msgEl)) return;
       const idx = msgEl ? Number(msgEl.dataset.userBubbleIndex) : NaN;
       if (!Number.isInteger(idx) || idx < 0) return;
       // Send the text too: rewind discards this message, so the host hands it
@@ -15300,6 +15384,7 @@
       // host would only refuse. Say so here rather than round-trip for a warning.
       if (state.busy) return;
       const msgEl = msgEditBtn.closest(".msg.user");
+      if (isPendingClearNode(msgEl)) return;
       const idx = msgEl ? Number(msgEl.dataset.userBubbleIndex) : NaN;
       if (!Number.isInteger(idx) || idx < 0) return;
       // `_copyText` is the bubble's own words with the context envelope,
