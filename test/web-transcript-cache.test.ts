@@ -26,7 +26,7 @@ const messageHandlerSrc = connectSrc.slice(
 );
 
 const TRANSCRIPT_CACHE_KEY = "grok.remote.transcript:test";
-const TRANSCRIPT_CACHE_VERSION = 1;
+const TRANSCRIPT_CACHE_VERSION = 2;
 
 type AttrMap = Record<string, string>;
 
@@ -38,6 +38,9 @@ type FakeNode = {
   textContent: string;
   scrollTop: number;
   scrollHeight: number;
+  offsetWidth: number;
+  offsetHeight: number;
+  style: { width?: string; height?: string };
   parentElement: FakeNode | null;
   parentNode: FakeNode | null;
   ownerDocument: FakeDoc | null;
@@ -134,6 +137,9 @@ function fakeNode(init?: {
     textContent: "",
     scrollTop: 0,
     scrollHeight: 800,
+    offsetWidth: 0,
+    offsetHeight: 0,
+    style: {},
     parentElement: null,
     parentNode: null,
     ownerDocument: init?.ownerDocument || null,
@@ -150,10 +156,27 @@ function fakeNode(init?: {
       return idx >= 0 ? parent.children[idx + 1] || null : null;
     },
     get outerHTML() {
-      if (this._outer) return this._outer;
-      const attrs = this.id ? ` id="${this.id}"` : "";
-      const cls = this.className ? ` class="${this.className}"` : "";
-      return `<${this.tagName.toLowerCase()}${attrs}${cls}>${this.textContent}</${this.tagName.toLowerCase()}>`;
+      const styled = !!(this.style && (this.style.width || this.style.height));
+      if (this._outer && this.children.length === 0 && !styled) return this._outer;
+      const tag = this.tagName.toLowerCase();
+      let attrs = "";
+      if (this.id) attrs += ` id="${this.id}"`;
+      if (this.className) attrs += ` class="${this.className}"`;
+      for (const [name, value] of Object.entries(this.attributes)) {
+        if (name === "id" || name === "class") continue;
+        attrs += ` ${name}="${value}"`;
+      }
+      if (styled) {
+        const bits = [
+          this.style.width ? `width: ${this.style.width}` : "",
+          this.style.height ? `height: ${this.style.height}` : "",
+        ].filter(Boolean);
+        if (bits.length) attrs += ` style="${bits.join("; ")}"`;
+      }
+      const inner = this.children.length
+        ? this.children.map((c) => c.outerHTML).join("")
+        : this.textContent;
+      return `<${tag}${attrs}>${inner}</${tag}>`;
     },
     get innerHTML() {
       return this.children.map((c) => c.outerHTML).join("");
@@ -227,11 +250,14 @@ function fakeNode(init?: {
         tag: this.tagName.toLowerCase(),
         id: this.id,
         className: this.className,
-        outer: this.outerHTML,
+        outer: this.children.length ? "" : this._outer,
         attrs: { ...this.attributes },
         ownerDocument: this.ownerDocument,
       });
       copy.textContent = this.textContent;
+      copy.style = { ...this.style };
+      copy.offsetWidth = this.offsetWidth;
+      copy.offsetHeight = this.offsetHeight;
       copy.children = this.children.map((c) => {
         const kid = c.cloneNode(true);
         kid.parentElement = copy;
@@ -274,14 +300,28 @@ function fakeDoc() {
   return { doc, messages, welcome, title, classes };
 }
 
-function memoryStorage(initial?: Record<string, string>) {
+function memoryStorage(initial?: Record<string, string>, maxBytes?: number) {
   const map = new Map<string, string>(Object.entries(initial || {}));
+  function used() {
+    let n = 0;
+    for (const [k, v] of map) n += k.length + v.length;
+    return n;
+  }
   return {
     getItem(key: string) {
       return map.has(key) ? map.get(key)! : null;
     },
     setItem(key: string, value: string) {
-      map.set(key, String(value));
+      const next = String(value);
+      if (maxBytes != null) {
+        const other = used() - (map.has(key) ? key.length + map.get(key)!.length : 0);
+        if (other + key.length + next.length > maxBytes) {
+          const err = new Error("QuotaExceededError");
+          err.name = "QuotaExceededError";
+          throw err;
+        }
+      }
+      map.set(key, next);
     },
     removeItem(key: string) {
       map.delete(key);
@@ -295,10 +335,11 @@ function memoryStorage(initial?: Record<string, string>) {
   };
 }
 
-function msgEl(text: string, extras?: { pending?: boolean; hiddenOpen?: boolean }) {
+function msgEl(text: string, extras?: { pending?: boolean; hiddenOpen?: boolean; optimistic?: boolean }) {
   const attrs: AttrMap = {};
   if (extras?.pending) attrs["data-pending-clear"] = "1";
   if (extras?.hiddenOpen) attrs["data-pending-open-hide"] = "1";
+  if (extras?.optimistic) attrs["data-optimistic"] = "1";
   const node = fakeNode({
     tag: "div",
     className: "msg user",
@@ -308,6 +349,15 @@ function msgEl(text: string, extras?: { pending?: boolean; hiddenOpen?: boolean 
   });
   node.textContent = text;
   return node;
+}
+
+function generatedImageMsg(src: string, size: { w: number; h: number }) {
+  const wrap = fakeNode({ tag: "div", className: "generated-image msg assistant" });
+  const img = fakeNode({ tag: "img", attrs: { src } });
+  img.offsetWidth = size.w;
+  img.offsetHeight = size.h;
+  wrap.appendChild(img);
+  return wrap;
 }
 
 function historyHead() {
@@ -320,7 +370,7 @@ type CacheFns = {
     html: string;
     hasOlder: boolean;
     title: string;
-    scroll: { atBottom: true } | { atBottom: false; key: string; y: number } | null;
+    scroll: { atBottom: true } | { atBottom: false; top: number } | null;
   } | null;
   cacheMatchesSession: (cache: unknown, sessionId: string | null) => boolean;
   snapshotRenderedTranscript: (messagesEl: FakeNode | null) => { html: string; hasOlder: boolean; title: string } | null;
@@ -395,11 +445,11 @@ function loadFns(opts: {
 }
 
 describe("transcript cache format", () => {
-  it("accepts a v1 payload with a session id and rendered html", () => {
+  it("accepts a v2 payload with a session id and rendered html", () => {
     const { doc } = fakeDoc();
     const fns = loadFns({ doc, storage: memoryStorage() });
     const parsed = fns.parseTranscriptCache(JSON.stringify({
-      v: 1,
+      v: 2,
       sessionId: "sess-1",
       html: '<div class="msg">hi</div>',
       hasOlder: true,
@@ -414,32 +464,38 @@ describe("transcript cache format", () => {
     });
   });
 
-  it("accepts an additive scroll field and ignores a malformed one", () => {
+  it("accepts scrollTop and ignores a stale text-anchor shape", () => {
     const { doc } = fakeDoc();
     const fns = loadFns({ doc, storage: memoryStorage() });
     expect(fns.parseTranscriptCache(JSON.stringify({
-      v: 1,
+      v: 2,
       sessionId: "sess-1",
       html: '<div class="msg">hi</div>',
       scroll: { atBottom: true },
     }))?.scroll).toEqual({ atBottom: true });
     expect(fns.parseTranscriptCache(JSON.stringify({
-      v: 1,
+      v: 2,
+      sessionId: "sess-1",
+      html: '<div class="msg">hi</div>',
+      scroll: { atBottom: false, top: 120 },
+    }))?.scroll).toEqual({ atBottom: false, top: 120 });
+    expect(fns.parseTranscriptCache(JSON.stringify({
+      v: 2,
+      sessionId: "sess-1",
+      html: '<div class="msg">hi</div>',
+      scroll: { atBottom: false, top: 0 },
+    }))?.scroll).toEqual({ atBottom: false, top: 0 });
+    expect(fns.parseTranscriptCache(JSON.stringify({
+      v: 2,
       sessionId: "sess-1",
       html: '<div class="msg">hi</div>',
       scroll: { atBottom: false, key: "two", y: 12 },
-    }))?.scroll).toEqual({ atBottom: false, key: "two", y: 12 });
-    expect(fns.parseTranscriptCache(JSON.stringify({
-      v: 1,
-      sessionId: "sess-1",
-      html: '<div class="msg">hi</div>',
-      scroll: { atBottom: false, key: "", y: 12 },
     }))?.scroll).toBeNull();
     expect(fns.parseTranscriptCache(JSON.stringify({
-      v: 1,
+      v: 2,
       sessionId: "sess-1",
       html: '<div class="msg">hi</div>',
-      scroll: { atBottom: false, key: "two" },
+      scroll: { atBottom: false, top: -1 },
     }))?.scroll).toBeNull();
   });
 
@@ -449,17 +505,18 @@ describe("transcript cache format", () => {
     expect(fns.parseTranscriptCache(null)).toBeNull();
     expect(fns.parseTranscriptCache("")).toBeNull();
     expect(fns.parseTranscriptCache("{not json")).toBeNull();
-    expect(fns.parseTranscriptCache(JSON.stringify({ v: 2, sessionId: "s", html: "<div class='msg'></div>" }))).toBeNull();
-    expect(fns.parseTranscriptCache(JSON.stringify({ v: 1, sessionId: "", html: "<div class='msg'></div>" }))).toBeNull();
-    expect(fns.parseTranscriptCache(JSON.stringify({ v: 1, sessionId: "s", html: "" }))).toBeNull();
-    expect(fns.parseTranscriptCache(JSON.stringify({ v: 1, html: "<div class='msg'></div>" }))).toBeNull();
+    expect(fns.parseTranscriptCache(JSON.stringify({ v: 1, sessionId: "s", html: "<div class='msg'></div>" }))).toBeNull();
+    expect(fns.parseTranscriptCache(JSON.stringify({ v: 3, sessionId: "s", html: "<div class='msg'></div>" }))).toBeNull();
+    expect(fns.parseTranscriptCache(JSON.stringify({ v: 2, sessionId: "", html: "<div class='msg'></div>" }))).toBeNull();
+    expect(fns.parseTranscriptCache(JSON.stringify({ v: 2, sessionId: "s", html: "" }))).toBeNull();
+    expect(fns.parseTranscriptCache(JSON.stringify({ v: 2, html: "<div class='msg'></div>" }))).toBeNull();
   });
 
   it("matches only the remembered session id", () => {
     const { doc } = fakeDoc();
     const fns = loadFns({ doc, storage: memoryStorage() });
     const cache = fns.parseTranscriptCache(JSON.stringify({
-      v: 1,
+      v: 2,
       sessionId: "sess-1",
       html: '<div class="msg">hi</div>',
     }));
@@ -480,7 +537,7 @@ describe("hide -> reload -> paint before the host", () => {
     const writer = loadFns({ doc: live.doc, storage, prefixRemaining: 3 });
     expect(writer.persistRenderedTranscript()).toBe(true);
     const stored = JSON.parse(storage.getItem(TRANSCRIPT_CACHE_KEY) || "null");
-    expect(stored.v).toBe(1);
+    expect(stored.v).toBe(2);
     expect(stored.sessionId).toBe("sess-1");
     expect(stored.html).toContain("hello from cache");
     expect(stored.hasOlder).toBe(true);
@@ -512,12 +569,12 @@ describe("hide -> reload -> paint before the host", () => {
   it("a cache for a different session id is ignored, not shown", () => {
     const storage = memoryStorage({
       [TRANSCRIPT_CACHE_KEY]: JSON.stringify({
-        v: 1,
+        v: 2,
         sessionId: "sess-A",
         html: '<div class="msg user"><div class="body">conversation A</div></div>',
         hasOlder: false,
         title: "A",
-        scroll: { atBottom: false, key: "conversation A", y: 40 },
+        scroll: { atBottom: false, top: 40 },
       }),
     });
     const page = fakeDoc();
@@ -579,13 +636,55 @@ describe("hide -> reload -> paint before the host", () => {
     expect(loadFns({ doc: live.doc, storage }).persistRenderedTranscript()).toBe(false);
     expect(storage.getItem(TRANSCRIPT_CACHE_KEY)).toBeNull();
   });
+
+  it("strips image payloads, keeps the box, and still fits next to the outbox", () => {
+    const live = fakeDoc();
+    live.messages.appendChild(msgEl("caption"));
+    const payload = "data:image/png;base64," + "A".repeat(8000);
+    live.messages.appendChild(generatedImageMsg(payload, { w: 320, h: 180 }));
+    const storage = memoryStorage({}, 2500);
+    expect(loadFns({ doc: live.doc, storage }).persistRenderedTranscript()).toBe(true);
+    const stored = JSON.parse(storage.getItem(TRANSCRIPT_CACHE_KEY) || "null");
+    expect(stored.html).toContain("caption");
+    expect(stored.html).not.toContain("data:");
+    expect(stored.html).toContain("width: 320px");
+    expect(stored.html).toContain("height: 180px");
+
+    const outboxKey = "afk-outbox:test";
+    storage.setItem(outboxKey, JSON.stringify([JSON.stringify({ type: "send", text: "queued" })]));
+    expect(storage.getItem(outboxKey)).toContain("queued");
+
+    const reload = fakeDoc();
+    expect(loadFns({ doc: reload.doc, storage }).restoreRenderedTranscript()).toBe(true);
+    expect(reload.messages.querySelector(".msg")?.textContent).toContain("caption");
+  });
+
+  it("does not cache an optimistic message; the outbox still owns it", () => {
+    const live = fakeDoc();
+    live.messages.appendChild(msgEl("confirmed"));
+    live.messages.appendChild(msgEl("still in flight", { optimistic: true }));
+    const storage = memoryStorage();
+    const outboxKey = "afk-outbox:test";
+    storage.setItem(outboxKey, JSON.stringify([JSON.stringify({ type: "send", text: "still in flight" })]));
+    expect(loadFns({ doc: live.doc, storage }).persistRenderedTranscript()).toBe(true);
+    const stored = JSON.parse(storage.getItem(TRANSCRIPT_CACHE_KEY) || "null");
+    expect(stored.html).toContain("confirmed");
+    expect(stored.html).not.toContain("still in flight");
+    expect(storage.getItem(outboxKey)).toContain("still in flight");
+
+    const onlyOptimistic = fakeDoc();
+    onlyOptimistic.messages.appendChild(msgEl("only echo", { optimistic: true }));
+    const empty = memoryStorage();
+    expect(loadFns({ doc: onlyOptimistic.doc, storage: empty }).persistRenderedTranscript()).toBe(false);
+    expect(empty.getItem(TRANSCRIPT_CACHE_KEY)).toBeNull();
+  });
 });
 
 describe("paint then reconcile", () => {
   it("a matching cache paints so the restore veil is not used", () => {
     const storage = memoryStorage({
       [TRANSCRIPT_CACHE_KEY]: JSON.stringify({
-        v: 1,
+        v: 2,
         sessionId: "sess-1",
         html: '<div class="msg user"><div class="body">already on screen</div></div>',
         hasOlder: false,
@@ -654,6 +753,8 @@ describe("write only on hide", () => {
     expect(snapshotSrc).toContain('id === "history-head"');
     expect(snapshotSrc).toContain("hasOlder");
     expect(snapshotSrc).toContain("historyPrefixRemaining()");
+    expect(snapshotSrc).toContain("data-optimistic");
+    expect(snapshotSrc).toContain("stripCachedMediaPayloads");
     expect(snapshotSrc).not.toContain("state.historyPrefix");
     expect(cacheSrc).not.toContain("loadEarlierHistory");
     expect(cacheSrc).not.toContain("addEventListener(\"scroll\"");
@@ -812,7 +913,7 @@ function loadScrollFns(messages: LayoutMessages) {
       var cachedViewGesturePending = false;
       var cachedViewPinnedToBottom = false;
       var cachedViewHoldPlace = false;
-      var cachedViewAnchor = null;
+      var cachedViewScrollTop = null;
       var restoringCachedView = false;
       var identityReplayDepth = 0;
       var identityRestoreComplete = false;
@@ -845,10 +946,10 @@ function loadScrollFns(messages: LayoutMessages) {
     applyRestoreScroll: () => void;
     settleCachedViewScroll: () => boolean;
     snapshotTranscriptScroll: (messages: LayoutMessages) =>
-      { atBottom: true } | { atBottom: false; key: string; y: number };
+      { atBottom: true } | { atBottom: false; top: number };
     applyCachedTranscriptScroll: (
       messages: LayoutMessages,
-      scroll: { atBottom: true } | { atBottom: false; key: string; y: number } | null,
+      scroll: { atBottom: true } | { atBottom: false; top: number } | null,
     ) => void;
     userScrolled: () => boolean;
     holdPlace: () => boolean;
@@ -904,27 +1005,21 @@ function rowByText(page: ReturnType<typeof layoutTranscript>, text: string) {
 }
 
 describe("cached view scroll across host replay", () => {
-  it("keeps the same content under the reader when they scrolled the cache", () => {
+  it("keeps the stored scrollTop when they scrolled the cache", () => {
     const page = layoutTranscript();
     const fns = loadScrollFns(page.messages);
     pinToBottom(page.messages);
     fns.armCachedViewScroll();
     userScrollTo(fns, page.messages, 100);
-    const viewed = rowByText(page, "two");
-    expect(viewed).toBeTruthy();
-    const savedY = viewed!.getBoundingClientRect().top;
-    expect(savedY).toBe(0);
+    expect(page.messages.scrollTop).toBe(100);
 
     replayRows(page, {
       texts: ["one", "two", "three", "four", "five", "six"],
-      heights: [180, 100, 100, 100, 100, 100],
+      heights: [100, 100, 100, 100, 100, 100],
     });
     pinToBottom(page.messages);
     fns.applyRestoreScroll();
-
-    const same = rowByText(page, "two");
-    expect(same).toBeTruthy();
-    expect(Math.abs(same!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+    expect(page.messages.scrollTop).toBe(100);
   });
 
   it("lands at the bottom when the cache was painted and the reader did not scroll", () => {
@@ -979,7 +1074,7 @@ describe("cached view scroll across host replay", () => {
     expect(fns.userScrolled()).toBe(true);
   });
 
-  it("a stick-to-bottom yank during the same touch does not eat the reader's place", () => {
+  it("a stick-to-bottom yank during the same touch does not eat the stored scrollTop", () => {
     const page = layoutTranscript();
     const fns = loadScrollFns(page.messages);
     pinToBottom(page.messages);
@@ -991,21 +1086,15 @@ describe("cached view scroll across host replay", () => {
 
     page.messages.scrollTop = 100;
     fns.onCachedViewScroll();
-    const viewed = rowByText(page, "two");
-    expect(viewed).toBeTruthy();
-    const savedY = viewed!.getBoundingClientRect().top;
     expect(fns.holdPlace()).toBe(true);
 
     replayRows(page, {
       texts: ["one", "two", "three", "four", "five", "six"],
-      heights: [180, 100, 100, 100, 100, 100],
+      heights: [100, 100, 100, 100, 100, 100],
     });
     pinToBottom(page.messages);
     fns.applyRestoreScroll();
-
-    const same = rowByText(page, "two");
-    expect(same).toBeTruthy();
-    expect(Math.abs(same!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+    expect(page.messages.scrollTop).toBe(100);
   });
 
   it("a yank after the reader has left the bottom is undone immediately, through replay", () => {
@@ -1014,54 +1103,49 @@ describe("cached view scroll across host replay", () => {
     pinToBottom(page.messages);
     fns.armCachedViewScroll();
     userScrollTo(fns, page.messages, 100);
-    const viewed = rowByText(page, "two");
-    const savedY = viewed!.getBoundingClientRect().top;
 
     pinToBottom(page.messages);
     fns.onCachedViewScroll();
-    expect(Math.abs(viewed!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+    expect(page.messages.scrollTop).toBe(100);
 
     replayRows(page, {
       texts: ["one", "two", "three", "four", "five", "six"],
-      heights: [180, 100, 100, 100, 100, 100],
+      heights: [100, 100, 100, 100, 100, 100],
     });
     pinToBottom(page.messages);
     fns.onCachedViewScroll();
-    const same = rowByText(page, "two");
-    expect(Math.abs(same!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+    expect(page.messages.scrollTop).toBe(100);
     fns.applyRestoreScroll();
-    expect(Math.abs(rowByText(page, "two")!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+    expect(page.messages.scrollTop).toBe(100);
   });
 
-  it("keeps the held row through a second replay after the first has settled", () => {
+  it("keeps the held scrollTop through a second replay after the first has settled", () => {
     const page = layoutTranscript();
     const fns = loadScrollFns(page.messages);
     pinToBottom(page.messages);
     fns.armCachedViewScroll();
     userScrollTo(fns, page.messages, 100);
-    const viewed = rowByText(page, "two");
-    const savedY = viewed!.getBoundingClientRect().top;
 
     replayRows(page, {
       texts: ["one", "two", "three", "four", "five", "six"],
-      heights: [180, 100, 100, 100, 100, 100],
+      heights: [100, 100, 100, 100, 100, 100],
     });
     pinToBottom(page.messages);
     fns.onCachedViewScroll();
     expect(fns.settleCachedViewScroll()).toBe(true);
     expect(fns.live()).toBe(true);
-    expect(Math.abs(rowByText(page, "two")!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+    expect(page.messages.scrollTop).toBe(100);
 
     replayRows(page, {
       texts: ["one", "two", "three", "four", "five", "six", "seven"],
-      heights: [180, 100, 100, 100, 100, 100, 100],
+      heights: [100, 100, 100, 100, 100, 100, 100],
     });
     pinToBottom(page.messages);
     fns.onCachedViewScroll();
-    expect(Math.abs(rowByText(page, "two")!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+    expect(page.messages.scrollTop).toBe(100);
     fns.applyRestoreScroll();
     expect(fns.live()).toBe(false);
-    expect(Math.abs(rowByText(page, "two")!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+    expect(page.messages.scrollTop).toBe(100);
   });
 
   it("a gesture that leaves the reader at the bottom still lands on new messages", () => {
@@ -1082,103 +1166,64 @@ describe("cached view scroll across host replay", () => {
     expect(newest!.getBoundingClientRect().bottom).toBeLessThanOrEqual(page.messages.clientHeight + 1);
   });
 
-  it("decides from a user gesture and a node, not a timer or a stored offset", () => {
-    expect(scrollSrc).toContain("cachedViewGesturePending");
-    expect(scrollSrc).toContain("cachedViewHoldPlace");
-    expect(scrollSrc).toContain("restoringCachedView");
-    expect(scrollSrc).toContain("getBoundingClientRect().top");
-    expect(scrollSrc).toContain("messagesEl.scrollTop += delta");
+  it("restores by scrollTop, with no text matching left", () => {
+    expect(html).not.toContain("rowAnchorKey");
+    expect(html).not.toContain("findTranscriptRowByKey");
+    expect(html).not.toContain("captureTranscriptScrollAnchor");
+    expect(html).not.toContain("restoreTranscriptScrollAnchor");
+    expect(html).not.toContain("resolveCachedViewSentinel");
+    expect(html).not.toContain("cachedViewAnchor");
+    expect(scrollSrc).toContain("cachedViewScrollTop");
+    expect(scrollSrc).toContain("messagesEl.scrollTop");
     expect(scrollSrc).not.toContain("setTimeout");
     expect(scrollSrc).not.toContain("sessionStorage");
-    expect(html).toContain("bindCachedViewScrollListeners()");
-    expect(scrollSrc).toContain('addEventListener("wheel"');
-    expect(scrollSrc).toContain('addEventListener("touchstart"');
-    expect(scrollSrc).toContain('addEventListener("pointerdown"');
-    expect(scrollSrc).toContain('addEventListener("keydown"');
-    const noteReplaySrc = html.slice(
-      html.indexOf("function noteIdentityReplay(data)"),
-      html.indexOf("function finishIdentityRestore()"),
-    );
-    expect(noteReplaySrc).toContain("settleCachedViewScroll()");
-    expect(noteReplaySrc).toContain("maybeFinishCachedViewScroll()");
-    expect(noteReplaySrc.indexOf("settleCachedViewScroll()"))
-      .toBeLessThan(noteReplaySrc.indexOf("revealRestoredTranscript()"));
-    expect(scrollSrc).toContain("finishCachedViewScroll()");
-    expect(scrollSrc).toContain("maybeFinishCachedViewScroll()");
-    const revealSrc = html.slice(
-      html.indexOf("function revealRestoredTranscript()"),
-      html.indexOf("function noteIdentityReplay(data)"),
-    );
-    expect(revealSrc).not.toContain("settleCachedViewScroll");
-    expect(revealSrc).not.toContain("applyRestoreScroll");
-    const applySrc = html.slice(
-      html.indexOf("function applyRestoreScroll()"),
-      html.indexOf("function liftIdentityRestoreVeil()"),
-    );
-    expect(applySrc).toContain("finishCachedViewScroll()");
-    expect(applySrc).not.toContain("settleCachedViewScroll()");
-    const intentSrc = html.slice(
-      html.indexOf("function noteCachedViewUserIntent()"),
-      html.indexOf("function onCachedViewScroll()"),
-    );
-    expect(intentSrc).toContain("restoringCachedView");
     const applyCachedSrc = html.slice(
       html.indexOf("function applyCachedTranscriptScroll"),
       html.indexOf("function clearCachedViewScroll()"),
     );
     expect(applyCachedSrc).toContain("cachedViewHoldPlace = true");
-    expect(applyCachedSrc).toContain("cachedViewGesturePending = false");
-    expect(applyCachedSrc).toContain("sentinel.offsetTop");
+    expect(applyCachedSrc).toContain("scroll.top");
+    expect(applyCachedSrc).not.toContain("key");
     const applyCacheSrc = html.slice(
       html.indexOf("function applyTranscriptCache"),
       html.indexOf("function publishCachedSessionName"),
     );
     expect(applyCacheSrc.indexOf("while (holder.firstChild)"))
       .toBeLessThan(applyCacheSrc.indexOf("applyCachedTranscriptScroll"));
-    expect(applyCacheSrc).not.toContain("setTimeout");
-    expect(applyCacheSrc).not.toContain("requestAnimationFrame");
   });
 
-  it("scrolled-up cache: no bottom frame, and the place survives the host replay", () => {
-    const live = layoutTranscript();
+  it("scrolled-up restore lands at the stored scrollTop", () => {
+    const live = layoutTranscript({ texts: ["Done", "Yes", "Done", "Yes", "Done"] });
     const liveFns = loadScrollFns(live.messages);
     pinToBottom(live.messages);
     liveFns.armCachedViewScroll();
     userScrollTo(liveFns, live.messages, 100);
-    const viewed = rowByText(live, "two");
-    expect(viewed).toBeTruthy();
-    const savedY = viewed!.getBoundingClientRect().top;
-    expect(savedY).toBe(0);
+    expect(live.messages.scrollTop).toBe(100);
     const stored = liveFns.snapshotTranscriptScroll(live.messages);
-    expect(stored).toEqual({ atBottom: false, key: "two", y: 0 });
+    expect(stored).toEqual({ atBottom: false, top: 100 });
 
-    const reload = layoutTranscript();
+    const reload = layoutTranscript({ texts: ["Done", "Yes", "Done", "Yes", "Done"] });
     const reloadFns = loadScrollFns(reload.messages);
     reload.atBottomHistory.length = 0;
     reloadFns.applyCachedTranscriptScroll(reload.messages, stored);
-    const same = rowByText(reload, "two");
-    expect(same).toBeTruthy();
-    expect(Math.abs(same!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+    expect(reload.messages.scrollTop).toBe(100);
     expect(reloadFns.holdPlace()).toBe(true);
     expect(reloadFns.gesturePending()).toBe(false);
     expect(isFlushBottom(reload.messages)).toBe(false);
     expect(reload.atBottomHistory.some(Boolean)).toBe(false);
 
     hostYankToBottom(reloadFns, reload.messages);
-    expect(reloadFns.holdPlace()).toBe(true);
+    expect(reload.messages.scrollTop).toBe(100);
     expect(isFlushBottom(reload.messages)).toBe(false);
-    expect(Math.abs(rowByText(reload, "two")!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
 
     replayRows(reload, {
-      texts: ["one", "two", "three", "four", "five", "six"],
-      heights: [180, 100, 100, 100, 100, 100],
+      texts: ["Done", "Yes", "Done", "Yes", "Done", "later"],
+      heights: [100, 100, 100, 100, 100, 100],
     });
     hostYankToBottom(reloadFns, reload.messages);
-    expect(isFlushBottom(reload.messages)).toBe(false);
-    expect(Math.abs(rowByText(reload, "two")!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+    expect(reload.messages.scrollTop).toBe(100);
     reloadFns.applyRestoreScroll();
-    expect(isFlushBottom(reload.messages)).toBe(false);
-    expect(Math.abs(rowByText(reload, "two")!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+    expect(reload.messages.scrollTop).toBe(100);
   });
 
   it("at-bottom cache: bottom throughout, and replayed new messages are visible", () => {
@@ -1213,35 +1258,6 @@ describe("cached view scroll across host replay", () => {
     expect(newest!.getBoundingClientRect().bottom).toBeLessThanOrEqual(reload.messages.clientHeight + 1);
   });
 
-  it("an anchor that is missing or stale falls back to the bottom and does not arm the hold", () => {
-    const missing = layoutTranscript();
-    const missingFns = loadScrollFns(missing.messages);
-    missingFns.applyCachedTranscriptScroll(missing.messages, {
-      atBottom: false,
-      key: "not in this window",
-      y: 40,
-    });
-    expect(isFlushBottom(missing.messages)).toBe(true);
-    expect(missingFns.holdPlace()).toBe(false);
-
-    hostYankToBottom(missingFns, missing.messages);
-    expect(isFlushBottom(missing.messages)).toBe(true);
-    expect(missingFns.holdPlace()).toBe(false);
-    missingFns.applyRestoreScroll();
-    expect(isFlushBottom(missing.messages)).toBe(true);
-    expect(missingFns.holdPlace()).toBe(false);
-
-    const stale = layoutTranscript({ texts: ["alpha", "beta", "gamma", "delta", "epsilon"] });
-    const staleFns = loadScrollFns(stale.messages);
-    staleFns.applyCachedTranscriptScroll(stale.messages, {
-      atBottom: false,
-      key: "two",
-      y: 0,
-    });
-    expect(isFlushBottom(stale.messages)).toBe(true);
-    expect(staleFns.holdPlace()).toBe(false);
-  });
-
   it("a gesture after a restored position is what survives the replay", () => {
     const live = layoutTranscript();
     const liveFns = loadScrollFns(live.messages);
@@ -1249,38 +1265,29 @@ describe("cached view scroll across host replay", () => {
     liveFns.armCachedViewScroll();
     userScrollTo(liveFns, live.messages, 100);
     const stored = liveFns.snapshotTranscriptScroll(live.messages);
-    expect(stored).toEqual({ atBottom: false, key: "two", y: 0 });
+    expect(stored).toEqual({ atBottom: false, top: 100 });
 
     const reload = layoutTranscript({
       texts: ["one", "two", "three", "four", "five", "six", "seven"],
     });
     const reloadFns = loadScrollFns(reload.messages);
     reloadFns.applyCachedTranscriptScroll(reload.messages, stored);
-    expect(rowByText(reload, "two")!.getBoundingClientRect().top).toBe(0);
+    expect(reload.messages.scrollTop).toBe(100);
 
     userScrollTo(reloadFns, reload.messages, 200);
-    const moved = rowByText(reload, "three");
-    expect(moved).toBeTruthy();
-    const savedY = moved!.getBoundingClientRect().top;
-    expect(savedY).toBe(0);
+    expect(reload.messages.scrollTop).toBe(200);
     expect(reloadFns.holdPlace()).toBe(true);
 
     replayRows(reload, {
       texts: ["one", "two", "three", "four", "five", "six", "seven", "eight"],
-      heights: [180, 100, 100, 100, 100, 100, 100, 100],
+      heights: [100, 100, 100, 100, 100, 100, 100, 100],
     });
     hostYankToBottom(reloadFns, reload.messages);
     reloadFns.applyRestoreScroll();
-    expect(Math.abs(rowByText(reload, "three")!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
-    expect(rowByText(reload, "two")!.getBoundingClientRect().top).not.toBe(0);
+    expect(reload.messages.scrollTop).toBe(200);
   });
 
   it("reload cache paint never calls applyRestoreScroll — a reader who moved is held by the cached-view path", () => {
-    // Cache paint makes transcriptHasConversation true, so the visual veil
-    // is not used and liftIdentityRestoreVeil (the only applyRestoreScroll
-    // caller) does not run. A held place is settled by maybeFinishCachedViewScroll,
-    // the same hold 81fb108 added; applyRestoreScroll cannot yank this path
-    // to the bottom because it is not on it.
     expect(beginRestoreSrc.indexOf("restoreRenderedTranscript()"))
       .toBeLessThan(beginRestoreSrc.indexOf("transcriptHasConversation()"));
     const revealSrc = html.slice(

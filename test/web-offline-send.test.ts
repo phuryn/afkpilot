@@ -441,6 +441,23 @@ describe("offline live-send hold", () => {
     expect(recoveredByReplacement(live)).toEqual([]);
   });
 
+  it("a steer acknowledged via queuedSends is not recovered later", () => {
+    const raw = JSON.stringify({ type: "steerSend", text: "steer this now" });
+    let live = liveOutboundAfterRemember([], raw, JSON.parse(raw));
+    live = liveOutboundAfterAck(live, { type: "queuedSends", items: ["steer this now"] });
+    expect(live).toEqual([]);
+    expect(recoveredByReplacement(live)).toEqual([]);
+
+    live = liveOutboundAfterRemember([], raw, JSON.parse(raw));
+    live = liveOutboundAfterAck(live, {
+      type: "queuedSends",
+      items: ["steer this now"],
+      queued: [{ text: "steer this now" }],
+    });
+    expect(live).toEqual([]);
+    expect(recoveredByReplacement(live)).toEqual([]);
+  });
+
   it("an unacknowledged queue send is still recovered exactly once", () => {
     const raw = JSON.stringify({ type: "queueSend", text: "still in flight" });
     let live = liveOutboundAfterRemember([], raw, JSON.parse(raw));

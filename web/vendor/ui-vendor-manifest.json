@@ -2,7 +2,7 @@
   "version": 1,
   "source": {
     "repository": "grok-build-vscode",
-    "revision": "6d2038cc9358dd175f7e96472834f91402be5f33",
+    "revision": "499fa8710b8d0e151c0286844c86f69832a874eb",
     "appVersion": "3.13.1",
     "filesMatchRevision": true
   },
@@ -15,7 +15,7 @@
     {
       "source": "media/chat.js",
       "destination": "media/chat.js",
-      "sha256": "9ef9fb1319709a770e278570565992a92d45d93f4000d225c3e456f818f29479"
+      "sha256": "6899f0ee453a30df18e1a6234b57df1657c02f8ea0ecdbbcc7f28407233bb416"
     },
     {
       "source": "media/file-panel.css",

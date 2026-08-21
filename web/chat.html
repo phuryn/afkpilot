@@ -813,7 +813,7 @@ window.grokRemoteClient = true;
   // Rendered-window cache: the tab session IS the expiry. Keyed per device;
   // the payload's session id is what makes a different conversation ignorable.
   var TRANSCRIPT_CACHE_KEY = "grok.remote.transcript:" + (device || "default");
-  var TRANSCRIPT_CACHE_VERSION = 1;
+  var TRANSCRIPT_CACHE_VERSION = 2;
   var initialRemoteTabToken = null;
   var remoteTabToken = null;
   var remoteTabTokenPromise = null;
@@ -1143,31 +1143,23 @@ window.grokRemoteClient = true;
     return texts;
   }
   function liveOutboundAfterAck(current, data) {
-    // Each kind has its own acknowledgement. Matching on text across kinds
-    // is how two identical prompts become one, so:
+    // Acknowledge what the frame names, not the kind we assumed sent it.
     //   send       <- userMessage without steer (submissionId, else exact text)
-    //   steerSend  <- userMessage with steer:true (exact text; host does not
-    //                 echo a correlation id on a steer)
-    //   queueSend  <- queuedSends snapshot, one live entry per whole
-    //                 contribution of the same text
+    //   steerSend  <- userMessage with steer:true, or queuedSends when the
+    //                 host accepted the steer onto the ordinary queue
+    //   queueSend  <- queuedSends snapshot, one live entry per contribution
     //
-    // `data.steer` used to bail out entirely. That protected a pending send
-    // from a steer echo of the same words (old-host text match has no kind).
-    // Kind-matching keeps that protection. The outbox twin of this check
-    // (outboxIndexAcknowledgedBy) still bails on steer: the outbox only
-    // stores `send`, and a steer must not pull one out.
-    //
-    // A steerSend that the host cannot interject (no live turn, or a CLI
-    // that ignores interject `content`) is put on the queue instead of
-    // echoing userMessage+steer. That path has no acknowledgement we can
-    // match without crossing kinds, so it stays recoverable.
+    // Kind-matching still keeps a pending send from a steer echo of the
+    // same words. The outbox twin (outboxIndexAcknowledgedBy) bails on
+    // steer: the outbox only stores `send`.
     if (!data) return current;
     if (data.type === "queuedSends") {
       var remaining = queuedSendsContributionTexts(data);
       if (!remaining.length) return current;
       return current.filter(function (entry) {
         var queuedMessage = entry && entry.message;
-        if (!queuedMessage || queuedMessage.type !== "queueSend") return true;
+        var kind = queuedMessage && queuedMessage.type;
+        if (kind !== "queueSend" && kind !== "steerSend") return true;
         if (typeof queuedMessage.text !== "string" || !queuedMessage.text) return true;
         var at = remaining.indexOf(queuedMessage.text);
         if (at < 0) return true;
@@ -1949,7 +1941,7 @@ window.grokRemoteClient = true;
   var cachedViewGesturePending = false;
   var cachedViewPinnedToBottom = false;
   var cachedViewHoldPlace = false;
-  var cachedViewAnchor = null;
+  var cachedViewScrollTop = null;
   var restoringCachedView = false;
   // The socket we last sent `ready` on. resumeSession is refused unless the
   // host has this tab's token; ready is what registers it. A replacement
@@ -2193,9 +2185,8 @@ window.grokRemoteClient = true;
     if (!value || typeof value !== "object") return null;
     if (value.atBottom === true) return { atBottom: true };
     if (value.atBottom !== false) return null;
-    if (typeof value.key !== "string" || !value.key) return null;
-    if (typeof value.y !== "number" || !isFinite(value.y)) return null;
-    return { atBottom: false, key: value.key, y: value.y };
+    if (typeof value.top !== "number" || !isFinite(value.top) || value.top < 0) return null;
+    return { atBottom: false, top: value.top };
   }
 
   function cacheMatchesSession(cache, sessionId) {
@@ -2243,6 +2234,32 @@ window.grokRemoteClient = true;
     for (var ni = 0; ni < nodes.length; ni++) sanitizeEl(nodes[ni]);
   }
 
+  function stripCachedMediaPayloads(liveRoot, copyRoot) {
+    // data:/blob: images share the outbox quota. Drop the bytes, keep the
+    // box so restore geometry matches the live window. Host replay fills them.
+    if (!copyRoot || !copyRoot.querySelectorAll) return;
+    function stripTag(tag) {
+      var copies = copyRoot.querySelectorAll(tag);
+      var lives = liveRoot && liveRoot.querySelectorAll ? liveRoot.querySelectorAll(tag) : [];
+      for (var i = 0; i < copies.length; i++) {
+        var copy = copies[i];
+        var src = copy.getAttribute ? copy.getAttribute("src") : "";
+        if (typeof src !== "string" || (src.indexOf("data:") !== 0 && src.indexOf("blob:") !== 0)) continue;
+        var live = lives[i];
+        var w = (live && live.offsetWidth) || 0;
+        var h = (live && live.offsetHeight) || 0;
+        copy.removeAttribute("src");
+        if (tag === "img") copy.setAttribute("alt", "");
+        if (w > 0 && h > 0 && copy.style) {
+          copy.style.width = Math.round(w) + "px";
+          copy.style.height = Math.round(h) + "px";
+        }
+      }
+    }
+    stripTag("img");
+    stripTag("video");
+  }
+
   function snapshotRenderedTranscript(messagesEl) {
     if (!messagesEl) return null;
     var html = "";
@@ -2257,9 +2274,13 @@ window.grokRemoteClient = true;
         continue;
       }
       if (child.getAttribute && child.getAttribute("data-pending-clear") === "1") continue;
+      if (child.getAttribute && child.getAttribute("data-optimistic") === "1") continue;
       if (child.hasAttribute && child.hasAttribute("data-pending-open-hide")) continue;
       var copy = child.cloneNode ? child.cloneNode(true) : child;
-      if (copy !== child) sanitizeTranscriptTree(copy);
+      if (copy !== child) {
+        stripCachedMediaPayloads(child, copy);
+        sanitizeTranscriptTree(copy);
+      }
       var piece = copy.outerHTML;
       if (typeof piece === "string" && piece) html += piece;
     }
@@ -2334,8 +2355,7 @@ window.grokRemoteClient = true;
       if (titleEl && !String(titleEl.textContent || "").trim()) titleEl.textContent = cache.title;
     }
     // Same turn as the HTML. A later apply is a second painted frame — the
-    // bottom, then the place. History-head and welcome.hidden land first
-    // because both change row offsetTop.
+    // bottom, then the place.
     applyCachedTranscriptScroll(messagesEl, cache.scroll);
     return true;
   }
@@ -2615,70 +2635,34 @@ window.grokRemoteClient = true;
     cachedViewGesturePending = false;
     cachedViewPinnedToBottom = false;
     cachedViewHoldPlace = false;
-    cachedViewAnchor = null;
+    cachedViewScrollTop = null;
     restoringCachedView = false;
   }
   function snapshotTranscriptScroll(messagesEl) {
     // Capture at the same moment as the HTML: on hide. At the bottom is
-    // recorded as at the bottom, not as an anchor on the last message —
+    // recorded as at the bottom, not as an offset on the last message —
     // coming back should then show messages that arrived while away.
     if (!messagesEl) return { atBottom: true };
     if (cachedViewIsPinnedToBottom(messagesEl)) return { atBottom: true };
-    var anchor = captureTranscriptScrollAnchor(messagesEl);
-    if (!anchor || !anchor.key) return { atBottom: true };
-    var viewTop = 0;
-    try {
-      if (typeof messagesEl.getBoundingClientRect === "function") {
-        viewTop = messagesEl.getBoundingClientRect().top;
-      }
-    } catch (_) { /* tests without layout */ }
-    return { atBottom: false, key: anchor.key, y: anchor.y - viewTop };
+    return { atBottom: false, top: messagesEl.scrollTop || 0 };
   }
   function applyCachedTranscriptScroll(messagesEl, scroll) {
-    // A place restored from the cache is the reader's place — recorded
-    // before the reload, not gestured after it. Arm the same hold a swipe
-    // would, so replay-end force-scroll cannot throw it away. This apply
-    // is not a gesture: programmatic scroll is still not a swipe.
-    // at-bottom, missing, or a key that is no longer in the cached rows:
-    // the bottom, and no hold.
+    // We painted exactly what we stored, so scrollTop is exact. Arm the
+    // hold a swipe would so replay-end force-scroll cannot throw it away.
+    // This apply is not a gesture.
     if (!messagesEl) return;
     armCachedViewScroll();
     if (!scroll || scroll.atBottom !== false) {
       messagesEl.scrollTop = messagesEl.scrollHeight;
       return;
     }
-    var sentinel = findTranscriptRowByKey(messagesEl, scroll.key);
-    if (!sentinel || typeof sentinel.getBoundingClientRect !== "function") {
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-      return;
-    }
-    var viewTop = 0;
-    try {
-      if (typeof messagesEl.getBoundingClientRect === "function") {
-        viewTop = messagesEl.getBoundingClientRect().top;
-      }
-    } catch (_) { /* tests without layout */ }
-    cachedViewAnchor = {
-      node: sentinel,
-      key: scroll.key,
-      index: -1,
-      y: viewTop + scroll.y,
-    };
     cachedViewHoldPlace = true;
     cachedViewPinnedToBottom = false;
     cachedViewUserScrolled = true;
+    cachedViewScrollTop = scroll.top;
     restoringCachedView = true;
-    // Offset first so the HTML and the place are one frame, not bottom
-    // then a later restore. Rect refine handles a non-zero view top.
-    if (typeof sentinel.offsetTop === "number") {
-      messagesEl.scrollTop = Math.max(0, sentinel.offsetTop - scroll.y);
-    }
-    restoreTranscriptScrollAnchor(messagesEl, cachedViewAnchor);
+    messagesEl.scrollTop = scroll.top;
     signalUserScrollToRenderer(messagesEl);
-    var recaptured = captureTranscriptScrollAnchor(messagesEl);
-    if (recaptured && recaptured.key === scroll.key && messagesEl.clientHeight > 0) {
-      cachedViewAnchor = recaptured;
-    }
     restoringCachedView = false;
     cachedViewGesturePending = false;
   }
@@ -2688,83 +2672,12 @@ window.grokRemoteClient = true;
     cachedViewGesturePending = false;
     cachedViewPinnedToBottom = false;
     cachedViewHoldPlace = false;
-    cachedViewAnchor = null;
+    cachedViewScrollTop = null;
     restoringCachedView = false;
   }
-  function transcriptScrollRows(messagesEl) {
-    var rows = [];
-    if (!messagesEl) return rows;
-    var children = messagesEl.children;
-    for (var i = 0; i < children.length; i++) {
-      var child = children[i];
-      var id = child.id || "";
-      if (id === "welcome" || id === "history-head") continue;
-      if (child.getAttribute && child.getAttribute("data-pending-clear") === "1") continue;
-      rows.push(child);
-    }
-    return rows;
-  }
-  function rowAnchorKey(row) {
-    if (!row) return "";
-    var body = null;
-    try { body = row.querySelector && row.querySelector(".body"); } catch (_) { body = null; }
-    var text = body && body.textContent != null ? body.textContent : row.textContent;
-    return String(text || "").replace(/\s+/g, " ").trim();
-  }
-  function rowIsConnected(row) {
-    if (!row) return false;
-    if (typeof row.isConnected === "boolean") return row.isConnected;
-    return !!(row.parentNode || row.parentElement);
-  }
-  function findTranscriptRowByKey(messagesEl, key) {
-    if (!key) return null;
-    var rows = transcriptScrollRows(messagesEl);
-    for (var i = 0; i < rows.length; i++) {
-      if (rowAnchorKey(rows[i]) === key) return rows[i];
-    }
-    return null;
-  }
-  function captureTranscriptScrollAnchor(messagesEl) {
-    if (!messagesEl || typeof messagesEl.getBoundingClientRect !== "function") return null;
-    var view = messagesEl.getBoundingClientRect();
-    var rows = transcriptScrollRows(messagesEl);
-    var sentinel = null;
-    var index = -1;
-    for (var i = 0; i < rows.length; i++) {
-      var row = rows[i];
-      if (typeof row.getBoundingClientRect !== "function") continue;
-      if (row.getBoundingClientRect().bottom > view.top) {
-        sentinel = row;
-        index = i;
-        break;
-      }
-    }
-    if (!sentinel) return null;
-    return {
-      node: sentinel,
-      key: rowAnchorKey(sentinel),
-      index: index,
-      y: sentinel.getBoundingClientRect().top,
-    };
-  }
-  function resolveCachedViewSentinel(messagesEl, anchor) {
-    if (!anchor) return null;
-    var node = anchor.node;
-    if (rowIsConnected(node) && (node.parentElement === messagesEl || node.parentNode === messagesEl)) {
-      return node;
-    }
-    var byKey = findTranscriptRowByKey(messagesEl, anchor.key);
-    if (byKey) return byKey;
-    var rows = transcriptScrollRows(messagesEl);
-    if (anchor.index >= 0 && anchor.index < rows.length) return rows[anchor.index];
-    return null;
-  }
-  function restoreTranscriptScrollAnchor(messagesEl, anchor) {
-    if (!messagesEl || !anchor) return false;
-    var sentinel = resolveCachedViewSentinel(messagesEl, anchor);
-    if (!sentinel || typeof sentinel.getBoundingClientRect !== "function") return false;
-    var delta = sentinel.getBoundingClientRect().top - anchor.y;
-    if (delta) messagesEl.scrollTop += delta;
+  function restoreHeldScrollTop(messagesEl) {
+    if (!messagesEl || typeof cachedViewScrollTop !== "number") return false;
+    messagesEl.scrollTop = cachedViewScrollTop;
     return true;
   }
   function cachedViewIsPinnedToBottom(messagesEl) {
@@ -2808,7 +2721,7 @@ window.grokRemoteClient = true;
       cachedViewUserScrolled = true;
       cachedViewHoldPlace = true;
       cachedViewPinnedToBottom = false;
-      cachedViewAnchor = captureTranscriptScrollAnchor(messagesEl);
+      cachedViewScrollTop = messagesEl.scrollTop;
       restoringCachedView = true;
       signalUserScrollToRenderer(messagesEl);
       restoringCachedView = false;
@@ -2819,12 +2732,12 @@ window.grokRemoteClient = true;
         cachedViewGesturePending = false;
         cachedViewHoldPlace = false;
         cachedViewPinnedToBottom = true;
-        cachedViewAnchor = null;
+        cachedViewScrollTop = null;
         return;
       }
       restoringCachedView = true;
       signalUserScrollToRenderer(messagesEl);
-      restoreTranscriptScrollAnchor(messagesEl, cachedViewAnchor);
+      restoreHeldScrollTop(messagesEl);
       restoringCachedView = false;
       return;
     }
@@ -2832,16 +2745,16 @@ window.grokRemoteClient = true;
     // alive so a stick-to-bottom yank cannot eat the rest of the same touch.
   }
   function settleCachedViewScroll() {
-    // Restore the held row without disarming. Snapshot replay and the
+    // Restore the held offset without disarming. Snapshot replay and the
     // resumeSession replay both force-scroll; clearing here left the
     // second swap with nothing to honour.
     if (!cachedViewLive) return false;
-    var keep = cachedViewHoldPlace && cachedViewAnchor;
+    var keep = cachedViewHoldPlace && typeof cachedViewScrollTop === "number";
     var messagesEl = document.getElementById("messages");
     if (keep && messagesEl) {
       restoringCachedView = true;
       signalUserScrollToRenderer(messagesEl);
-      restoreTranscriptScrollAnchor(messagesEl, cachedViewAnchor);
+      restoreHeldScrollTop(messagesEl);
       restoringCachedView = false;
       return true;
     }

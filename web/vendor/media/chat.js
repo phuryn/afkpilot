@@ -10821,7 +10821,7 @@
   // becomes a no-op, so they can read history while grok keeps thinking (#16).
   // Replay (ACP session/load *and* in-memory buffer rebuilds) must not do this
   // per element: each assignment forces layout, and a large load looks like
-  // infinite scroll. historyReplay end force-scrolls once.
+  // infinite scroll. historyReplay end follows the pin once.
   function scrollToBottom() {
     if (state.replaying || !state.stickToBottom) return;
     messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -10839,7 +10839,7 @@
   // Always pull the view to the bottom and re-pin. For interactive activity the
   // user needs to see regardless of where they've scrolled: permission/question
   // cards and their own just-sent message. No-op during replay — the closing
-  // historyReplay frame is what lands the loaded conversation at the bottom.
+  // historyReplay frame follows the pin instead of re-pinning.
   function forceScrollToBottom() {
     if (state.replaying) return;
     setStickToBottom(true);
@@ -14504,9 +14504,12 @@
           // Remote reconnect/cold-load delivers only a recent window. Label
           // the export so it cannot be read as the whole transcript.
           if (IS_REMOTE) state.exportWindowed = true;
-          // One layout after the whole transcript is in the DOM — not one per
-          // replayed row. Live streaming keeps using scrollToBottom per chunk.
-          forceScrollToBottom();
+          // Follow the pin. Do not re-pin: a reader (or a cache restore) who
+          // is not at the bottom must stay put. A pinned reader still lands
+          // at the bottom so new messages stay visible. Fresh open / session
+          // swap already pin in resetForNewSession. Skip while the wrapper is
+          // restoring identity — that class means a place is already owned.
+          if (!identityRestoring()) scrollToBottom();
           onFindTranscriptSettled();
         }
         break;

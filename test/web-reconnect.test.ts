@@ -461,7 +461,7 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
       var cachedViewGesturePending = false;
       var cachedViewPinnedToBottom = false;
       var cachedViewHoldPlace = false;
-      var cachedViewAnchor = null;
+      var cachedViewScrollTop = null;
       var restoringCachedView = false;
       var ws = { readyState: WebSocket.OPEN };
       var deviceOffline = false;
