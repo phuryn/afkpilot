@@ -1211,6 +1211,10 @@ a:hover {
   gap: 10px;
 }
 .messages.stick-to-bottom { overflow-anchor: none; }
+.messages.history-prepending { overflow-anchor: none; }
+#history-head {
+  display: contents;
+}
 /* +5px above the first transcript item. Welcome stays first in the DOM and is
    hidden once chat starts, so empty/onboarding keep their own spacing; later
    messages keep the 10px gap. On the scroller, not the item, so it does not

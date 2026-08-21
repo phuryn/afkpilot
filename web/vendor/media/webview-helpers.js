@@ -1430,6 +1430,115 @@
     return !!(msg && EXPORT_EVENT_TYPES.has(msg.type));
   }
 
+  /** Flatten nested `historyBatch` frames into the host-message stream they wrap. */
+  function flattenHistoryMessages(messages) {
+    const out = [];
+    const walk = (list) => {
+      if (!Array.isArray(list)) return;
+      for (const ev of list) {
+        if (!ev || typeof ev !== "object") continue;
+        if (ev.type === "historyBatch") walk(ev.messages);
+        else if (ev.type !== "historyReplay") out.push(ev);
+      }
+    };
+    walk(messages);
+    return out;
+  }
+
+  const HISTORY_EVENT_TYPES = new Set([
+    "thoughtChunk", "messageChunk", "toolCall", "toolCallUpdate",
+  ]);
+
+  /**
+   * Split a replay stream so only the last `windowTurns` counted user bubbles
+   * render on open (#102). Prefix is older complete turns, never the live tail.
+   * `windowTurns <= 0` keeps everything in prefix (used to trim a prefix head).
+   */
+  function splitHistoryWindow(messages, windowTurns) {
+    const flat = flattenHistoryMessages(messages);
+    const n = Math.floor(Number(windowTurns));
+    const starts = [];
+    let i = 0;
+    while (i < flat.length) {
+      const ev = flat[i];
+      if (ev.type === "userMessage") {
+        if (!ev.steer) starts.push(i);
+        i += 1;
+        continue;
+      }
+      if (ev.type === "userMessageChunk") {
+        const start = i;
+        let text = String(ev.text || "");
+        i += 1;
+        while (i < flat.length && flat[i].type === "userMessageChunk") {
+          text += String(flat[i].text || "");
+          i += 1;
+        }
+        if (isInterjectionText(text)) continue;
+        if (replayedUserBubbleVerdict(text).hide) continue;
+        starts.push(start);
+        continue;
+      }
+      i += 1;
+    }
+    if (!Number.isFinite(n) || n <= 0) {
+      return { prefix: flat, suffix: [], prefixUserCount: starts.length };
+    }
+    if (starts.length <= n) {
+      return { prefix: [], suffix: flat, prefixUserCount: 0 };
+    }
+    const splitAt = starts[starts.length - n];
+    return {
+      prefix: flat.slice(0, splitAt),
+      suffix: flat.slice(splitAt),
+      prefixUserCount: starts.length - n,
+    };
+  }
+
+  /** Counters the live replay handlers would have reached after `messages`. */
+  function countHistoryReplayCounters(messages) {
+    const flat = flattenHistoryMessages(messages);
+    let userMsgCount = 0;
+    let interjectionCount = 0;
+    let historyEventCount = 0;
+    let suppressTurn = false;
+    let i = 0;
+    while (i < flat.length) {
+      const ev = flat[i];
+      if (ev.type === "userMessage") {
+        suppressTurn = false;
+        if (ev.steer) interjectionCount += 1;
+        else userMsgCount += 1;
+        i += 1;
+        continue;
+      }
+      if (ev.type === "userMessageChunk") {
+        let text = String(ev.text || "");
+        i += 1;
+        while (i < flat.length && flat[i].type === "userMessageChunk") {
+          text += String(flat[i].text || "");
+          i += 1;
+        }
+        const verdict = replayedUserBubbleVerdict(text);
+        if (verdict.hide === "turn") {
+          suppressTurn = true;
+          continue;
+        }
+        if (verdict.hide === "reminder" || verdict.hide === "marker") continue;
+        suppressTurn = false;
+        if (isInterjectionText(text)) {
+          interjectionCount += 1;
+          continue;
+        }
+        userMsgCount += 1;
+        continue;
+      }
+      if (!suppressTurn && HISTORY_EVENT_TYPES.has(ev.type)) historyEventCount += 1;
+      i += 1;
+    }
+    return { userMsgCount, interjectionCount, historyEventCount };
+  }
+
   function exportBasename(pathStr) {
     const s = String(pathStr || "");
     if (!s) return "";
@@ -1752,7 +1861,7 @@
     return header.join("\n") + (body ? body + "\n" : "");
   }
 
-  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, composerHasSendIntent, explicitVisibleChips, normalizeQueuedSends, queuedSendsText, queuedSendsChips, contextOverheadTokens, nextContextBreakdown, contextBreakdownIsCurrent, createPendingOverlay, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, highlightQueryParts, appendHighlightedText, commandProgramLabel, commandTextPreview, MAX_COMMAND_OUTPUT_CHARS, capCommandOutput, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents };
+  const api = { FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, composerHasSendIntent, explicitVisibleChips, normalizeQueuedSends, queuedSendsText, queuedSendsChips, contextOverheadTokens, nextContextBreakdown, contextBreakdownIsCurrent, createPendingOverlay, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, highlightQueryParts, appendHighlightedText, commandProgramLabel, commandTextPreview, MAX_COMMAND_OUTPUT_CHARS, capCommandOutput, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents, flattenHistoryMessages, splitHistoryWindow, countHistoryReplayCounters };
 
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;

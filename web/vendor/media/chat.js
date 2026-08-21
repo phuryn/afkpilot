@@ -561,6 +561,16 @@
     sessionProviderCursor: null,
     replaying: false,
     replayDepth: 0,
+    // Open-path window (#102): hold the replay stream and render only the last
+    // HISTORY_WINDOW_USER_TURNS. Older turns live here as raw host messages and
+    // prepend as the reader scrolls up. Live sessions never enter this path.
+    replayHold: false,
+    replayHeld: [],
+    historyPrefix: [],
+    historyPrefixUserCount: 0,
+    historyPrefixPlans: [],
+    historyPrefixPermissions: [],
+    historyHydrating: false,
     // Host events this client has actually rendered — the export source. A
     // remote snapshot is only the recent window; exportWindowed labels that.
     exportEvents: [],
@@ -1042,7 +1052,7 @@
 
   // ---------- markdown ----------
 
-  const { looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, appendHighlightedText, commandProgramLabel, commandTextPreview, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage, composerHasSendIntent, explicitVisibleChips, normalizeQueuedSends, queuedSendsText, queuedSendsChips, contextOverheadTokens, nextContextBreakdown, contextBreakdownIsCurrent, createPendingOverlay, getMentionQuery, applyMentionPick, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents } = globalThis.GrokWebviewHelpers;
+  const { looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, appendHighlightedText, commandProgramLabel, commandTextPreview, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage, composerHasSendIntent, explicitVisibleChips, normalizeQueuedSends, queuedSendsText, queuedSendsChips, contextOverheadTokens, nextContextBreakdown, contextBreakdownIsCurrent, createPendingOverlay, getMentionQuery, applyMentionPick, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents, flattenHistoryMessages, splitHistoryWindow, countHistoryReplayCounters } = globalThis.GrokWebviewHelpers;
 
   function escapeAttr(s) {
     return String(s == null ? "" : s)
@@ -7163,9 +7173,269 @@
     });
   }
 
+  // Last N counted user bubbles render on open; earlier turns prepend on scroll
+  // (#102). 80 is several screens even on a phone, 8× the remote snapshot of 10,
+  // and small conversations fall through unchanged. Tests may shrink it via
+  // `window.__grokHistoryWindow`.
+  const HISTORY_WINDOW_USER_TURNS = 80;
+  const HISTORY_PREPEND_USER_TURNS = 40;
+  const HISTORY_PREPEND_PX = 720;
+  let historyPark = null;
+  let prependLock = 0;
+
+  function historyWindowTurns() {
+    const override = window.__grokHistoryWindow;
+    if (typeof override === "number" && override > 0 && Number.isFinite(override)) return Math.floor(override);
+    return HISTORY_WINDOW_USER_TURNS;
+  }
+
+  function firstLiveTranscriptChild() {
+    for (const child of messagesEl.children) {
+      if (child.id === "welcome" || child.id === "history-head") continue;
+      if (isPendingClearNode(child)) continue;
+      return child;
+    }
+    return null;
+  }
+
+  function syncHistoryHead() {
+    let head = $("history-head");
+    const more = !!(state.historyPrefix && state.historyPrefix.length);
+    if (!more) {
+      if (head) head.remove();
+      return null;
+    }
+    if (!head) {
+      head = document.createElement("div");
+      head.id = "history-head";
+      head.setAttribute("aria-hidden", "true");
+      const welcome = $("welcome");
+      if (welcome && welcome.parentElement === messagesEl) {
+        messagesEl.insertBefore(head, welcome.nextSibling);
+      } else {
+        messagesEl.insertBefore(head, messagesEl.firstChild);
+      }
+    }
+    head.hidden = false;
+    return head;
+  }
+
+  function clearHistoryWindow() {
+    state.replayHold = false;
+    state.replayHeld = [];
+    state.historyPrefix = [];
+    state.historyPrefixUserCount = 0;
+    state.historyPrefixPlans = [];
+    state.historyPrefixPermissions = [];
+    state.historyHydrating = false;
+    historyPark = null;
+    const head = $("history-head");
+    if (head) head.remove();
+  }
+
+  const REPLAY_HOLD_TYPES = new Set([
+    "userMessage", "agentStart", "thoughtChunk", "messageChunk", "media",
+    "userMessageChunk", "historyBatch", "toolCall", "toolCallUpdate",
+    "permissionRequest", "permissionOptions", "permissionResolved",
+    "exitPlanRequest", "planResolved", "questionRequest", "planNotice",
+    "autoCompactNotice", "planBlocked", "promptComplete", "commandOutput",
+    "agentReset", "agentError", "agentEnd", "exit", "sessionContext",
+    "xaiNotification", "subagentUpdate", "childStream", "runProgress",
+    "summarizing",
+  ]);
+
+  function recordPrefixExport(msgs) {
+    for (const m of flattenHistoryMessages(msgs)) {
+      if (isExportableSessionEvent(m)) state.exportEvents.push(m);
+    }
+  }
+
+  function applyHistoryWindow(held) {
+    const split = splitHistoryWindow(held, historyWindowTurns());
+    state.historyPrefix = split.prefix;
+    state.historyPrefixUserCount = split.prefixUserCount;
+    if (split.prefixUserCount > 0) {
+      const counters = countHistoryReplayCounters(split.prefix);
+      state.userMsgCount = counters.userMsgCount;
+      state.interjectionCount = counters.interjectionCount;
+      state.historyEventCount = counters.historyEventCount;
+      const plans = state.planHistoryQueue || [];
+      state.historyPrefixPlans = plans.filter((p) =>
+        typeof p.afterUserMessage === "number" && p.afterUserMessage <= split.prefixUserCount);
+      state.planHistoryQueue = plans.filter((p) =>
+        typeof p.afterUserMessage !== "number" || p.afterUserMessage > split.prefixUserCount);
+      const perms = state.permissionHistoryQueue || [];
+      state.historyPrefixPermissions = perms.filter((p) =>
+        typeof p.afterUserMessage === "number" && p.afterUserMessage <= split.prefixUserCount);
+      state.permissionHistoryQueue = perms.filter((p) =>
+        typeof p.afterUserMessage !== "number" || p.afterUserMessage > split.prefixUserCount);
+      recordPrefixExport(split.prefix);
+    }
+    for (const m of split.suffix) handleHostMessage(m);
+    syncHistoryHead();
+  }
+
+  function restorePrependAnchor(sentinel, y) {
+    if (!sentinel || !sentinel.isConnected) return 0;
+    const delta = sentinel.getBoundingClientRect().top - y;
+    if (delta) messagesEl.scrollTop += delta;
+    return delta;
+  }
+
+  function prependHistoryNodes(nodes) {
+    if (!nodes.length) {
+      state.historyHydrating = false;
+      return;
+    }
+    const insertAt = firstLiveTranscriptChild();
+    const sentinel = insertAt;
+    const anchorY = sentinel ? sentinel.getBoundingClientRect().top : 0;
+    const prevHeight = messagesEl.scrollHeight;
+    const prevTop = messagesEl.scrollTop;
+    // Native anchoring is off while pinned and would double-count a height-delta
+    // write while unpinned. Hold the visible line in JS instead.
+    prependLock += 1;
+    messagesEl.classList.add("history-prepending");
+    const head = syncHistoryHead();
+    const before = (head && head.nextSibling) || insertAt;
+    for (const node of nodes) {
+      if (before) messagesEl.insertBefore(node, before);
+      else HTMLElement.prototype.appendChild.call(messagesEl, node);
+    }
+    if (sentinel && sentinel.isConnected) restorePrependAnchor(sentinel, anchorY);
+    else {
+      const grown = messagesEl.scrollHeight - prevHeight;
+      if (grown) messagesEl.scrollTop = prevTop + grown;
+    }
+    state.historyHydrating = false;
+    const finish = () => {
+      if (sentinel && sentinel.isConnected) restorePrependAnchor(sentinel, anchorY);
+      messagesEl.classList.remove("history-prepending");
+      prependLock = Math.max(0, prependLock - 1);
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(finish);
+    else finish();
+  }
+
+  function loadEarlierHistory(all) {
+    if (state.replaying || state.historyHydrating) return false;
+    if (!state.historyPrefix.length) return false;
+    const turns = all ? state.historyPrefixUserCount : HISTORY_PREPEND_USER_TURNS;
+    const split = splitHistoryWindow(state.historyPrefix, Math.max(1, turns));
+    const chunk = split.suffix.length ? split.suffix : split.prefix;
+    const remain = split.suffix.length ? split.prefix : [];
+    const remainUsers = split.suffix.length ? split.prefixUserCount : 0;
+    const remainCounters = countHistoryReplayCounters(remain);
+    state.historyPrefix = remain;
+    state.historyPrefixUserCount = remainUsers;
+    hydrateHistoryChunkWithCounters(chunk, remainUsers, remainCounters);
+    return true;
+  }
+
+  function hydrateHistoryChunkWithCounters(chunk, startUserCount, remainCounters) {
+    if (!chunk.length) return;
+    const saved = {
+      userMsgCount: state.userMsgCount,
+      interjectionCount: state.interjectionCount,
+      historyEventCount: state.historyEventCount,
+      planHistoryQueue: state.planHistoryQueue,
+      permissionHistoryQueue: state.permissionHistoryQueue,
+      busy: state.busy,
+      busyLocked: state.busyLocked,
+      grokkingEl: state.grokkingEl,
+      thinkingIndicatorEl: state.thinkingIndicatorEl,
+      activeAgentEl: state.activeAgentEl,
+      activeAgentRaw: state.activeAgentRaw,
+      activeUserEl: state.activeUserEl,
+      activeUserRaw: state.activeUserRaw,
+      activeThoughtEl: state.activeThoughtEl,
+      activeThoughtHdrEl: state.activeThoughtHdrEl,
+      thoughtBuffer: state.thoughtBuffer,
+      activeToolGroupEl: state.activeToolGroupEl,
+      turnAgentActionsEl: state.turnAgentActionsEl,
+      turnRating: state.turnRating,
+      suppressReplayTurn: state.suppressReplayTurn,
+      skipUserBubble: state.skipUserBubble,
+      replaying: state.replaying,
+    };
+    historyPark = document.createElement("div");
+    state.historyHydrating = true;
+    state.replaying = true;
+    state.busy = false;
+    state.grokkingEl = null;
+    state.thinkingIndicatorEl = null;
+    state.activeAgentEl = null;
+    state.activeAgentRaw = "";
+    state.activeUserEl = null;
+    state.activeUserRaw = "";
+    state.activeThoughtEl = null;
+    state.activeThoughtHdrEl = null;
+    state.thoughtBuffer = "";
+    state.activeToolGroupEl = null;
+    state.turnAgentActionsEl = null;
+    state.suppressReplayTurn = false;
+    state.skipUserBubble = false;
+    state.userMsgCount = startUserCount;
+    state.interjectionCount = remainCounters.interjectionCount;
+    state.historyEventCount = remainCounters.historyEventCount;
+    state.planHistoryQueue = state.historyPrefixPlans.slice();
+    state.permissionHistoryQueue = state.historyPrefixPermissions.slice();
+    for (const m of chunk) handleHostMessage(m);
+    if (!state.historyPrefix.length) {
+      flushPlanHistory();
+      flushPermissionHistory();
+    }
+    const nodes = [...historyPark.children];
+    historyPark = null;
+    state.historyPrefixPlans = state.planHistoryQueue.slice();
+    state.historyPrefixPermissions = state.permissionHistoryQueue.slice();
+    state.userMsgCount = saved.userMsgCount;
+    state.interjectionCount = saved.interjectionCount;
+    state.historyEventCount = saved.historyEventCount;
+    state.planHistoryQueue = saved.planHistoryQueue;
+    state.permissionHistoryQueue = saved.permissionHistoryQueue;
+    state.busy = saved.busy;
+    state.busyLocked = saved.busyLocked;
+    state.grokkingEl = saved.grokkingEl;
+    state.thinkingIndicatorEl = saved.thinkingIndicatorEl;
+    state.activeAgentEl = saved.activeAgentEl;
+    state.activeAgentRaw = saved.activeAgentRaw;
+    state.activeUserEl = saved.activeUserEl;
+    state.activeUserRaw = saved.activeUserRaw;
+    state.activeThoughtEl = saved.activeThoughtEl;
+    state.activeThoughtHdrEl = saved.activeThoughtHdrEl;
+    state.thoughtBuffer = saved.thoughtBuffer;
+    state.activeToolGroupEl = saved.activeToolGroupEl;
+    state.turnAgentActionsEl = saved.turnAgentActionsEl;
+    state.turnRating = saved.turnRating;
+    state.suppressReplayTurn = saved.suppressReplayTurn;
+    state.skipUserBubble = saved.skipUserBubble;
+    state.replaying = saved.replaying;
+    prependHistoryNodes(nodes);
+    refreshUserRewindButtons();
+    syncHistoryHead();
+    updateSendButton();
+  }
+
+  function expandHistoryAll() {
+    while (state.historyPrefix.length) loadEarlierHistory(true);
+  }
+
+  function maybeLoadEarlierHistory() {
+    if (state.replaying || state.historyHydrating) return;
+    if (!state.historyPrefix.length) return;
+    if (state.stickToBottom) return;
+    if (messagesEl.scrollTop > HISTORY_PREPEND_PX) return;
+    loadEarlierHistory(false);
+  }
+
   /** Append replacement content. Drops pending-clear nodes in the same task
    *  AFTER the new node is in, so the transcript is never empty mid-paint. */
   function appendTranscriptChild(el) {
+    if (historyPark) {
+      historyPark.appendChild(el);
+      return el;
+    }
     if (!pendingTranscriptClear) {
       HTMLElement.prototype.appendChild.call(messagesEl, el);
       return el;
@@ -7249,6 +7519,7 @@
     state.activeToolGroupEl = null;
     state.replaying = false;
     state.replayDepth = 0;
+    clearHistoryWindow();
     state.exportEvents = [];
     state.exportWindowed = false;
     state.planHistoryQueue = [];
@@ -7779,8 +8050,9 @@
   // as the rewind map counts them). Sent with every rewind/edit so the host can
   // verify its point list still lines up before acting — see bubbleMapIsConsistent.
   function visibleUserBubbleCount() {
-    return liveTranscriptQueryAll(".msg.user:not(.queued)")
+    const rendered = liveTranscriptQueryAll(".msg.user:not(.queued)")
       .filter((el) => el.dataset.steer !== "1").length;
+    return (state.historyPrefixUserCount || 0) + rendered;
   }
 
   function refreshUserRewindButtons() {
@@ -7798,8 +8070,9 @@
       if (r) r.hidden = true;
       if (ed) ed.hidden = true;
     }
+    const prefixCount = state.historyPrefixUserCount || 0;
     users.forEach((el, i) => {
-      el.dataset.userBubbleIndex = String(i);
+      el.dataset.userBubbleIndex = String(prefixCount + i);
       const isLast = i === users.length - 1;
       const btn = el.querySelector(".msg-rewind-btn");
       if (btn) {
@@ -10410,6 +10683,7 @@
   // the Thinking header's look (blink-dots, same muted font) without the
   // chevron, and is not expandable.
   function showGrokking() {
+    if (state.historyHydrating) return;
     hideGrokking(); // dedupe
     hideThinkingIndicator();
     clearWelcome();
@@ -10580,10 +10854,10 @@
   // pinned; a deliberate scroll-up has cleared stickToBottom and is untouched.
   let contentFollowFrame = 0;
   new MutationObserver(() => {
-    if (state.replaying || !state.stickToBottom || contentFollowFrame) return;
+    if (state.replaying || state.historyHydrating || prependLock || !state.stickToBottom || contentFollowFrame) return;
     contentFollowFrame = requestAnimationFrame(() => {
       contentFollowFrame = 0;
-      if (state.stickToBottom && !state.replaying) messagesEl.scrollTop = messagesEl.scrollHeight;
+      if (state.stickToBottom && !state.replaying && !prependLock) messagesEl.scrollTop = messagesEl.scrollHeight;
     });
   }).observe(messagesEl, {
     childList: true,
@@ -10645,12 +10919,14 @@
         return;
       }
     }
-    if (!hasUserScrollIntent()) return;
-    setStickToBottom(shouldStickToBottom(
-      messagesEl.scrollTop, messagesEl.scrollHeight, messagesEl.clientHeight,
-      currentStickThreshold(),
-    ));
-    updateScrollBtn();
+    if (hasUserScrollIntent()) {
+      setStickToBottom(shouldStickToBottom(
+        messagesEl.scrollTop, messagesEl.scrollHeight, messagesEl.clientHeight,
+        currentStickThreshold(),
+      ));
+      updateScrollBtn();
+    }
+    maybeLoadEarlierHistory();
   });
 
   scrollBottomBtn.onclick = () => {
@@ -13117,6 +13393,7 @@
       updateFindChrome();
       return;
     }
+    if (state.historyPrefix && state.historyPrefix.length) expandHistoryAll();
     const nodes = findCollectNodes();
     find.lastNodes = nodes;
     if (canNarrowFind(nodes, query)) {
@@ -13434,6 +13711,13 @@
     if (find.open) runFindSearchNow();
   };
 
+  window.__grokHistory = {
+    prefixRemaining: () => state.historyPrefixUserCount || 0,
+    prefixLength: () => (state.historyPrefix && state.historyPrefix.length) || 0,
+    expandMore: () => loadEarlierHistory(false),
+    expandAll: () => expandHistoryAll(),
+  };
+
   window.__grokFind = {
     open: openFind,
     close: closeFind,
@@ -13494,6 +13778,11 @@
   ]);
 
   function handleHostMessage(msg) {
+    if (!msg || typeof msg !== "object") return;
+    if (state.replayHold && msg.type !== "historyReplay" && REPLAY_HOLD_TYPES.has(msg.type)) {
+      state.replayHeld.push(msg);
+      return;
+    }
     switch (msg.type) {
       case "initialState":
         state.useCtrlEnter = msg.useCtrlEnter;
@@ -13733,24 +14022,40 @@
         // A pending clearMessages is logically empty already; flush so
         // lastElementChild is not a stale node we are about to drop.
         flushPendingTranscriptClear();
-        const users = liveTranscriptQueryAll(".msg.user:not(.queued)")
-          .filter((el) => el.dataset.steer !== "1");
-        const firstGone = users[msg.surviving];
-        if (firstGone) {
-          // Remove that message and every sibling after it — agent replies, tool
-          // groups, plan/permission cards, subagent rows all belong to the
-          // discarded turns.
-          while (messagesEl.lastElementChild && messagesEl.lastElementChild !== firstGone) {
-            messagesEl.removeChild(messagesEl.lastElementChild);
+        const surviving = Math.max(0, Number(msg.surviving) || 0);
+        if (surviving < (state.historyPrefixUserCount || 0)) {
+          const trimmed = splitHistoryWindow(state.historyPrefix, (state.historyPrefixUserCount || 0) - surviving);
+          state.historyPrefix = trimmed.prefix;
+          state.historyPrefixUserCount = surviving;
+          state.historyPrefixPlans = (state.historyPrefixPlans || []).filter((p) =>
+            typeof p.afterUserMessage !== "number" || p.afterUserMessage <= surviving);
+          state.historyPrefixPermissions = (state.historyPrefixPermissions || []).filter((p) =>
+            typeof p.afterUserMessage !== "number" || p.afterUserMessage <= surviving);
+          for (const child of Array.from(messagesEl.children)) {
+            if (child.id === "welcome" || child.id === "history-head") continue;
+            child.remove();
           }
-          if (messagesEl.lastElementChild === firstGone) messagesEl.removeChild(firstGone);
+          syncHistoryHead();
+        } else {
+          const users = liveTranscriptQueryAll(".msg.user:not(.queued)")
+            .filter((el) => el.dataset.steer !== "1");
+          const firstGone = users.find((el) => Number(el.dataset.userBubbleIndex) === surviving) || users[surviving];
+          if (firstGone) {
+            // Remove that message and every sibling after it — agent replies, tool
+            // groups, plan/permission cards, subagent rows all belong to the
+            // discarded turns.
+            while (messagesEl.lastElementChild && messagesEl.lastElementChild !== firstGone) {
+              messagesEl.removeChild(messagesEl.lastElementChild);
+            }
+            if (messagesEl.lastElementChild === firstGone) messagesEl.removeChild(firstGone);
+          }
         }
         // Same surviving-user-turn count as the DOM filter above. Steer
         // interjections and hidden replayed user events do not consume a slot.
-        state.exportEvents = truncateExportEvents(state.exportEvents, msg.surviving);
+        state.exportEvents = truncateExportEvents(state.exportEvents, surviving);
         // Nothing streaming survives a truncation — drop the per-turn handles so
         // the next turn starts clean rather than appending into a removed node.
-        state.userMsgCount = msg.surviving;
+        state.userMsgCount = surviving;
         state.turnRating = 0;
         state.activeAgentEl = null;
         state.activeAgentRaw = "";
@@ -13763,7 +14068,7 @@
         // No completed-turn figure survives a rewind; when the whole transcript
         // is gone, neither does the session aggregate.
         state.lastTurnUsage = null;
-        if (msg.surviving === 0) state.sessionUsage = null;
+        if (surviving === 0) state.sessionUsage = null;
         if (!contextPopover.hidden) openContextPopover();
         hideGrokking();
         hideThinkingIndicator();
@@ -14116,6 +14421,8 @@
             state.suppressReplayTurn = false; // fresh outer replay starts unsuppressed
             state.skipUserBubble = false;
             state.repoSwitchPending = true;
+            state.replayHold = true;
+            state.replayHeld = [];
             setConversationLoading(true);
             renderRepoChip();
           }
@@ -14123,10 +14430,16 @@
           state.replaying = true;
         } else {
           if (state.replayDepth === 0) break;
-          const inFlightSpeech = state.busy ? state.activeAgentRaw : "";
-          commitAgentTurn(); // finalize the last turn while still flagged as replay
           state.replayDepth -= 1;
           if (state.replayDepth > 0) break;
+          if (state.replayHold) {
+            state.replayHold = false;
+            const held = state.replayHeld;
+            state.replayHeld = [];
+            applyHistoryWindow(held);
+          }
+          const inFlightSpeech = state.busy ? state.activeAgentRaw : "";
+          commitAgentTurn(); // finalize the last turn while still flagged as replay
           state.replaying = false;
           state.repoSwitchPending = false;
           // historyReplay is never identity confirmation. If a rail click is
@@ -15130,7 +15443,7 @@
       // finishFindSearch does not scroll, so the current match stays put.
       scheduleFindSearch();
     }
-    if (shouldRecordExportEvent(msg)) {
+    if (!state.historyHydrating && shouldRecordExportEvent(msg)) {
       state.exportEvents.push(msg);
     }
   }
