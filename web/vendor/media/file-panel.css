@@ -530,8 +530,13 @@ body.desk-ft-maximized .gfp-panel {
     var(--rail-hover-bg, var(--vscode-list-hoverBackground, var(--vscode-sideBar-background, #1e1e1e))) 12px
   );
 }
+/* Hover, keyboard focus, and an open ⋯ menu. Not :focus-within: a mouse
+   click focuses the row (and the ⋯) and would pin the actions after the
+   pointer has moved on to another row. */
 .gfp-row:hover .gfp-row-actions,
-.gfp-row:focus-within .gfp-row-actions { display: flex; }
+.gfp-row:focus-visible .gfp-row-actions,
+.gfp-row:has(:focus-visible) .gfp-row-actions,
+.gfp-row.gfp-menu-open .gfp-row-actions { display: flex; }
 /* No actions, no fade. A host that supplies none — the browser client, where
    Open-in-app and Reveal are host-local and cannot travel — still hovered up a
    gradient with nothing in it, which reads as a shadow smeared over the row. */

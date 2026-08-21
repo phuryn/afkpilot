@@ -7007,6 +7007,10 @@
   // A resync must not blank the name or move focus (a returning phone tab
   // would pop the keyboard). Flush still applies them for an empty swap.
   let pendingSessionChromeReset = false;
+  // Desktop launch is a different event from that resync: the app just opened
+  // and the caret belongs in the composer, restored conversation or not. One
+  // shot, consumed on the first focused-window claim. VS Code never sets this.
+  let desktopLaunchFocusPending = IS_DESKTOP_CLIENT;
 
   function isPendingClearNode(el) {
     return !!(el && typeof el.closest === "function" && el.closest("[" + PENDING_CLEAR_ATTR + "]"));
@@ -7096,6 +7100,20 @@
     // focus across panels. The same argument keeps a resync from focusing —
     // that path never reaches here because the chrome reset is held.
     if (typeof document.hasFocus !== "function" || document.hasFocus()) input.focus();
+  }
+
+  function takeDesktopLaunchComposerFocus() {
+    // The desktop app IS the chat. First time this document is the focused
+    // surface, put the caret in the composer — including a boot that restores
+    // a conversation (the pending-clear hold would otherwise skip it). A
+    // reconnect/resync of an already-open surface has already consumed this.
+    // Do not consume while the window is unfocused: show:false boot would
+    // burn the shot before the first real window-focus.
+    if (!desktopLaunchFocusPending) return false;
+    if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
+    desktopLaunchFocusPending = false;
+    input.focus({ preventScroll: true });
+    return true;
   }
 
   function resetSessionChrome() {
@@ -14451,6 +14469,7 @@
           // stayed put. Empty replay: nothing replaced it, so the welcome
           // belongs now. A replacement already dropped the pending flag.
           if (pendingTranscriptClear) flushPendingTranscriptClear();
+          takeDesktopLaunchComposerFocus();
           renderRepoChip();
           // A remote snapshot can end while its latest turn is still running.
           // Seed the already-rendered prefix only in that case, so the eventual
@@ -16152,15 +16171,20 @@
   // blinking in the box before the first click (matches Claude Code / Codex).
   // The webview is rebuilt on every re-show (no retainContextWhenHidden), so
   // the boot-time focus covers "reopened" too; the window-focus hook covers
-  // clicking back into a panel that stayed alive. Only claim focus when it
-  // landed on <body> (i.e. nowhere) — a click that focused a real control
-  // (history button, popover row) keeps it.
+  // clicking back into a panel that stayed alive.
+  // Desktop launch always claims the composer on the first focused-window
+  // event (Chromium otherwise lands on the first tabbable — rail search /
+  // history). Later window-focus only claims when it landed on <body> — a
+  // click that focused a real control keeps it, and a reconnect/resync must
+  // not steal. VS Code never takes this launch shot: focus belongs to the
+  // editor the user was already in.
   // applyChatZoom first: a stored desktop/remote scale must be on the body
   // before focus, or the first layout is at 1 and focus scrolls the overflow.
   // preventScroll: a taller-than-window first frame must not stick html.
   applyChatZoom();
   wireClientFontScaleShortcuts();
   window.addEventListener("focus", () => {
+    if (takeDesktopLaunchComposerFocus()) return;
     const el = document.activeElement;
     if (!el || el === document.body) input.focus({ preventScroll: true });
   });

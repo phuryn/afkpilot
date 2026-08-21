@@ -1070,6 +1070,8 @@
       more.innerHTML = ICON.more;
       more.title = "More actions";
       more.setAttribute("aria-label", "More actions");
+      more.setAttribute("aria-haspopup", "menu");
+      more.setAttribute("aria-expanded", "false");
       more.addEventListener("click", (event) => {
         event.stopPropagation();
         openRowMenu(more, entry);
@@ -1885,6 +1887,23 @@
       menu.style.right = "auto";
     }
 
+    function setMenuAnchorExpanded(anchor, open) {
+      if (!anchor || typeof anchor.setAttribute !== "function") return;
+      if (String(anchor.tagName || "").toLowerCase() !== "button") return;
+      anchor.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    function setRowMenuOpen(anchor, open) {
+      setMenuAnchorExpanded(anchor, open);
+      if (!anchor || typeof anchor.closest !== "function") return;
+      const row = anchor.closest(".gfp-row");
+      // A context-menu on the row itself uses the row as the anchor — do not
+      // pin the ⋯. The ⋯ button is a descendant, so closest is the row and
+      // not the row-as-anchor.
+      if (!row || row === anchor) return;
+      row.classList.toggle("gfp-menu-open", !!open);
+    }
+
     /** True when this click should toggle the open menu rather than dismiss
      *  it from outside. Only a BUTTON (or the chip) counts — a tree row used
      *  as a context-menu origin is too large to treat as the opener. */
@@ -1928,6 +1947,7 @@
       }
       if (!menu.childNodes.length) return closeMenu();
       menuAnchor = anchor;
+      setRowMenuOpen(anchor, true);
       doc.body.appendChild(menu);
       positionMenu(anchor, pointerEvent);
     }
@@ -1981,9 +2001,8 @@
       }
       if (!menu.childNodes.length) return closeMenu();
       menuAnchor = anchor;
+      setRowMenuOpen(anchor, true);
       doc.body.appendChild(menu);
-      const chip = tabsEl.querySelector(".gfp-overflow-chip");
-      if (chip) chip.setAttribute("aria-expanded", "true");
       positionMenu(anchor);
     }
 
@@ -2025,6 +2044,7 @@
     }
 
     function closeMenu() {
+      setRowMenuOpen(menuAnchor, false);
       if (menu) menu.remove();
       menu = null;
       menuAnchor = null;

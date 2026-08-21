@@ -2,7 +2,7 @@
   "version": 1,
   "source": {
     "repository": "grok-build-vscode",
-    "revision": "4387416f62647281b9dde213f098a038ad746158",
+    "revision": "e12d8d8253f348f51af98a5dd5dbce6ebb89b85c",
     "appVersion": "3.13.1",
     "filesMatchRevision": true
   },
@@ -15,17 +15,17 @@
     {
       "source": "media/chat.js",
       "destination": "media/chat.js",
-      "sha256": "76a43f68c063102cf6b8b6241c2aa433bf73d7fc86c080aac3b2ba97cb0bf65b"
+      "sha256": "9b8f328adc0c2ec5841ce4ec47c52bd40fe445823ca7d9a11a77677547c5feb2"
     },
     {
       "source": "media/file-panel.css",
       "destination": "media/file-panel.css",
-      "sha256": "7a2071e80bc3870bbf6042d3b476175514159373b9972852f2d9222da9cf9281"
+      "sha256": "38b0025fc323996ab06e52bc28b61e1a9a714ff6a5a84b2a02054d343bad269a"
     },
     {
       "source": "media/file-panel.js",
       "destination": "media/file-panel.js",
-      "sha256": "58e462f6135a142cf600b3a155828208e2d8db4587aeedd240b2cca006984c19"
+      "sha256": "85b10ae823779d430ae54c15026408c4b7e51464d66c9bffb8eca95301e78778"
     },
     {
       "source": "media/syntax-highlight.js",
