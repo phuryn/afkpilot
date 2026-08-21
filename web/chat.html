@@ -1931,8 +1931,11 @@ window.grokRemoteClient = true;
     // Restore is the "previous state is back" signal. An arbitrary inbound
     // frame must not start the hide while that is still in flight.
     if (identityTarget && !identityRestoreComplete) return;
-    clearTimeout(overlayHideTimer);
+    // Schedule once. Chunks during an active turn arrive faster than the
+    // hide delay; restarting would pin the veil up for the whole turn.
+    if (overlayHideTimer) return;
     overlayHideTimer = setTimeout(function () {
+      overlayHideTimer = null;
       overlayEl.classList.remove("reconnecting");
       hideOverlay();
     }, 450);

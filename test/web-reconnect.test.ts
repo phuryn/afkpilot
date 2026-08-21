@@ -417,6 +417,7 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
         return overlayEl.querySelector(".panel");
       }
       function hideOverlay() { if (overlayEl) overlayEl.hidden = true; }
+      ${noticeSrc}
       function forgetUnbouncedLiveOutbound() {}
       function setVoiceTransportReady() {}
       function recoverAuthoredFromLiveOutbound() {}
@@ -440,9 +441,13 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
         abandonIdentityRestore: abandonIdentityRestore,
         beginIdentityRestore: beginIdentityRestore,
         showHostTooOld: showHostTooOld,
+        notice: notice,
         setHostBlocked: function (v) { hostBlocked = v; },
         veilUp: function () {
           return !!(overlayEl && !overlayEl.hidden && overlayEl.classList.contains("reconnecting"));
+        },
+        overlayVisible: function () {
+          return !!(overlayEl && !overlayEl.hidden);
         },
       };
     `,
@@ -457,8 +462,10 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
     abandonIdentityRestore: (reason: string) => void;
     beginIdentityRestore: () => void;
     showHostTooOld: (version: string) => void;
+    notice: (html: string) => void;
     setHostBlocked: (value: boolean) => void;
     veilUp: () => boolean;
+    overlayVisible: () => boolean;
   };
 
   return runtime;
@@ -495,6 +502,66 @@ describe("reconnect veil", () => {
     vi.advanceTimersByTime(449);
     expect(rt.veilUp()).toBe(true);
     vi.advanceTimersByTime(1);
+    expect(rt.veilUp()).toBe(false);
+  });
+
+  it("a burst of inbound frames closer than the hide delay still lifts the veil", () => {
+    vi.useFakeTimers();
+    const rt = makeVeilRuntime({ remembered: { id: "sess-1", repoCwd: "/repo" } });
+    rt.showReconnecting();
+    rt.beginIdentityRestore();
+    rt.finishIdentityRestore();
+    expect(rt.veilUp()).toBe(true);
+
+    for (let i = 0; i < 8; i++) {
+      vi.advanceTimersByTime(100);
+      rt.settleReconnectVeil();
+    }
+    expect(rt.veilUp()).toBe(false);
+  });
+
+  it("lifts the veil on a single quiet frame after restore", () => {
+    vi.useFakeTimers();
+    const rt = makeVeilRuntime({ remembered: { id: "sess-1", repoCwd: "/repo" } });
+    rt.showReconnecting();
+    rt.beginIdentityRestore();
+    rt.finishIdentityRestore();
+    expect(rt.veilUp()).toBe(true);
+
+    rt.settleReconnectVeil();
+    vi.advanceTimersByTime(449);
+    expect(rt.veilUp()).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(rt.veilUp()).toBe(false);
+  });
+
+  it("notice() cancels a pending hide and drops the veil styling", () => {
+    vi.useFakeTimers();
+    const rt = makeVeilRuntime({ remembered: { id: "sess-1", repoCwd: "/repo" } });
+    rt.showReconnecting();
+    rt.beginIdentityRestore();
+    rt.finishIdentityRestore();
+    expect(rt.veilUp()).toBe(true);
+
+    rt.notice("Device not found.");
+    expect(rt.veilUp()).toBe(false);
+    expect(rt.overlayVisible()).toBe(true);
+    vi.advanceTimersByTime(450);
+    expect(rt.veilUp()).toBe(false);
+    expect(rt.overlayVisible()).toBe(true);
+  });
+
+  it("the host-blocked path still drops the veil", () => {
+    vi.useFakeTimers();
+    const rt = makeVeilRuntime({ remembered: { id: "sess-1", repoCwd: "/repo" } });
+    rt.showReconnecting();
+    rt.beginIdentityRestore();
+    rt.finishIdentityRestore();
+    expect(rt.veilUp()).toBe(true);
+
+    rt.showHostTooOld("2.0.4");
+    expect(rt.veilUp()).toBe(false);
+    vi.advanceTimersByTime(450);
     expect(rt.veilUp()).toBe(false);
   });
 
