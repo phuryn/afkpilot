@@ -5848,11 +5848,11 @@
     const previousSessionId = state.activeSessionId;
     const repoCwd = state.selectedRepoCwd || state.activeRepoCwd || "";
     saveRememberedRemoteSession(null);
-    resetForNewSession();
-    // After reset so setConversationLoading wins over the "Starting" welcome
-    // status resetForNewSession paints. The placeholder is renderer-local and
-    // never enters state.sessions.
+    // Veil before the host-style reset so the click can unhide the welcome.
+    // resetForNewSession marks the old nodes pending-clear, and a pending-clear
+    // transcript must not grow an empty-state panel on top of it.
     startRailNewTransition(repoCwd, "creating", previousSessionId);
+    resetForNewSession();
     vscode.postMessage({ type: "newSession" });
   }
 
@@ -6854,7 +6854,9 @@
       child.setAttribute("data-pending-open-hide", "1");
       child.hidden = true;
     }
-    if (welcome) {
+    // A host clear already owns these nodes; revealing the empty state on top
+    // of them is the reconnect flash. The click path veils *before* that clear.
+    if (welcome && !hasPendingClearNodes()) {
       welcome.hidden = false;
       state.welcomeVisible = true;
     }
@@ -6884,6 +6886,7 @@
       // used to double it up, and the transcript arrives as one batch anyway \u2014
       // so the wait that's worth announcing happens while the welcome is still
       // on screen, and the banner only ever duplicated this line.
+      if (welcomeHoldActive()) return;
       setWelcomeStatus("Loading conversation", true);
       return;
     }
@@ -6968,13 +6971,51 @@
 
   // clearMessages marks existing transcript nodes instead of destroying them.
   // Destroy at the first replacement append (same task) or on the next frame
-  // if nothing replaces it — otherwise a resync paints "Starting" for a frame.
+  // if nothing replaces it. The welcome stays hidden until that same moment —
+  // otherwise a resync paints "Starting" over a conversation still on screen.
   const PENDING_CLEAR_ATTR = "data-pending-clear";
   let pendingTranscriptClear = false;
   let pendingTranscriptClearRaf = 0;
+  // Status resetForNewSession would have stamped immediately. Held while
+  // pending-clear nodes are still on screen; applied in the flush if nothing
+  // replaces them, dropped if a replacement arrives. "loading" / "no-project"
+  // / "starting" match the three special cases at the welcome block.
+  let pendingWelcomeReveal = null;
 
   function isPendingClearNode(el) {
     return !!(el && typeof el.closest === "function" && el.closest("[" + PENDING_CLEAR_ATTR + "]"));
+  }
+
+  function hasPendingClearNodes() {
+    for (const child of messagesEl.children) {
+      if (child.id === "welcome") continue;
+      if (child.getAttribute(PENDING_CLEAR_ATTR) === "1") return true;
+    }
+    return false;
+  }
+
+  function welcomeRevealKind() {
+    if (state.railTransition) return "loading";
+    if (state.onboardingMode === "no-project") return "no-project";
+    return "starting";
+  }
+
+  function applyWelcomeRevealKind(kind) {
+    if (kind === "loading") setConversationLoading(true);
+    else if (kind === "no-project") setWelcomeStatus("No project folder", false);
+    else setWelcomeStatus("Starting", true);
+  }
+
+  function revealWelcome() {
+    if (hasPendingClearNodes()) return;
+    const welcome = $("welcome");
+    if (welcome) welcome.hidden = false;
+    state.welcomeVisible = true;
+  }
+
+  function welcomeHoldActive() {
+    const welcome = $("welcome");
+    return !!(welcome && welcome.hidden && hasPendingClearNodes());
   }
 
   function liveTranscriptQueryAll(sel) {
@@ -7003,16 +7044,22 @@
   /** Empty-state path: no replacement arrived, so the welcome must appear. */
   function flushPendingTranscriptClear() {
     if (!pendingTranscriptClear) return;
+    // Replay has started: replacement is in flight even if the first append
+    // has not landed yet. Keep the conversation until it does, or until the
+    // replay ends empty and calls us again.
+    if (state.replaying) return;
     pendingTranscriptClear = false;
+    const kind = pendingWelcomeReveal;
+    pendingWelcomeReveal = null;
     cancelPendingTranscriptClearRaf();
     for (const child of Array.from(messagesEl.children)) {
       if (child.getAttribute(PENDING_CLEAR_ATTR) === "1") child.remove();
     }
-    const welcome = $("welcome");
-    if (welcome) {
-      welcome.hidden = false;
-      state.welcomeVisible = true;
+    if (kind) {
+      applyWelcomeRevealKind(kind);
+      renderWelcomeTip();
     }
+    revealWelcome();
   }
 
   /** Append replacement content. Drops pending-clear nodes in the same task
@@ -7024,6 +7071,7 @@
     }
     const scrollTop = messagesEl.scrollTop;
     pendingTranscriptClear = false;
+    pendingWelcomeReveal = null;
     cancelPendingTranscriptClearRaf();
     HTMLElement.prototype.appendChild.call(messagesEl, el);
     for (const child of Array.from(messagesEl.children)) {
@@ -7054,9 +7102,6 @@
     markTranscriptPendingClear();
     const welcome = $("welcome");
     if (welcome) {
-      // Do not unhide #welcome here. That paints "Starting" over a transcript
-      // that a same-burst replay is about to put back. flushPendingTranscriptClear
-      // unhides it on the next frame if no replacement arrives.
       const onb = $("welcome-onboarding");
       // Keep a just-shown "Connected" confirmation. Connecting an agent starts a
       // fresh session for it, and that session swap arrives as clearMessages —
@@ -7071,12 +7116,18 @@
       // no-project is the other hold: last-folder-removed emits clearMessages
       // then the empty-state card, and flipping to Starting in between is the
       // hang that card exists to replace.
-      if (state.railTransition) setConversationLoading(true);
-      else if (state.onboardingMode === "no-project") setWelcomeStatus("No project folder", false);
-      else setWelcomeStatus("Starting", true);
-      // The empty state is rebuilt on every new session, so the tip is too —
-      // until the host stops advertising it.
-      renderWelcomeTip();
+      //
+      // Do not unhide or stamp while the previous conversation is still on
+      // screen. flushPendingTranscriptClear applies the same status once the
+      // nodes actually go; a replacement drops it so the empty state never
+      // appears over a conversation that is about to come back.
+      if (hasPendingClearNodes()) {
+        pendingWelcomeReveal = welcomeRevealKind();
+      } else {
+        pendingWelcomeReveal = null;
+        applyWelcomeRevealKind(welcomeRevealKind());
+        renderWelcomeTip();
+      }
     }
     state.welcomeVisible = true;
     state.pendingDiffByToolCallId.clear();
@@ -7245,11 +7296,15 @@
     state.onboardingInfo = info;
     if (beforeRender) beforeRender();
     // Onboarding is the empty-state card. Flush a pending transcript wipe so
-    // the card cannot sit above leftover conversation nodes for a frame.
-    flushPendingTranscriptClear();
-    const welcome = $("welcome");
-    if (welcome) welcome.hidden = false;
-    state.welcomeVisible = true;
+    // the card cannot sit above leftover conversation nodes for a frame —
+    // unless a replay is already putting the conversation back, in which case
+    // revealing now is the reconnect flash (a buffered provider-connected
+    // confirmation used to unhide on top of the messages still waiting to go).
+    const holdWelcome = state.replaying && hasPendingClearNodes();
+    if (!holdWelcome) {
+      flushPendingTranscriptClear();
+      revealWelcome();
+    }
     const onb = $("welcome-onboarding");
     const ver = $("welcome-version");
     if (!onb) return;
@@ -13682,7 +13737,7 @@
         if (!msg.info.provider || msg.info.provider === "grok") state.cliVersion = msg.info.version || "";
         state.startingPhase = true;
         state.onboardingMode = null;
-        setWelcomeStatus("Starting", true);
+        if (!welcomeHoldActive()) setWelcomeStatus("Starting", true);
         const onb = $("welcome-onboarding");
         if (onb) onb.innerHTML = "";
         updateSendButton();
@@ -13692,7 +13747,7 @@
         // One-time hint while the silent `grok update` runs before the session
         // spawns; overwritten by Starting once grok connects, then Connected
         // once session startup finishes.
-        setWelcomeStatus("Updating Grok Build CLI", true);
+        if (!welcomeHoldActive()) setWelcomeStatus("Updating Grok Build CLI", true);
         break;
       }
       case "session": {
@@ -13969,6 +14024,10 @@
           // the highlight and the load indicator stay paired.
           if (!state.railTransition) setConversationLoading(false);
           else setConversationLoading(true);
+          // A RAF flush during the replay was skipped so the conversation
+          // stayed put. Empty replay: nothing replaced it, so the welcome
+          // belongs now. A replacement already dropped the pending flag.
+          if (pendingTranscriptClear) flushPendingTranscriptClear();
           renderRepoChip();
           // A remote snapshot can end while its latest turn is still running.
           // Seed the already-rendered prefix only in that case, so the eventual
@@ -14581,7 +14640,7 @@
           if (state.startingPhase) {
             state.startingPhase = false;
             const ver = state.cliVersion ? ` · v${state.cliVersion}` : "";
-            setWelcomeStatus(`Connected${ver}`, false); // settled — no spinner
+            if (!welcomeHoldActive()) setWelcomeStatus(`Connected${ver}`, false); // settled — no spinner
           }
         }
         // Refresh the gear popover's model/effort lock state if it's open.
