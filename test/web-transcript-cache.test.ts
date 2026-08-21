@@ -320,6 +320,7 @@ type CacheFns = {
     html: string;
     hasOlder: boolean;
     title: string;
+    scroll: { atBottom: true } | { atBottom: false; key: string; y: number } | null;
   } | null;
   cacheMatchesSession: (cache: unknown, sessionId: string | null) => boolean;
   snapshotRenderedTranscript: (messagesEl: FakeNode | null) => { html: string; hasOlder: boolean; title: string } | null;
@@ -355,6 +356,11 @@ function loadFns(opts: {
     "rememberedIdentity",
     "transcriptHasConversation",
     `function armCachedViewScroll() {}
+    function snapshotTranscriptScroll() { return { atBottom: true }; }
+    function applyCachedTranscriptScroll(el) {
+      if (el) el.scrollTop = el.scrollHeight;
+      armCachedViewScroll();
+    }
     ${cacheSrc}; return {
       parseTranscriptCache,
       cacheMatchesSession,
@@ -404,7 +410,37 @@ describe("transcript cache format", () => {
       html: '<div class="msg">hi</div>',
       hasOlder: true,
       title: "Fix the login",
+      scroll: null,
     });
+  });
+
+  it("accepts an additive scroll field and ignores a malformed one", () => {
+    const { doc } = fakeDoc();
+    const fns = loadFns({ doc, storage: memoryStorage() });
+    expect(fns.parseTranscriptCache(JSON.stringify({
+      v: 1,
+      sessionId: "sess-1",
+      html: '<div class="msg">hi</div>',
+      scroll: { atBottom: true },
+    }))?.scroll).toEqual({ atBottom: true });
+    expect(fns.parseTranscriptCache(JSON.stringify({
+      v: 1,
+      sessionId: "sess-1",
+      html: '<div class="msg">hi</div>',
+      scroll: { atBottom: false, key: "two", y: 12 },
+    }))?.scroll).toEqual({ atBottom: false, key: "two", y: 12 });
+    expect(fns.parseTranscriptCache(JSON.stringify({
+      v: 1,
+      sessionId: "sess-1",
+      html: '<div class="msg">hi</div>',
+      scroll: { atBottom: false, key: "", y: 12 },
+    }))?.scroll).toBeNull();
+    expect(fns.parseTranscriptCache(JSON.stringify({
+      v: 1,
+      sessionId: "sess-1",
+      html: '<div class="msg">hi</div>',
+      scroll: { atBottom: false, key: "two" },
+    }))?.scroll).toBeNull();
   });
 
   it("rejects missing, corrupt, or wrong-version payloads", () => {
@@ -449,6 +485,7 @@ describe("hide -> reload -> paint before the host", () => {
     expect(stored.html).toContain("hello from cache");
     expect(stored.hasOlder).toBe(true);
     expect(stored.title).toBe("Fix the login");
+    expect(stored.scroll).toEqual({ atBottom: true });
     expect(stored.html).not.toContain("history-head");
     expect(stored).not.toHaveProperty("prefix");
     expect(stored).not.toHaveProperty("historyPrefix");
@@ -480,6 +517,7 @@ describe("hide -> reload -> paint before the host", () => {
         html: '<div class="msg user"><div class="body">conversation A</div></div>',
         hasOlder: false,
         title: "A",
+        scroll: { atBottom: false, key: "conversation A", y: 40 },
       }),
     });
     const page = fakeDoc();
@@ -772,9 +810,12 @@ function loadScrollFns(messages: LayoutMessages) {
         onCachedViewScroll: onCachedViewScroll,
         applyRestoreScroll: applyRestoreScroll,
         settleCachedViewScroll: settleCachedViewScroll,
+        snapshotTranscriptScroll: snapshotTranscriptScroll,
+        applyCachedTranscriptScroll: applyCachedTranscriptScroll,
         userScrolled: function () { return cachedViewUserScrolled; },
         holdPlace: function () { return cachedViewHoldPlace; },
         live: function () { return cachedViewLive; },
+        pinnedToBottom: function () { return cachedViewPinnedToBottom; },
       };
     `,
   )(
@@ -786,9 +827,16 @@ function loadScrollFns(messages: LayoutMessages) {
     onCachedViewScroll: () => void;
     applyRestoreScroll: () => void;
     settleCachedViewScroll: () => boolean;
+    snapshotTranscriptScroll: (messages: LayoutMessages) =>
+      { atBottom: true } | { atBottom: false; key: string; y: number };
+    applyCachedTranscriptScroll: (
+      messages: LayoutMessages,
+      scroll: { atBottom: true } | { atBottom: false; key: string; y: number } | null,
+    ) => void;
     userScrolled: () => boolean;
     holdPlace: () => boolean;
     live: () => boolean;
+    pinnedToBottom: () => boolean;
   };
 }
 
@@ -1036,6 +1084,91 @@ describe("cached view scroll across host replay", () => {
     );
     expect(applySrc).toContain("finishCachedViewScroll()");
     expect(applySrc).not.toContain("settleCachedViewScroll()");
+  });
+
+  it("scrolled up, hide, reload from cache: the same content is under the reader", () => {
+    const live = layoutTranscript();
+    const liveFns = loadScrollFns(live.messages);
+    pinToBottom(live.messages);
+    liveFns.armCachedViewScroll();
+    userScrollTo(liveFns, live.messages, 100);
+    const viewed = rowByText(live, "two");
+    expect(viewed).toBeTruthy();
+    const savedY = viewed!.getBoundingClientRect().top;
+    expect(savedY).toBe(0);
+    const stored = liveFns.snapshotTranscriptScroll(live.messages);
+    expect(stored).toEqual({ atBottom: false, key: "two", y: 0 });
+
+    const reload = layoutTranscript();
+    const reloadFns = loadScrollFns(reload.messages);
+    reloadFns.applyCachedTranscriptScroll(reload.messages, stored);
+    const same = rowByText(reload, "two");
+    expect(same).toBeTruthy();
+    expect(Math.abs(same!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+    expect(reloadFns.holdPlace()).toBe(true);
+  });
+
+  it("at the bottom, hide, reload: still at the bottom, and replayed new messages are visible", () => {
+    const live = layoutTranscript();
+    const liveFns = loadScrollFns(live.messages);
+    pinToBottom(live.messages);
+    liveFns.armCachedViewScroll();
+    const stored = liveFns.snapshotTranscriptScroll(live.messages);
+    expect(stored).toEqual({ atBottom: true });
+
+    const reload = layoutTranscript();
+    const reloadFns = loadScrollFns(reload.messages);
+    reloadFns.applyCachedTranscriptScroll(reload.messages, stored);
+    expect(reload.messages.scrollTop).toBe(reload.messages.scrollHeight - reload.messages.clientHeight);
+    expect(reloadFns.holdPlace()).toBe(false);
+
+    replayRows(reload, {
+      texts: ["one", "two", "three", "four", "five", "arrived-while-away"],
+      heights: [100, 100, 100, 100, 100, 100],
+    });
+    pinToBottom(reload.messages);
+    reloadFns.applyRestoreScroll();
+    expect(reload.messages.scrollTop).toBe(reload.messages.scrollHeight - reload.messages.clientHeight);
+    const newest = rowByText(reload, "arrived-while-away");
+    expect(newest).toBeTruthy();
+    expect(newest!.getBoundingClientRect().bottom).toBeLessThanOrEqual(reload.messages.clientHeight + 1);
+  });
+
+  it("restored position survives the host replay replacing the cached window", () => {
+    const live = layoutTranscript();
+    const liveFns = loadScrollFns(live.messages);
+    pinToBottom(live.messages);
+    liveFns.armCachedViewScroll();
+    userScrollTo(liveFns, live.messages, 100);
+    const stored = liveFns.snapshotTranscriptScroll(live.messages);
+    const savedY = rowByText(live, "two")!.getBoundingClientRect().top;
+
+    const reload = layoutTranscript();
+    const reloadFns = loadScrollFns(reload.messages);
+    reloadFns.applyCachedTranscriptScroll(reload.messages, stored);
+    expect(reloadFns.holdPlace()).toBe(true);
+
+    replayRows(reload, {
+      texts: ["one", "two", "three", "four", "five", "six"],
+      heights: [180, 100, 100, 100, 100, 100],
+    });
+    pinToBottom(reload.messages);
+    reloadFns.applyRestoreScroll();
+    const same = rowByText(reload, "two");
+    expect(same).toBeTruthy();
+    expect(Math.abs(same!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+  });
+
+  it("an anchor that is no longer present falls back to the bottom", () => {
+    const page = layoutTranscript();
+    const fns = loadScrollFns(page.messages);
+    fns.applyCachedTranscriptScroll(page.messages, {
+      atBottom: false,
+      key: "not in this window",
+      y: 40,
+    });
+    expect(page.messages.scrollTop).toBe(page.messages.scrollHeight - page.messages.clientHeight);
+    expect(fns.holdPlace()).toBe(false);
   });
 
   it("reload cache paint never calls applyRestoreScroll — a reader who moved is held by the cached-view path", () => {

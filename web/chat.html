@@ -2184,7 +2184,18 @@ window.grokRemoteClient = true;
       html: value.html,
       hasOlder: value.hasOlder === true,
       title: typeof value.title === "string" ? value.title : "",
+      scroll: parseCachedScroll(value.scroll),
     };
+  }
+
+  function parseCachedScroll(value) {
+    // Absent or unusable → null, which apply treats as the bottom (today).
+    if (!value || typeof value !== "object") return null;
+    if (value.atBottom === true) return { atBottom: true };
+    if (value.atBottom !== false) return null;
+    if (typeof value.key !== "string" || !value.key) return null;
+    if (typeof value.y !== "number" || !isFinite(value.y)) return null;
+    return { atBottom: false, key: value.key, y: value.y };
   }
 
   function cacheMatchesSession(cache, sessionId) {
@@ -2273,6 +2284,7 @@ window.grokRemoteClient = true;
         html: snapshot.html,
         hasOlder: snapshot.hasOlder,
         title: snapshot.title,
+        scroll: snapshotTranscriptScroll(document.getElementById("messages")),
       }));
       return true;
     } catch (_) {
@@ -2321,8 +2333,7 @@ window.grokRemoteClient = true;
       var titleEl = doc.getElementById("session-head-title");
       if (titleEl && !String(titleEl.textContent || "").trim()) titleEl.textContent = cache.title;
     }
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-    armCachedViewScroll();
+    applyCachedTranscriptScroll(messagesEl, cache.scroll);
     return true;
   }
 
@@ -2602,6 +2613,60 @@ window.grokRemoteClient = true;
     cachedViewPinnedToBottom = false;
     cachedViewHoldPlace = false;
     cachedViewAnchor = null;
+    restoringCachedView = false;
+  }
+  function snapshotTranscriptScroll(messagesEl) {
+    // Capture at the same moment as the HTML: on hide. At the bottom is
+    // recorded as at the bottom, not as an anchor on the last message —
+    // coming back should then show messages that arrived while away.
+    if (!messagesEl) return { atBottom: true };
+    if (cachedViewIsPinnedToBottom(messagesEl)) return { atBottom: true };
+    var anchor = captureTranscriptScrollAnchor(messagesEl);
+    if (!anchor || !anchor.key) return { atBottom: true };
+    var viewTop = 0;
+    try {
+      if (typeof messagesEl.getBoundingClientRect === "function") {
+        viewTop = messagesEl.getBoundingClientRect().top;
+      }
+    } catch (_) { /* tests without layout */ }
+    return { atBottom: false, key: anchor.key, y: anchor.y - viewTop };
+  }
+  function applyCachedTranscriptScroll(messagesEl, scroll) {
+    // First painted frame, not an animation. A usable mid-window anchor
+    // seeds the existing cached-view hold so the host replay that replaces
+    // this window keeps the same place. Missing, unusable, or a key that
+    // is no longer in the cached rows: the bottom, which is today.
+    if (!messagesEl) return;
+    armCachedViewScroll();
+    if (!scroll || scroll.atBottom !== false) {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return;
+    }
+    var sentinel = findTranscriptRowByKey(messagesEl, scroll.key);
+    if (!sentinel || typeof sentinel.getBoundingClientRect !== "function") {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return;
+    }
+    var viewTop = 0;
+    try {
+      if (typeof messagesEl.getBoundingClientRect === "function") {
+        viewTop = messagesEl.getBoundingClientRect().top;
+      }
+    } catch (_) { /* tests without layout */ }
+    cachedViewAnchor = {
+      node: sentinel,
+      key: scroll.key,
+      index: -1,
+      y: viewTop + scroll.y,
+    };
+    cachedViewHoldPlace = true;
+    cachedViewPinnedToBottom = false;
+    cachedViewUserScrolled = true;
+    restoringCachedView = true;
+    restoreTranscriptScrollAnchor(messagesEl, cachedViewAnchor);
+    signalUserScrollToRenderer(messagesEl);
+    var recaptured = captureTranscriptScrollAnchor(messagesEl);
+    if (recaptured) cachedViewAnchor = recaptured;
     restoringCachedView = false;
   }
   function clearCachedViewScroll() {
