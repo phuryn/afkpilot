@@ -788,7 +788,7 @@ type LayoutRow = {
 type LayoutMessages = {
   id: string;
   children: LayoutRow[];
-  clientHeight: number;
+  get clientHeight(): number;
   get scrollHeight(): number;
   get scrollTop(): number;
   set scrollTop(value: number);
@@ -802,19 +802,44 @@ type LayoutMessages = {
   atBottomHistory: boolean[];
 };
 
+// chat.js default for shouldStickToBottom when no line-height is supplied.
+const RENDERER_STICK_THRESHOLD = 40;
+const RENDERER_INTENT_MS = 750;
+
 function layoutTranscript(opts?: { clientHeight?: number; rowHeight?: number; texts?: string[] }) {
-  const clientHeight = opts?.clientHeight ?? 250;
+  let clientHeight = opts?.clientHeight ?? 250;
   const rowHeight = opts?.rowHeight ?? 100;
   const events: string[] = [];
   const atBottomHistory: boolean[] = [];
+  const pointerDownTargets: unknown[] = [];
   let scrollTop = 0;
+  let stickToBottom = true;
+  let userScrollIntentUntil = 0;
   const children: LayoutRow[] = [];
+  const noteUserScrollIntent = () => {
+    userScrollIntentUntil = Date.now() + RENDERER_INTENT_MS;
+  };
+  const hasUserScrollIntent = () => Date.now() < userScrollIntentUntil;
+  const recomputePinFromScroll = () => {
+    // chat.js scroll listener: only a latched gesture may change the pin.
+    if (!hasUserScrollIntent()) return;
+    const distanceFromBottom = messages.scrollHeight - (scrollTop + clientHeight);
+    stickToBottom = distanceFromBottom <= RENDERER_STICK_THRESHOLD;
+  };
+  const eventTarget = (event: unknown) => {
+    if (event && typeof event === "object" && "target" in event) {
+      return (event as { target: unknown }).target;
+    }
+    return undefined;
+  };
   const messages: LayoutMessages = {
     id: "messages",
     children,
-    clientHeight,
     atBottomHistory,
     hooks: { noteIntent: null, onScroll: null },
+    get clientHeight() {
+      return clientHeight;
+    },
     get scrollHeight() {
       return children.reduce((sum, row) => sum + row.height, 0);
     },
@@ -826,6 +851,7 @@ function layoutTranscript(opts?: { clientHeight?: number; rowHeight?: number; te
       const max = Math.max(0, this.scrollHeight - this.clientHeight);
       scrollTop = Math.max(0, Math.min(Number(value) || 0, max));
       atBottomHistory.push(max > 0 && scrollTop >= max);
+      recomputePinFromScroll();
     },
     getBoundingClientRect() {
       return { top: 0, bottom: clientHeight, height: clientHeight };
@@ -834,17 +860,53 @@ function layoutTranscript(opts?: { clientHeight?: number; rowHeight?: number; te
       return children.includes(node as LayoutRow);
     },
     dispatchEvent(event: unknown) {
+      if (event && typeof event === "object" && eventTarget(event) == null) {
+        Object.defineProperty(event, "target", { value: this, configurable: true });
+      }
       const type = event && typeof event === "object" && "type" in event
         ? String((event as { type: string }).type)
         : "event";
       events.push(type);
+      if (type === "wheel" || type === "touchstart") {
+        noteUserScrollIntent();
+      } else if (type === "pointerdown") {
+        pointerDownTargets.push(eventTarget(event));
+        // chat.js: if (e.target === messagesEl) noteUserScrollIntent();
+        if (eventTarget(event) === this) noteUserScrollIntent();
+      } else if (type === "keydown") {
+        const key = event && typeof event === "object" && "key" in event
+          ? String((event as { key: string }).key)
+          : "";
+        if (eventTarget(event) === this &&
+            (key === "PageUp" || key === "PageDown" || key === "Home" || key === "End" ||
+             key === "ArrowUp" || key === "ArrowDown" || key === " ")) {
+          noteUserScrollIntent();
+        }
+      }
       if (type === "pointerdown" || type === "touchstart" || type === "wheel" || type === "keydown") {
         this.hooks.noteIntent?.();
       }
-      if (type === "scroll") this.hooks.onScroll?.();
+      if (type === "scroll") {
+        recomputePinFromScroll();
+        this.hooks.onScroll?.();
+      }
       return true;
     },
   };
+  function resizeScrollport(nextHeight: number) {
+    // chat.js ResizeObserver: pinned readers get re-pinned; scrolled-up
+    // readers keep their top line.
+    if (nextHeight === clientHeight) return;
+    clientHeight = nextHeight;
+    if (stickToBottom) messages.scrollTop = messages.scrollHeight;
+  }
+  function rendererGesture(type: string, target: unknown = messages, key?: string) {
+    const event = key
+      ? Object.assign(new Event(type, { bubbles: true }), { key })
+      : new Event(type, { bubbles: true });
+    Object.defineProperty(event, "target", { value: target, configurable: true });
+    messages.dispatchEvent(event);
+  }
   function relayout() {
     for (const row of children) {
       row.parentElement = messages;
@@ -904,7 +966,17 @@ function layoutTranscript(opts?: { clientHeight?: number; rowHeight?: number; te
   for (const text of opts?.texts || ["one", "two", "three", "four", "five"]) {
     addRow(text);
   }
-  return { messages, children, events, addRow, atBottomHistory };
+  return {
+    messages,
+    children,
+    events,
+    addRow,
+    atBottomHistory,
+    pointerDownTargets,
+    get stickToBottom() { return stickToBottom; },
+    resizeScrollport,
+    rendererGesture,
+  };
 }
 
 function loadScrollFns(messages: LayoutMessages) {
@@ -1520,5 +1592,124 @@ describe("cached view scroll across host replay", () => {
     )).toContain("applyRestoreScroll()");
     const applyCallers = html.split("applyRestoreScroll()");
     expect(applyCallers.length).toBe(3);
+  });
+
+  it("restoring a scrolled-up place clears the renderer pin: a subsequent scrollport height change does NOT move the view", () => {
+    const page = layoutTranscript();
+    const fns = loadScrollFns(page.messages);
+    pinToBottom(page.messages);
+    expect(page.stickToBottom).toBe(true);
+
+    fns.applyCachedTranscriptScroll(page.messages, { atBottom: false, top: 100 });
+    expect(page.messages.scrollTop).toBe(100);
+    expect(page.stickToBottom).toBe(false);
+
+    const top = page.messages.scrollTop;
+    page.resizeScrollport(180);
+    expect(page.messages.scrollTop).toBe(top);
+    expect(page.stickToBottom).toBe(false);
+
+    // Replay yank then settle — the phone sequence. Restore must leave
+    // the pin clear so the next height change does not re-pin.
+    pinToBottom(page.messages);
+    fns.onCachedViewScroll();
+    expect(page.messages.scrollTop).toBe(100);
+    expect(fns.settleCachedViewScroll()).toBe(true);
+    expect(page.messages.scrollTop).toBe(100);
+    expect(page.stickToBottom).toBe(false);
+    page.resizeScrollport(220);
+    expect(page.messages.scrollTop).toBe(100);
+  });
+
+  it("restoring an at-bottom place leaves the pin set: a height change still follows the bottom, and replayed messages stay visible", () => {
+    const page = layoutTranscript();
+    const fns = loadScrollFns(page.messages);
+    pinToBottom(page.messages);
+    expect(page.stickToBottom).toBe(true);
+
+    fns.applyCachedTranscriptScroll(page.messages, { atBottom: true });
+    expect(isFlushBottom(page.messages)).toBe(true);
+    expect(page.stickToBottom).toBe(true);
+    expect(page.pointerDownTargets).toEqual([]);
+
+    page.resizeScrollport(180);
+    expect(isFlushBottom(page.messages)).toBe(true);
+    expect(page.stickToBottom).toBe(true);
+
+    replayRows(page, {
+      texts: ["one", "two", "three", "four", "five", "arrived-while-away"],
+      heights: [100, 100, 100, 100, 100, 100],
+    });
+    if (page.stickToBottom) page.messages.scrollTop = page.messages.scrollHeight;
+    expect(isFlushBottom(page.messages)).toBe(true);
+    const newest = rowByText(page, "arrived-while-away");
+    expect(newest).toBeTruthy();
+    expect(newest!.getBoundingClientRect().bottom).toBeLessThanOrEqual(page.messages.clientHeight + 1);
+  });
+
+  it("a genuine gesture after the restore still behaves as today", () => {
+    const page = layoutTranscript();
+    const fns = loadScrollFns(page.messages);
+    pinToBottom(page.messages);
+    fns.applyCachedTranscriptScroll(page.messages, { atBottom: false, top: 100 });
+    expect(page.stickToBottom).toBe(false);
+
+    page.rendererGesture("wheel");
+    userScrollTo(fns, page.messages, 50);
+    expect(page.messages.scrollTop).toBe(50);
+    expect(page.stickToBottom).toBe(false);
+    expect(fns.holdPlace()).toBe(true);
+
+    page.rendererGesture("wheel");
+    userScrollTo(fns, page.messages, page.messages.scrollHeight);
+    expect(isFlushBottom(page.messages)).toBe(true);
+    expect(page.stickToBottom).toBe(true);
+    expect(fns.holdPlace()).toBe(false);
+
+    replayRows(page, {
+      texts: ["one", "two", "three", "four", "five", "arrived-while-away"],
+      heights: [100, 100, 100, 100, 100, 100],
+    });
+    if (page.stickToBottom) page.messages.scrollTop = page.messages.scrollHeight;
+    expect(isFlushBottom(page.messages)).toBe(true);
+    const newest = rowByText(page, "arrived-while-away");
+    expect(newest!.getBoundingClientRect().bottom).toBeLessThanOrEqual(page.messages.clientHeight + 1);
+
+    const away = layoutTranscript();
+    const awayFns = loadScrollFns(away.messages);
+    pinToBottom(away.messages);
+    awayFns.applyCachedTranscriptScroll(away.messages, { atBottom: true });
+    expect(away.stickToBottom).toBe(true);
+    away.rendererGesture("pointerdown", away.messages);
+    userScrollTo(awayFns, away.messages, 80);
+    expect(away.messages.scrollTop).toBe(80);
+    expect(away.stickToBottom).toBe(false);
+  });
+
+  it("the dispatch targets the scrollport itself, as the renderer's listener requires", () => {
+    const chatJs = readFileSync(new URL("../web/vendor/media/chat.js", import.meta.url), "utf8");
+    expect(chatJs).toContain("if (e.target === messagesEl) noteUserScrollIntent()");
+
+    const signalSrc = html.slice(
+      html.indexOf("function signalUserScrollToRenderer"),
+      html.indexOf("function noteCachedViewUserIntent"),
+    );
+    expect(signalSrc).toContain("messagesEl.dispatchEvent(new Event(\"pointerdown\"");
+    expect(signalSrc).not.toContain("new Event(\"scroll\")");
+
+    const page = layoutTranscript();
+    const fns = loadScrollFns(page.messages);
+    pinToBottom(page.messages);
+    fns.applyCachedTranscriptScroll(page.messages, { atBottom: false, top: 100 });
+    expect(page.pointerDownTargets.length).toBeGreaterThan(0);
+    expect(page.pointerDownTargets.every((t) => t === page.messages)).toBe(true);
+
+    const childPage = layoutTranscript();
+    pinToBottom(childPage.messages);
+    expect(childPage.stickToBottom).toBe(true);
+    const child = childPage.children[1];
+    childPage.rendererGesture("pointerdown", child);
+    childPage.messages.scrollTop = 100;
+    expect(childPage.stickToBottom).toBe(true);
   });
 });

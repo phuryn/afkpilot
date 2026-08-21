@@ -2671,8 +2671,7 @@ window.grokRemoteClient = true;
     cachedViewUserScrolled = true;
     cachedViewScrollTop = scroll.top;
     restoringCachedView = true;
-    messagesEl.scrollTop = scroll.top;
-    signalUserScrollToRenderer(messagesEl);
+    restoreHeldScrollTop(messagesEl);
     restoringCachedView = false;
     cachedViewGesturePending = false;
   }
@@ -2687,24 +2686,35 @@ window.grokRemoteClient = true;
   }
   function restoreHeldScrollTop(messagesEl) {
     if (!messagesEl || typeof cachedViewScrollTop !== "number") return false;
+    // A restored place is the reader's intent. Latch the renderer before
+    // writing scrollTop so the native `scroll` lands in the 750ms window
+    // and clears stickToBottom. Skip when that place is the bottom —
+    // replayed messages must keep following.
+    if (!cachedViewOffsetIsPinnedToBottom(messagesEl, cachedViewScrollTop)) {
+      signalUserScrollToRenderer(messagesEl);
+    }
     messagesEl.scrollTop = cachedViewScrollTop;
     return true;
   }
+  function cachedViewOffsetIsPinnedToBottom(messagesEl, top) {
+    if (!messagesEl) return true;
+    return messagesEl.scrollHeight - top - (messagesEl.clientHeight || 0) <= 80;
+  }
   function cachedViewIsPinnedToBottom(messagesEl) {
     if (!messagesEl) return true;
-    return messagesEl.scrollHeight - messagesEl.scrollTop - (messagesEl.clientHeight || 0) <= 80;
+    return cachedViewOffsetIsPinnedToBottom(messagesEl, messagesEl.scrollTop || 0);
   }
   function signalUserScrollToRenderer(messagesEl) {
-    // chat.js only unpins stick-to-bottom on a gesture, then a scroll.
-    // Replay-end force-scrolls and re-pins; without this the restored
-    // row would be yanked to the bottom on the next mutation.
+    // chat.js pin is a user-intent bit. Only wheel / touchstart /
+    // pointerdown-on-the-scrollport / keydown latch a 750ms window; a
+    // `scroll` Event is deliberately not intent (#92). Dispatch
+    // pointerdown on the scrollport itself so e.target === messagesEl
+    // — the renderer's listener requires that. The caller then writes
+    // scrollTop so the native scroll lands in the window and clears
+    // the pin.
     if (!messagesEl || typeof messagesEl.dispatchEvent !== "function") return;
     try {
       messagesEl.dispatchEvent(new Event("pointerdown", { bubbles: true }));
-      // pointerdown only latches intent. A scroll at the current offset is
-      // what recomputes the pin — needed when we have already left the
-      // bottom and must stop MutationObserver writing scrollTop.
-      messagesEl.dispatchEvent(new Event("scroll"));
     } catch (_) { /* tests / older UAs */ }
   }
   function noteCachedViewUserIntent() {
@@ -2746,7 +2756,6 @@ window.grokRemoteClient = true;
         return;
       }
       restoringCachedView = true;
-      signalUserScrollToRenderer(messagesEl);
       restoreHeldScrollTop(messagesEl);
       restoringCachedView = false;
       return;
@@ -2763,7 +2772,6 @@ window.grokRemoteClient = true;
     var messagesEl = document.getElementById("messages");
     if (keep && messagesEl) {
       restoringCachedView = true;
-      signalUserScrollToRenderer(messagesEl);
       restoreHeldScrollTop(messagesEl);
       restoringCachedView = false;
       return true;
