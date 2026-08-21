@@ -4696,48 +4696,94 @@ body.identity-restore-veil #identity-restoring-note { display: flex; }
   <script src="/vendor/media/mathjax/tex-svg-full.js"></script>
   <script src="/vendor/media/mermaid/mermaid.min.js"></script>
   <!-- TEMPORARY diagnostic, opt-in via ?scrolldebug=1. Records every write to
-       #messages.scrollTop with the code that caused it, so a real device can say
-       what moves the view during a restore instead of us reasoning about it.
-       Remove once the restore scroll behaviour is settled. -->
+       #messages.scrollTop with the code that caused it, and shows it ON SCREEN
+       because the device that has the bug is a phone with no console. Remove
+       once the restore scroll behaviour is settled. -->
   <script>
   (function () {
     try {
       if (new URLSearchParams(location.search).get("scrolldebug") !== "1") return;
       var log = [];
       window.__grokScrollLog = log;
-      var d = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
-      if (!d || !d.set) return;
-      Object.defineProperty(Element.prototype, "scrollTop", {
-        configurable: true,
-        enumerable: d.enumerable,
-        get: d.get,
-        set: function (v) {
-          if (this && this.id === "messages") {
-            var where = "";
-            try { where = (new Error().stack || "").split("
-").slice(2, 5).join(" | "); } catch (_) {}
-            var row = { t: Math.round(performance.now()), to: Math.round(v),
-                        from: Math.round(d.get.call(this)), h: this.scrollHeight, where: where };
-            log.push(row);
-            console.log("[scroll]", row.t + "ms", row.from + " -> " + row.to, row.where);
-          }
-          return d.set.call(this, v);
-        },
-      });
+      window.__grokScrollDump = function () { return JSON.stringify(log); };
+
+      var panel, list;
+      function ui() {
+        if (panel) return;
+        panel = document.createElement("div");
+        panel.style.cssText = "position:fixed;left:0;right:0;bottom:0;max-height:46vh;z-index:99999;"
+          + "background:rgba(0,0,0,.92);color:#0f0;font:10px/1.35 ui-monospace,monospace;"
+          + "overflow:auto;padding:4px 6px;border-top:2px solid #0f0;";
+        var bar = document.createElement("div");
+        bar.style.cssText = "position:sticky;top:0;background:#000;padding:2px 0;display:flex;gap:6px";
+        var copy = document.createElement("button");
+        copy.textContent = "COPY";
+        copy.style.cssText = "font:11px monospace;padding:3px 8px";
+        copy.onclick = function () {
+          var t = window.__grokScrollDump();
+          if (navigator.clipboard) navigator.clipboard.writeText(t);
+          copy.textContent = "COPIED " + log.length;
+        };
+        var clr = document.createElement("button");
+        clr.textContent = "CLEAR";
+        clr.style.cssText = copy.style.cssText;
+        clr.onclick = function () { log.length = 0; list.textContent = ""; };
+        bar.appendChild(copy); bar.appendChild(clr);
+        list = document.createElement("div");
+        panel.appendChild(bar); panel.appendChild(list);
+        (document.body || document.documentElement).appendChild(panel);
+      }
+      function row(text) {
+        ui();
+        var d = document.createElement("div");
+        d.textContent = text;
+        list.appendChild(d);
+        panel.scrollTop = panel.scrollHeight;
+      }
+      function callers() {
+        try {
+          var f = (new Error().stack || "").split("
+").slice(3, 7);
+          return f.map(function (x) {
+            var m = x.match(/at\s+([A-Za-z0-9_$.]+)/);
+            var n = x.match(/(chat\.js|chat\.html)[^:]*:(\d+)/);
+            return (m ? m[1] : "?") + (n ? "@" + n[1].replace(".js", "").replace(".html", "H") + ":" + n[2] : "");
+          }).join(" < ");
+        } catch (_) { return "?"; }
+      }
+      var d0 = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
+      if (d0 && d0.set) {
+        Object.defineProperty(Element.prototype, "scrollTop", {
+          configurable: true, enumerable: d0.enumerable, get: d0.get,
+          set: function (v) {
+            if (this && this.id === "messages") {
+              var from = Math.round(d0.get.call(this));
+              var to = Math.round(v);
+              if (from !== to) {
+                var e = { t: Math.round(performance.now()), from: from, to: to, h: this.scrollHeight, by: callers() };
+                log.push(e);
+                row(e.t + " " + from + "->" + to + " h" + e.h + "  " + e.by);
+              }
+            }
+            return d0.set.call(this, v);
+          },
+        });
+      }
       ["identity-restoring", "identity-restore-veil"].forEach(function (cls) {
         var on = false;
         setInterval(function () {
+          if (!document.body) return;
           var now = document.body.classList.contains(cls);
           if (now !== on) {
             on = now;
-            var row = { t: Math.round(performance.now()), cls: cls, on: on };
-            log.push(row);
-            console.log("[state]", row.t + "ms", cls, on ? "ON" : "OFF");
+            var e = { t: Math.round(performance.now()), cls: cls, on: on };
+            log.push(e);
+            row(e.t + " -- " + cls + " " + (on ? "ON" : "OFF"));
           }
-        }, 30);
+        }, 25);
       });
-      window.__grokScrollDump = function () { return JSON.stringify(log, null, 1); };
-      console.log("[scrolldebug] armed - reproduce, then run copy(__grokScrollDump())");
+      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", ui);
+      else ui();
     } catch (_) {}
   })();
   </script>
