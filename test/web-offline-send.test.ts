@@ -402,6 +402,92 @@ describe("offline live-send hold", () => {
 
     live = liveOutboundAfterAck(live, { type: "userMessage", text: "steer note", steer: true });
     expect(live.map((e) => sendCorrelationId(e.message))).toEqual(["sub-b"]);
+
+    // Kind-matching: a steer echo of the same words is not that send's ack.
+    const sameText = sendRaw("hello", "sub-hello");
+    live = liveOutboundAfterRemember(live, sameText, JSON.parse(sameText));
+    live = liveOutboundAfterAck(live, { type: "userMessage", text: "hello", steer: true });
+    expect(live.map((e) => sendCorrelationId(e.message))).toEqual(["sub-b", "sub-hello"]);
+  });
+
+  function recoveredByReplacement(
+    live: Array<{ raw: string; message: unknown; authored?: string }>,
+  ) {
+    return liveOutboundRecoveredByReplacement(live);
+  }
+
+  it("an acknowledged queueSend leaves the list; a later replacement recovers nothing", () => {
+    const raw = JSON.stringify({ type: "queueSend", text: "from the queue" });
+    let live = liveOutboundAfterRemember([], raw, JSON.parse(raw));
+    live = liveOutboundAfterAck(live, { type: "queuedSends", items: ["from the queue"] });
+    expect(live).toEqual([]);
+    expect(recoveredByReplacement(live)).toEqual([]);
+
+    live = liveOutboundAfterRemember([], raw, JSON.parse(raw));
+    live = liveOutboundAfterAck(live, {
+      type: "queuedSends",
+      items: ["from the queue"],
+      queued: [{ text: "from the queue" }],
+    });
+    expect(live).toEqual([]);
+    expect(recoveredByReplacement(live)).toEqual([]);
+  });
+
+  it("an acknowledged steerSend leaves the list; a later replacement recovers nothing", () => {
+    const raw = JSON.stringify({ type: "steerSend", text: "steer this now", fromQueue: true });
+    let live = liveOutboundAfterRemember([], raw, JSON.parse(raw));
+    live = liveOutboundAfterAck(live, { type: "userMessage", text: "steer this now", steer: true });
+    expect(live).toEqual([]);
+    expect(recoveredByReplacement(live)).toEqual([]);
+  });
+
+  it("an unacknowledged queue send is still recovered exactly once", () => {
+    const raw = JSON.stringify({ type: "queueSend", text: "still in flight" });
+    let live = liveOutboundAfterRemember([], raw, JSON.parse(raw));
+    live = liveOutboundAfterAck(live, { type: "sessions", activeId: "s1" });
+    live = liveOutboundAfterAck(live, { type: "queuedSends", items: [] });
+    live = liveOutboundAfterAck(live, { type: "queuedSends", items: ["some other prompt"] });
+    expect(live).toHaveLength(1);
+    expect(recoveredByReplacement(live)).toEqual(["still in flight"]);
+  });
+
+  it("an ordinary acknowledged send still leaves, as today", () => {
+    const raw = sendRaw("typed", "sub-typed");
+    let live = liveOutboundAfterRemember([], raw, JSON.parse(raw));
+    live = liveOutboundAfterAck(live, { type: "userMessage", text: "typed", submissionId: "sub-typed" });
+    expect(live).toEqual([]);
+    expect(recoveredByReplacement(live)).toEqual([]);
+
+    const legacy = sendRaw("legacy text", "sub-legacy");
+    live = liveOutboundAfterRemember([], legacy, JSON.parse(legacy));
+    live = liveOutboundAfterAck(live, { type: "userMessage", text: "legacy text" });
+    expect(live).toEqual([]);
+    expect(recoveredByReplacement(live)).toEqual([]);
+  });
+
+  it("two identical prompts, one acknowledged and one not: only the unacknowledged one is recovered", () => {
+    const queued = JSON.stringify({ type: "queueSend", text: "hello" });
+    const send = sendRaw("hello", "sub-hello");
+    let live = liveOutboundAfterRemember([], queued, JSON.parse(queued));
+    live = liveOutboundAfterRemember(live, send, JSON.parse(send));
+    live = liveOutboundAfterAck(live, { type: "userMessage", text: "hello", submissionId: "sub-hello" });
+    expect(live.map((e) => (e.message as { type: string }).type)).toEqual(["queueSend"]);
+    expect(recoveredByReplacement(live)).toEqual(["hello"]);
+
+    const first = JSON.stringify({ type: "queueSend", text: "hello" });
+    const second = JSON.stringify({ type: "queueSend", text: "hello" });
+    live = liveOutboundAfterRemember([], first, JSON.parse(first));
+    live = liveOutboundAfterRemember(live, second, JSON.parse(second));
+    live = liveOutboundAfterAck(live, { type: "queuedSends", items: ["hello"] });
+    expect(live).toHaveLength(1);
+    expect(recoveredByReplacement(live)).toEqual(["hello"]);
+
+    const steer = JSON.stringify({ type: "steerSend", text: "hello" });
+    live = liveOutboundAfterRemember([], send, JSON.parse(send));
+    live = liveOutboundAfterRemember(live, steer, JSON.parse(steer));
+    live = liveOutboundAfterAck(live, { type: "userMessage", text: "hello", steer: true });
+    expect(live.map((e) => (e.message as { type: string }).type)).toEqual(["send"]);
+    expect(recoveredByReplacement(live)).toEqual(["hello"]);
   });
 
   it("pulls an already-held send out of the outbox when its userMessage finally arrives", () => {

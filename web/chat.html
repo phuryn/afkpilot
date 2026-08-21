@@ -1120,20 +1120,77 @@ window.grokRemoteClient = true;
   function liveOutboundAfterRemember(current, raw, message, authored) {
     return current.concat([{ raw: raw, message: message, authored: authored || "" }]);
   }
+  function queuedSendsContributionTexts(data) {
+    // Host-owned queue snapshot. Prefer additive `queued` (text + chips);
+    // `items` is the text-only fallback an older host still sends.
+    var texts = [];
+    if (!data) return texts;
+    var queued = data.queued;
+    if (Array.isArray(queued)) {
+      for (var qi = 0; qi < queued.length; qi++) {
+        var item = queued[qi];
+        if (typeof item === "string") texts.push(item);
+        else if (item && typeof item.text === "string") texts.push(item.text);
+        else texts.push("");
+      }
+      return texts;
+    }
+    var items = data.items;
+    if (!Array.isArray(items)) return texts;
+    for (var ii = 0; ii < items.length; ii++) {
+      texts.push(typeof items[ii] === "string" ? items[ii] : "");
+    }
+    return texts;
+  }
   function liveOutboundAfterAck(current, data) {
-    if (!data || data.type !== "userMessage" || data.steer) return current;
-    var id = sendCorrelationId(data);
-    if (id) {
+    // Each kind has its own acknowledgement. Matching on text across kinds
+    // is how two identical prompts become one, so:
+    //   send       <- userMessage without steer (submissionId, else exact text)
+    //   steerSend  <- userMessage with steer:true (exact text; host does not
+    //                 echo a correlation id on a steer)
+    //   queueSend  <- queuedSends snapshot, one live entry per whole
+    //                 contribution of the same text
+    //
+    // `data.steer` used to bail out entirely. That protected a pending send
+    // from a steer echo of the same words (old-host text match has no kind).
+    // Kind-matching keeps that protection. The outbox twin of this check
+    // (outboxIndexAcknowledgedBy) still bails on steer: the outbox only
+    // stores `send`, and a steer must not pull one out.
+    //
+    // A steerSend that the host cannot interject (no live turn, or a CLI
+    // that ignores interject `content`) is put on the queue instead of
+    // echoing userMessage+steer. That path has no acknowledgement we can
+    // match without crossing kinds, so it stays recoverable.
+    if (!data) return current;
+    if (data.type === "queuedSends") {
+      var remaining = queuedSendsContributionTexts(data);
+      if (!remaining.length) return current;
       return current.filter(function (entry) {
-        return sendCorrelationId(entry.message) !== id;
+        var queuedMessage = entry && entry.message;
+        if (!queuedMessage || queuedMessage.type !== "queueSend") return true;
+        if (typeof queuedMessage.text !== "string" || !queuedMessage.text) return true;
+        var at = remaining.indexOf(queuedMessage.text);
+        if (at < 0) return true;
+        remaining = remaining.slice(0, at).concat(remaining.slice(at + 1));
+        return false;
+      });
+    }
+    if (data.type !== "userMessage") return current;
+    var expectedType = data.steer ? "steerSend" : "send";
+    var id = sendCorrelationId(data);
+    if (id && expectedType === "send") {
+      return current.filter(function (entry) {
+        var named = entry && entry.message;
+        if (!named || named.type !== "send") return true;
+        return sendCorrelationId(named) !== id;
       });
     }
     if (typeof data.text !== "string" || !data.text) return current;
     var dropped = false;
     return current.filter(function (entry) {
       if (dropped) return true;
-      var message = entry.message;
-      if (message && message.type === "send" && message.text === data.text) {
+      var message = entry && entry.message;
+      if (message && message.type === expectedType && message.text === data.text) {
         dropped = true;
         return false;
       }
