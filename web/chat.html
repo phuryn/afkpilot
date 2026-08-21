@@ -4742,8 +4742,7 @@ body.identity-restore-veil #identity-restoring-note { display: flex; }
       }
       function callers() {
         try {
-          var f = (new Error().stack || "").split("
-").slice(3, 7);
+          var f = String(new Error().stack || "").split(String.fromCharCode(10)).slice(3, 7);
           return f.map(function (x) {
             var m = x.match(/at\s+([A-Za-z0-9_$.]+)/);
             var n = x.match(/(chat\.js|chat\.html)[^:]*:(\d+)/);
