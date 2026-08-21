@@ -1082,6 +1082,35 @@ window.grokRemoteClient = true;
     if (authored) return "recover";
     return "drop";
   }
+  // Read-only file browse. The renderer awaits a reply (30s timer), so a
+  // restore-window drop leaves the panel hanging. These are not user work
+  // and must not enter the persisted outbox — hold them in RAM instead.
+  var FILE_REQUEST_RESTORE_FAIL_REASON = "The conversation could not be restored. Refresh this page and try again.";
+  function isReadOnlyFileRequest(message) {
+    return !!(message && (
+      message.type === "listProjectDir" ||
+      message.type === "readProjectFile"
+    ));
+  }
+  function fileRequestFailureReply(message, reason) {
+    if (!isReadOnlyFileRequest(message)) return null;
+    var reply = {
+      type: message.type === "listProjectDir" ? "projectDirListing" : "projectFileContent",
+      cwd: typeof message.cwd === "string" ? message.cwd : "",
+      relPath: typeof message.relPath === "string" ? message.relPath : "",
+      ok: false,
+      reason: reason || FILE_REQUEST_RESTORE_FAIL_REASON,
+    };
+    if (typeof message.requestId === "string") reply.requestId = message.requestId;
+    return reply;
+  }
+  function heldFileRequestsAfterHold(current, raw, message) {
+    if (!isReadOnlyFileRequest(message) || typeof raw !== "string") return current;
+    return current.concat([{ raw: raw, message: message }]);
+  }
+  function takeHeldFileRequests(current) {
+    return { taken: Array.isArray(current) ? current.slice() : [], next: [] };
+  }
   function liveOutboundAfterRemember(current, raw, message, authored) {
     return current.concat([{ raw: raw, message: message, authored: authored || "" }]);
   }
@@ -1138,10 +1167,9 @@ window.grokRemoteClient = true;
     listSessions: true,
     listRepoSessions: true, // auto-posted when the snapshot delivers repos
     mentionQuery: true, // one per keystroke while typing @ during reconnect
-    // The two project-file reads are not perfectly re-issued (a browse view
-    // may need a re-tap, and a pending read shows its timeout notice), but
-    // they are read-only — nothing typed is ever in them — and mourning
-    // them would false-alarm on every refresh with the panel open.
+    // Read-only project-file requests are held in RAM for the restore window
+    // (never persisted — they are not user work). Mourning them would
+    // false-alarm on every refresh with the panel open.
     listProjectDir: true,
     readProjectFile: true,
   };
@@ -1853,6 +1881,7 @@ window.grokRemoteClient = true;
   var identityRepoConfirmed = false;
   var identitySessionConfirmed = false;
   var identityRestoreComplete = false;
+  var heldFileRequests = [];
   var identityReplayDepth = 0;
   var identityEverCompleted = false;
   var voiceTransportReady = false;
@@ -2410,6 +2439,42 @@ window.grokRemoteClient = true;
     }, identityRestoreFailMs());
   }
 
+  function holdReadOnlyFileRequest(raw, message) {
+    heldFileRequests = heldFileRequestsAfterHold(heldFileRequests, raw, message);
+  }
+  function replyHeldFileRequests(held, reason) {
+    if (!held || !held.length) return;
+    for (var i = 0; i < held.length; i++) {
+      var reply = fileRequestFailureReply(held[i].message, reason);
+      if (reply) window.dispatchEvent(new MessageEvent("message", { data: reply }));
+    }
+  }
+  function failHeldFileRequests(reason) {
+    var taken = takeHeldFileRequests(heldFileRequests);
+    heldFileRequests = taken.next;
+    replyHeldFileRequests(taken.taken, reason || FILE_REQUEST_RESTORE_FAIL_REASON);
+  }
+  function flushHeldFileRequests() {
+    var taken = takeHeldFileRequests(heldFileRequests);
+    heldFileRequests = taken.next;
+    if (!taken.taken.length) return;
+    // Same live-send gate as ordinary traffic. Restore is already over, so
+    // a request that still cannot go live fails rather than hanging.
+    var canSend = liveSendDisposition({
+      socketOpen: !!(ws && ws.readyState === WebSocket.OPEN),
+      identityRestoreComplete: identityRestoreComplete,
+      deviceOffline: deviceOffline,
+      offlineHold: !!offlineHold,
+      isRestoreMessage: false,
+      changesIdentity: false,
+    }) === "send";
+    if (canSend) {
+      for (var i = 0; i < taken.taken.length; i++) ws.send(taken.taken[i].raw);
+      return;
+    }
+    replyHeldFileRequests(taken.taken, FILE_REQUEST_RESTORE_FAIL_REASON);
+  }
+
   // Cold-restore visual veil: hide #messages until the replay has ended AND
   // scroll has been applied, then reveal once. Painted reconnects never set
   // identity-restore-veil, so they stay visible throughout.
@@ -2469,6 +2534,9 @@ window.grokRemoteClient = true;
     // Abandon reaches here too. Target is already cleared so the in-flight
     // guard above does not keep the veil up after the client has settled.
     settleReconnectVeil();
+    // Identity is confirmed (or abandoned-and-settled). Held file requests
+    // may send now; abandon drained them first so this is a no-op there.
+    flushHeldFileRequests();
   }
 
   function abandonIdentityRestore(outboxReason) {
@@ -2477,6 +2545,7 @@ window.grokRemoteClient = true;
     identityReplayDepth = 0;
     recoverAuthoredFromLiveOutbound();
     reportOutboxFailure(outboxReason);
+    failHeldFileRequests();
     finishIdentityRestore();
   }
 
@@ -3428,7 +3497,13 @@ window.grokRemoteClient = true;
           abandonIdentityRestore("you chose a different repository or conversation.");
           ws.send(s);
         } else {
-          persistOutboxMessage(s, m, authored);
+          // The renderer awaits these (30s). Persist is wrong (not user work);
+          // drop leaves it hanging. Hold until restore ends.
+          if (isReadOnlyFileRequest(m) && !identityRestoreComplete) {
+            holdReadOnlyFileRequest(s, m);
+          } else {
+            persistOutboxMessage(s, m, authored);
+          }
         }
       },
       getState: function () { return saved; },

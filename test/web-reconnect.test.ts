@@ -467,6 +467,8 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
       function setVoiceTransportReady() {}
       function recoverAuthoredFromLiveOutbound() {}
       function reportOutboxFailure() {}
+      function flushHeldFileRequests() {}
+      function failHeldFileRequests() {}
       function rememberedIdentity() { return remembered.value; }
       function clearIdentityFailTimer() {
         if (identityFailTimer) { clearTimeout(identityFailTimer); identityFailTimer = null; }
@@ -845,8 +847,14 @@ describe("reconnect veil", () => {
       .toBeLessThan(finishRestoreSrc.indexOf("settleReconnectVeil()"));
     expect(finishRestoreSrc.indexOf("identityRestoreComplete = true"))
       .toBeLessThan(finishRestoreSrc.indexOf("settleReconnectVeil()"));
+    expect(finishRestoreSrc).toContain("flushHeldFileRequests()");
+    expect(finishRestoreSrc.indexOf("identityRestoreComplete = true"))
+      .toBeLessThan(finishRestoreSrc.indexOf("flushHeldFileRequests()"));
     expect(abandonRestoreSrc).toContain("finishIdentityRestore()");
     expect(abandonRestoreSrc).toContain("identityReplayDepth = 0");
+    expect(abandonRestoreSrc).toContain("failHeldFileRequests(");
+    expect(abandonRestoreSrc.indexOf("failHeldFileRequests("))
+      .toBeLessThan(abandonRestoreSrc.indexOf("finishIdentityRestore()"));
     expect(beginRestoreSrc).toContain("finishIdentityRestore()");
     expect(beginRestoreSrc).toContain("restoreRenderedTranscript()");
     expect(beginRestoreSrc.indexOf("restoreRenderedTranscript()"))
