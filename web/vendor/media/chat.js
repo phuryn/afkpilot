@@ -6881,12 +6881,15 @@
   }
 
   function setConversationLoading(active) {
+    // Either branch stamps the empty-state line. A painted conversation must
+    // not pick up Connected / Loading conversation, including when those
+    // messages arrive before clearMessages has marked the nodes.
+    if (welcomeHoldActive()) return;
     if (active) {
       // Deliberately the only indicator. A second banner above the transcript
       // used to double it up, and the transcript arrives as one batch anyway \u2014
       // so the wait that's worth announcing happens while the welcome is still
       // on screen, and the banner only ever duplicated this line.
-      if (welcomeHoldActive()) return;
       setWelcomeStatus("Loading conversation", true);
       return;
     }
@@ -6971,16 +6974,17 @@
 
   // clearMessages marks existing transcript nodes instead of destroying them.
   // Destroy at the first replacement append (same task) or on the next frame
-  // if nothing replaces it. Welcome, title, and composer focus stay put until
-  // that same moment — a resync must not blank, refocus, or paint "Starting"
-  // over a conversation still on screen.
+  // if nothing replaces it. Welcome, title, and composer focus stay put while
+  // a conversation is still on screen — a resync must not blank, refocus, or
+  // paint "Starting" over it, even before those nodes are marked pending-clear.
   const PENDING_CLEAR_ATTR = "data-pending-clear";
   let pendingTranscriptClear = false;
   let pendingTranscriptClearRaf = 0;
-  // Status resetForNewSession would have stamped immediately. Held while
-  // pending-clear nodes are still on screen; applied in the flush if nothing
-  // replaces them, dropped if a replacement arrives. "loading" / "no-project"
-  // / "starting" match the three special cases at the welcome block.
+  // Status resetForNewSession would have stamped immediately. Held while a
+  // conversation is still on screen (pending-clear or not); applied in the
+  // flush if nothing replaces them, dropped if a replacement arrives.
+  // "loading" / "no-project" / "starting" match the three special cases at
+  // the welcome block.
   let pendingWelcomeReveal = null;
   // Title, worktree flag, in-progress rename, and composer focus: same hold.
   // A resync must not blank the name or move focus (a returning phone tab
@@ -7012,7 +7016,7 @@
   }
 
   function revealWelcome() {
-    if (hasPendingClearNodes()) return;
+    if (welcomeHoldActive()) return;
     const welcome = $("welcome");
     if (welcome) welcome.hidden = false;
     state.welcomeVisible = true;
@@ -7020,7 +7024,15 @@
 
   function welcomeHoldActive() {
     const welcome = $("welcome");
-    return !!(welcome && welcome.hidden && hasPendingClearNodes());
+    if (!welcome || !welcome.hidden) return false;
+    // A painted conversation, whether already marked pending-clear or not.
+    // Remote snapshots send initialState first; local sends clearMessages first.
+    // Keying the hold on the mark made the phone's order stamp the empty state.
+    for (const child of messagesEl.children) {
+      if (child.id === "welcome") continue;
+      if (isPendingClearNode(child)) return true;
+    }
+    return liveTranscriptQueryAll(".msg").length > 0;
   }
 
   function liveTranscriptQueryAll(sel) {
@@ -7138,10 +7150,10 @@
       // hang that card exists to replace.
       //
       // Do not unhide or stamp while the previous conversation is still on
-      // screen. flushPendingTranscriptClear applies the same status once the
-      // nodes actually go; a replacement drops it so the empty state never
-      // appears over a conversation that is about to come back.
-      if (hasPendingClearNodes()) {
+      // screen (pending-clear or not). flushPendingTranscriptClear applies the
+      // same status once the nodes actually go; a replacement drops it so the
+      // empty state never appears over a conversation that is about to come back.
+      if (welcomeHoldActive() || hasPendingClearNodes()) {
         pendingWelcomeReveal = welcomeRevealKind();
       } else {
         pendingWelcomeReveal = null;
@@ -7320,7 +7332,7 @@
     // unless a replay is already putting the conversation back, in which case
     // revealing now is the reconnect flash (a buffered provider-connected
     // confirmation used to unhide on top of the messages still waiting to go).
-    const holdWelcome = state.replaying && hasPendingClearNodes();
+    const holdWelcome = state.replaying && welcomeHoldActive();
     if (!holdWelcome) {
       flushPendingTranscriptClear();
       revealWelcome();
