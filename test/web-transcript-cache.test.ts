@@ -1000,6 +1000,9 @@ function loadScrollFns(messages: LayoutMessages) {
       var snapshotHadReplay = false;
       var resyncScrollTop = null;
       var restoreTimer = null;
+      var readerScrollTop = null;
+      var readerAwayFromBottom = false;
+      function probeNote() {}
       ${scrollSrc}
       return {
         armCachedViewScroll: armCachedViewScroll,
