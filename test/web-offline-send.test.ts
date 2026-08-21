@@ -27,6 +27,7 @@ const {
   shouldReenterIdentityOnDeviceOffline,
   liveSendDisposition,
   isQueueReleaseMessage,
+  queueReleaseText,
   legacyOutboxAuthoredText,
   authoredTextFromAuthoringSurface,
   authoredStoreAfterPersist,
@@ -60,6 +61,7 @@ const {
     shouldReenterIdentityOnDeviceOffline,
     liveSendDisposition,
     isQueueReleaseMessage,
+    queueReleaseText,
     legacyOutboxAuthoredText,
     authoredTextFromAuthoringSurface,
     authoredStoreAfterPersist,
@@ -100,6 +102,7 @@ const {
     changesIdentity?: boolean;
   }) => "send" | "outbox" | "abandon-and-send";
   isQueueReleaseMessage: (message: unknown) => boolean;
+  queueReleaseText: (message: unknown) => string;
   legacyOutboxAuthoredText: (message: unknown) => string;
   authoredTextFromAuthoringSurface: (el: unknown) => string;
   authoredStoreAfterPersist: (store: string[], text: string) => string[];
@@ -738,27 +741,68 @@ describe("offline live-send hold", () => {
     expect(persistFn).not.toContain("flushRestoredOutbox()");
   });
 
-  it("text sent just before a socket replacement is not re-queued", () => {
-    // Replaying an in-flight send treats "unacknowledged" as "not delivered".
-    // The original can still land, and a second copy then runs the prompt
-    // again. Replacement recovers authored leftovers that are not replayable;
-    // queue-release frames stay out of the outbox.
-    const raw = sendRaw("sent-before-replace", "sub-replace");
-    const live = liveOutboundAfterRemember([], raw, JSON.parse(raw));
-    expect(liveOutboundParkedByReplacement(live)).toEqual([]);
+  function rememberLive(message: unknown, authored?: string) {
+    const raw = JSON.stringify(message);
+    return liveOutboundAfterRemember([], raw, message, authored);
+  }
 
+  function outboxAfterPark(live: ReturnType<typeof liveOutboundAfterRemember>) {
     let queue: string[] = [];
     for (const entry of liveOutboundParkedByReplacement(live)) {
       queue = outboxAfterPersist(queue, entry.raw, entry.message);
     }
-    expect(queue).toEqual([]);
+    return queue;
+  }
+
+  it("text sent just before a socket replacement is not re-queued", () => {
+    // Replaying an in-flight send treats "unacknowledged" as "not delivered".
+    // The original can still land, and a second copy then runs the prompt
+    // again. Replacement recovers the text instead; nothing is parked.
+    const live = rememberLive({ type: "send", text: "sent-before-replace", submissionId: "sub-replace" });
+    expect(liveOutboundParkedByReplacement(live)).toEqual([]);
+    expect(outboxAfterPark(live)).toEqual([]);
+  });
+
+  it("a queue-release send in flight during a probe replacement returns to the composer once", () => {
+    const queued = rememberLive({ type: "queueSend", text: "from the queue" });
+    expect(liveOutboundParkedByReplacement(queued)).toEqual([]);
+    expect(outboxAfterPark(queued)).toEqual([]);
+    expect(liveOutboundRecoveredByReplacement(queued)).toEqual(["from the queue"]);
+
+    const steered = rememberLive({ type: "steerSend", text: "steer this now", fromQueue: true });
+    expect(liveOutboundParkedByReplacement(steered)).toEqual([]);
+    expect(liveOutboundRecoveredByReplacement(steered)).toEqual(["steer this now"]);
+
+    const flushed = rememberLive({ type: "send", text: "host flushed this", queuedSendId: "q1" });
+    expect(liveOutboundRecoveredByReplacement(flushed)).toEqual(["host flushed this"]);
+
+    // Authored capture of the same words must not double them.
+    const alsoCaptured = rememberLive({ type: "queueSend", text: "from the queue" }, "from the queue");
+    expect(liveOutboundRecoveredByReplacement(alsoCaptured)).toEqual(["from the queue"]);
+  });
+
+  it("a typed send in flight during a probe replacement is still recovered, never replayed", () => {
+    const typed = rememberLive({ type: "send", text: "typed in this tab", submissionId: "sub-typed" });
+    expect(liveOutboundParkedByReplacement(typed)).toEqual([]);
+    expect(outboxAfterPark(typed)).toEqual([]);
+    expect(liveOutboundRecoveredByReplacement(typed)).toEqual(["typed in this tab"]);
 
     const plan = JSON.stringify({
       type: "exitPlanAnswer", requestId: 1, verdict: "rejected",
     });
-    const mixed = liveOutboundAfterRemember(live, plan, JSON.parse(plan), "plan comment");
-    expect(liveOutboundParkedByReplacement(mixed)).toEqual([]);
-    expect(liveOutboundRecoveredByReplacement(mixed)).toEqual(["plan comment"]);
+    const leftover = liveOutboundAfterRemember(typed, plan, JSON.parse(plan), "plan comment");
+    expect(liveOutboundParkedByReplacement(leftover)).toEqual([]);
+    expect(liveOutboundRecoveredByReplacement(leftover)).toEqual(["typed in this tab", "plan comment"]);
+  });
+
+  it("queue-release recovery sniffs .text only on send/queueSend/steerSend", () => {
+    expect(queueReleaseText({ type: "queueSend", text: "busy" })).toBe("busy");
+    expect(queueReleaseText({ type: "steerSend", text: "now" })).toBe("now");
+    expect(queueReleaseText({ type: "send", text: "typed" })).toBe("typed");
+    expect(queueReleaseText({ type: "summarizeSpeech", text: "an agent reply" })).toBe("");
+    expect(queueReleaseText({ type: "exitPlanAnswer", text: "not a prompt", comment: "plan" })).toBe("");
+    const speech = rememberLive({ type: "summarizeSpeech", requestId: 9, text: "an agent reply" });
+    expect(liveOutboundRecoveredByReplacement(speech)).toEqual([]);
   });
 
   it("a send in flight during a resume-triggered redial arrives exactly once on a host that deduplicates", () => {
@@ -792,10 +836,29 @@ describe("offline live-send hold", () => {
     );
     expect(parkSrc).not.toContain("persistOutboxMessage");
     expect(parkSrc).toContain("liveOutboundRecoveredByReplacement");
+    expect(parkSrc).toContain("recoverAuthoredTexts(recovered)");
+    expect(html).toContain("Your unsent text was returned to the input. Send it again if you still want it.");
     const finishSrc = html.slice(
       html.indexOf("function finishIdentityRestore"),
       html.indexOf("function abandonIdentityRestore"),
     );
     expect(finishSrc).toContain("forgetUnbouncedLiveOutbound()");
+  });
+
+  it("an ordinary reconnect with nothing in flight does not recover or replay", () => {
+    expect(liveOutboundParkedByReplacement([])).toEqual([]);
+    expect(liveOutboundRecoveredByReplacement([])).toEqual([]);
+    const closeSrc = html.slice(
+      html.indexOf('socket.addEventListener("close"'),
+      html.indexOf('socket.addEventListener("error"'),
+    );
+    expect(closeSrc).not.toContain("parkLiveOutboundForReplacement");
+    expect(closeSrc).not.toContain("liveOutboundRecoveredByReplacement");
+    const finishSrc = html.slice(
+      html.indexOf("function finishIdentityRestore"),
+      html.indexOf("function abandonIdentityRestore"),
+    );
+    expect(finishSrc).toContain("forgetUnbouncedLiveOutbound()");
+    expect(finishSrc).not.toContain("parkLiveOutboundForReplacement");
   });
 });

@@ -989,6 +989,12 @@ window.grokRemoteClient = true;
       message.type === "steerSend"
     ));
   }
+  function queueReleaseText(message) {
+    // These three frames ARE the user's words. Card answers are captured
+    // at the control and must not be sniffed from the outbound frame.
+    if (!isQueueReleaseMessage(message) || typeof message.text !== "string") return "";
+    return message.text;
+  }
   function authoredTextFromAnswers(answers) {
     if (typeof answers === "string") return answers;
     if (Array.isArray(answers)) {
@@ -1267,10 +1273,16 @@ window.grokRemoteClient = true;
     return current.filter(function () { return false; });
   }
   function liveOutboundRecoveredByReplacement(current) {
+    // Replacement does not replay. Queue-release used to be parked into
+    // the outbox for a later flush, so recovery skipped it; that park is
+    // gone, and this path does not persist them either. Authored first
+    // (card/settings capture), then the frame text for send/queueSend/
+    // steerSend.
     var texts = [];
     for (var i = 0; i < current.length; i++) {
-      if (isQueueReleaseMessage(current[i] && current[i].message)) continue;
-      var text = current[i] && current[i].authored;
+      var entry = current[i];
+      if (!entry) continue;
+      var text = entry.authored || queueReleaseText(entry.message);
       if (text) texts.push(text);
     }
     return texts;
@@ -1360,8 +1372,8 @@ window.grokRemoteClient = true;
   function parkLiveOutboundForReplacement() {
     // Do not persist in-flight queue-release sends. The original frame may
     // still be in flight and land; replaying it is a second delivery that
-    // the host cannot be shown to drop. Authored leftovers that are not
-    // replayable still return to the composer.
+    // the host cannot be shown to drop. Their text still returns to the
+    // composer: they are not in the outbox on this path.
     var recovered = liveOutboundRecoveredByReplacement(liveOutbound);
     recoverAuthoredTexts(recovered);
     if (recovered.length) {
