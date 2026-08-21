@@ -690,18 +690,26 @@ type LayoutMessages = {
   getBoundingClientRect: () => { top: number; bottom: number; height: number };
   contains: (node: unknown) => boolean;
   dispatchEvent: (event: unknown) => boolean;
+  hooks: {
+    noteIntent: (() => void) | null;
+    onScroll: (() => void) | null;
+  };
+  atBottomHistory: boolean[];
 };
 
 function layoutTranscript(opts?: { clientHeight?: number; rowHeight?: number; texts?: string[] }) {
   const clientHeight = opts?.clientHeight ?? 250;
   const rowHeight = opts?.rowHeight ?? 100;
   const events: string[] = [];
+  const atBottomHistory: boolean[] = [];
   let scrollTop = 0;
   const children: LayoutRow[] = [];
   const messages: LayoutMessages = {
     id: "messages",
     children,
     clientHeight,
+    atBottomHistory,
+    hooks: { noteIntent: null, onScroll: null },
     get scrollHeight() {
       return children.reduce((sum, row) => sum + row.height, 0);
     },
@@ -712,6 +720,7 @@ function layoutTranscript(opts?: { clientHeight?: number; rowHeight?: number; te
       events.push("scroll");
       const max = Math.max(0, this.scrollHeight - this.clientHeight);
       scrollTop = Math.max(0, Math.min(Number(value) || 0, max));
+      atBottomHistory.push(max > 0 && scrollTop >= max);
     },
     getBoundingClientRect() {
       return { top: 0, bottom: clientHeight, height: clientHeight };
@@ -719,8 +728,15 @@ function layoutTranscript(opts?: { clientHeight?: number; rowHeight?: number; te
     contains(node: unknown) {
       return children.includes(node as LayoutRow);
     },
-    dispatchEvent() {
-      events.push("pointerdown");
+    dispatchEvent(event: unknown) {
+      const type = event && typeof event === "object" && "type" in event
+        ? String((event as { type: string }).type)
+        : "event";
+      events.push(type);
+      if (type === "pointerdown" || type === "touchstart" || type === "wheel" || type === "keydown") {
+        this.hooks.noteIntent?.();
+      }
+      if (type === "scroll") this.hooks.onScroll?.();
       return true;
     },
   };
@@ -783,11 +799,11 @@ function layoutTranscript(opts?: { clientHeight?: number; rowHeight?: number; te
   for (const text of opts?.texts || ["one", "two", "three", "four", "five"]) {
     addRow(text);
   }
-  return { messages, children, events, addRow };
+  return { messages, children, events, addRow, atBottomHistory };
 }
 
 function loadScrollFns(messages: LayoutMessages) {
-  return new Function(
+  const fns = new Function(
     "document",
     "Event",
     `
@@ -814,6 +830,7 @@ function loadScrollFns(messages: LayoutMessages) {
         applyCachedTranscriptScroll: applyCachedTranscriptScroll,
         userScrolled: function () { return cachedViewUserScrolled; },
         holdPlace: function () { return cachedViewHoldPlace; },
+        gesturePending: function () { return cachedViewGesturePending; },
         live: function () { return cachedViewLive; },
         pinnedToBottom: function () { return cachedViewPinnedToBottom; },
       };
@@ -835,13 +852,29 @@ function loadScrollFns(messages: LayoutMessages) {
     ) => void;
     userScrolled: () => boolean;
     holdPlace: () => boolean;
+    gesturePending: () => boolean;
     live: () => boolean;
     pinnedToBottom: () => boolean;
   };
+  messages.hooks.noteIntent = fns.noteCachedViewUserIntent;
+  messages.hooks.onScroll = fns.onCachedViewScroll;
+  return fns;
 }
 
 function pinToBottom(messages: LayoutMessages) {
   messages.scrollTop = messages.scrollHeight;
+}
+
+function isFlushBottom(messages: LayoutMessages) {
+  return messages.scrollTop >= messages.scrollHeight - messages.clientHeight;
+}
+
+function hostYankToBottom(fns: ReturnType<typeof loadScrollFns>, messages: LayoutMessages) {
+  // chat.js forceScrollToBottom writes scrollTop; the scroll event fires
+  // in the same turn. After this returns there has been no frame at the
+  // bottom unless the hold was not armed.
+  pinToBottom(messages);
+  fns.onCachedViewScroll();
 }
 
 function userScrollTo(fns: ReturnType<typeof loadScrollFns>, messages: LayoutMessages, top: number) {
@@ -1084,9 +1117,29 @@ describe("cached view scroll across host replay", () => {
     );
     expect(applySrc).toContain("finishCachedViewScroll()");
     expect(applySrc).not.toContain("settleCachedViewScroll()");
+    const intentSrc = html.slice(
+      html.indexOf("function noteCachedViewUserIntent()"),
+      html.indexOf("function onCachedViewScroll()"),
+    );
+    expect(intentSrc).toContain("restoringCachedView");
+    const applyCachedSrc = html.slice(
+      html.indexOf("function applyCachedTranscriptScroll"),
+      html.indexOf("function clearCachedViewScroll()"),
+    );
+    expect(applyCachedSrc).toContain("cachedViewHoldPlace = true");
+    expect(applyCachedSrc).toContain("cachedViewGesturePending = false");
+    expect(applyCachedSrc).toContain("sentinel.offsetTop");
+    const applyCacheSrc = html.slice(
+      html.indexOf("function applyTranscriptCache"),
+      html.indexOf("function publishCachedSessionName"),
+    );
+    expect(applyCacheSrc.indexOf("while (holder.firstChild)"))
+      .toBeLessThan(applyCacheSrc.indexOf("applyCachedTranscriptScroll"));
+    expect(applyCacheSrc).not.toContain("setTimeout");
+    expect(applyCacheSrc).not.toContain("requestAnimationFrame");
   });
 
-  it("scrolled up, hide, reload from cache: the same content is under the reader", () => {
+  it("scrolled-up cache: no bottom frame, and the place survives the host replay", () => {
     const live = layoutTranscript();
     const liveFns = loadScrollFns(live.messages);
     pinToBottom(live.messages);
@@ -1101,14 +1154,34 @@ describe("cached view scroll across host replay", () => {
 
     const reload = layoutTranscript();
     const reloadFns = loadScrollFns(reload.messages);
+    reload.atBottomHistory.length = 0;
     reloadFns.applyCachedTranscriptScroll(reload.messages, stored);
     const same = rowByText(reload, "two");
     expect(same).toBeTruthy();
     expect(Math.abs(same!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
     expect(reloadFns.holdPlace()).toBe(true);
+    expect(reloadFns.gesturePending()).toBe(false);
+    expect(isFlushBottom(reload.messages)).toBe(false);
+    expect(reload.atBottomHistory.some(Boolean)).toBe(false);
+
+    hostYankToBottom(reloadFns, reload.messages);
+    expect(reloadFns.holdPlace()).toBe(true);
+    expect(isFlushBottom(reload.messages)).toBe(false);
+    expect(Math.abs(rowByText(reload, "two")!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+
+    replayRows(reload, {
+      texts: ["one", "two", "three", "four", "five", "six"],
+      heights: [180, 100, 100, 100, 100, 100],
+    });
+    hostYankToBottom(reloadFns, reload.messages);
+    expect(isFlushBottom(reload.messages)).toBe(false);
+    expect(Math.abs(rowByText(reload, "two")!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+    reloadFns.applyRestoreScroll();
+    expect(isFlushBottom(reload.messages)).toBe(false);
+    expect(Math.abs(rowByText(reload, "two")!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
   });
 
-  it("at the bottom, hide, reload: still at the bottom, and replayed new messages are visible", () => {
+  it("at-bottom cache: bottom throughout, and replayed new messages are visible", () => {
     const live = layoutTranscript();
     const liveFns = loadScrollFns(live.messages);
     pinToBottom(live.messages);
@@ -1119,56 +1192,87 @@ describe("cached view scroll across host replay", () => {
     const reload = layoutTranscript();
     const reloadFns = loadScrollFns(reload.messages);
     reloadFns.applyCachedTranscriptScroll(reload.messages, stored);
-    expect(reload.messages.scrollTop).toBe(reload.messages.scrollHeight - reload.messages.clientHeight);
+    expect(isFlushBottom(reload.messages)).toBe(true);
+    expect(reloadFns.holdPlace()).toBe(false);
+    expect(reloadFns.gesturePending()).toBe(false);
+
+    hostYankToBottom(reloadFns, reload.messages);
+    expect(isFlushBottom(reload.messages)).toBe(true);
     expect(reloadFns.holdPlace()).toBe(false);
 
     replayRows(reload, {
       texts: ["one", "two", "three", "four", "five", "arrived-while-away"],
       heights: [100, 100, 100, 100, 100, 100],
     });
-    pinToBottom(reload.messages);
+    hostYankToBottom(reloadFns, reload.messages);
     reloadFns.applyRestoreScroll();
-    expect(reload.messages.scrollTop).toBe(reload.messages.scrollHeight - reload.messages.clientHeight);
+    expect(isFlushBottom(reload.messages)).toBe(true);
+    expect(reloadFns.holdPlace()).toBe(false);
     const newest = rowByText(reload, "arrived-while-away");
     expect(newest).toBeTruthy();
     expect(newest!.getBoundingClientRect().bottom).toBeLessThanOrEqual(reload.messages.clientHeight + 1);
   });
 
-  it("restored position survives the host replay replacing the cached window", () => {
+  it("an anchor that is missing or stale falls back to the bottom and does not arm the hold", () => {
+    const missing = layoutTranscript();
+    const missingFns = loadScrollFns(missing.messages);
+    missingFns.applyCachedTranscriptScroll(missing.messages, {
+      atBottom: false,
+      key: "not in this window",
+      y: 40,
+    });
+    expect(isFlushBottom(missing.messages)).toBe(true);
+    expect(missingFns.holdPlace()).toBe(false);
+
+    hostYankToBottom(missingFns, missing.messages);
+    expect(isFlushBottom(missing.messages)).toBe(true);
+    expect(missingFns.holdPlace()).toBe(false);
+    missingFns.applyRestoreScroll();
+    expect(isFlushBottom(missing.messages)).toBe(true);
+    expect(missingFns.holdPlace()).toBe(false);
+
+    const stale = layoutTranscript({ texts: ["alpha", "beta", "gamma", "delta", "epsilon"] });
+    const staleFns = loadScrollFns(stale.messages);
+    staleFns.applyCachedTranscriptScroll(stale.messages, {
+      atBottom: false,
+      key: "two",
+      y: 0,
+    });
+    expect(isFlushBottom(stale.messages)).toBe(true);
+    expect(staleFns.holdPlace()).toBe(false);
+  });
+
+  it("a gesture after a restored position is what survives the replay", () => {
     const live = layoutTranscript();
     const liveFns = loadScrollFns(live.messages);
     pinToBottom(live.messages);
     liveFns.armCachedViewScroll();
     userScrollTo(liveFns, live.messages, 100);
     const stored = liveFns.snapshotTranscriptScroll(live.messages);
-    const savedY = rowByText(live, "two")!.getBoundingClientRect().top;
+    expect(stored).toEqual({ atBottom: false, key: "two", y: 0 });
 
-    const reload = layoutTranscript();
+    const reload = layoutTranscript({
+      texts: ["one", "two", "three", "four", "five", "six", "seven"],
+    });
     const reloadFns = loadScrollFns(reload.messages);
     reloadFns.applyCachedTranscriptScroll(reload.messages, stored);
+    expect(rowByText(reload, "two")!.getBoundingClientRect().top).toBe(0);
+
+    userScrollTo(reloadFns, reload.messages, 200);
+    const moved = rowByText(reload, "three");
+    expect(moved).toBeTruthy();
+    const savedY = moved!.getBoundingClientRect().top;
+    expect(savedY).toBe(0);
     expect(reloadFns.holdPlace()).toBe(true);
 
     replayRows(reload, {
-      texts: ["one", "two", "three", "four", "five", "six"],
-      heights: [180, 100, 100, 100, 100, 100],
+      texts: ["one", "two", "three", "four", "five", "six", "seven", "eight"],
+      heights: [180, 100, 100, 100, 100, 100, 100, 100],
     });
-    pinToBottom(reload.messages);
+    hostYankToBottom(reloadFns, reload.messages);
     reloadFns.applyRestoreScroll();
-    const same = rowByText(reload, "two");
-    expect(same).toBeTruthy();
-    expect(Math.abs(same!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
-  });
-
-  it("an anchor that is no longer present falls back to the bottom", () => {
-    const page = layoutTranscript();
-    const fns = loadScrollFns(page.messages);
-    fns.applyCachedTranscriptScroll(page.messages, {
-      atBottom: false,
-      key: "not in this window",
-      y: 40,
-    });
-    expect(page.messages.scrollTop).toBe(page.messages.scrollHeight - page.messages.clientHeight);
-    expect(fns.holdPlace()).toBe(false);
+    expect(Math.abs(rowByText(reload, "three")!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+    expect(rowByText(reload, "two")!.getBoundingClientRect().top).not.toBe(0);
   });
 
   it("reload cache paint never calls applyRestoreScroll — a reader who moved is held by the cached-view path", () => {

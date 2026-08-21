@@ -2333,6 +2333,9 @@ window.grokRemoteClient = true;
       var titleEl = doc.getElementById("session-head-title");
       if (titleEl && !String(titleEl.textContent || "").trim()) titleEl.textContent = cache.title;
     }
+    // Same turn as the HTML. A later apply is a second painted frame — the
+    // bottom, then the place. History-head and welcome.hidden land first
+    // because both change row offsetTop.
     applyCachedTranscriptScroll(messagesEl, cache.scroll);
     return true;
   }
@@ -2632,10 +2635,12 @@ window.grokRemoteClient = true;
     return { atBottom: false, key: anchor.key, y: anchor.y - viewTop };
   }
   function applyCachedTranscriptScroll(messagesEl, scroll) {
-    // First painted frame, not an animation. A usable mid-window anchor
-    // seeds the existing cached-view hold so the host replay that replaces
-    // this window keeps the same place. Missing, unusable, or a key that
-    // is no longer in the cached rows: the bottom, which is today.
+    // A place restored from the cache is the reader's place — recorded
+    // before the reload, not gestured after it. Arm the same hold a swipe
+    // would, so replay-end force-scroll cannot throw it away. This apply
+    // is not a gesture: programmatic scroll is still not a swipe.
+    // at-bottom, missing, or a key that is no longer in the cached rows:
+    // the bottom, and no hold.
     if (!messagesEl) return;
     armCachedViewScroll();
     if (!scroll || scroll.atBottom !== false) {
@@ -2663,11 +2668,19 @@ window.grokRemoteClient = true;
     cachedViewPinnedToBottom = false;
     cachedViewUserScrolled = true;
     restoringCachedView = true;
+    // Offset first so the HTML and the place are one frame, not bottom
+    // then a later restore. Rect refine handles a non-zero view top.
+    if (typeof sentinel.offsetTop === "number") {
+      messagesEl.scrollTop = Math.max(0, sentinel.offsetTop - scroll.y);
+    }
     restoreTranscriptScrollAnchor(messagesEl, cachedViewAnchor);
     signalUserScrollToRenderer(messagesEl);
     var recaptured = captureTranscriptScrollAnchor(messagesEl);
-    if (recaptured) cachedViewAnchor = recaptured;
+    if (recaptured && recaptured.key === scroll.key && messagesEl.clientHeight > 0) {
+      cachedViewAnchor = recaptured;
+    }
     restoringCachedView = false;
+    cachedViewGesturePending = false;
   }
   function clearCachedViewScroll() {
     cachedViewLive = false;
@@ -2772,7 +2785,10 @@ window.grokRemoteClient = true;
     } catch (_) { /* tests / older UAs */ }
   }
   function noteCachedViewUserIntent() {
-    if (!cachedViewLive) return;
+    // Restore and yank-undo dispatch pointerdown so chat.js unpins. That
+    // is not a swipe — a later force-scroll to the bottom must not look
+    // like the reader asked for it.
+    if (!cachedViewLive || restoringCachedView) return;
     cachedViewGesturePending = true;
   }
   function onCachedViewScroll() {
