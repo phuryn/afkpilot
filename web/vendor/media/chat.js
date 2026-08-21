@@ -6990,9 +6990,9 @@
   // if nothing replaces it. body.identity-restoring suspends that next-frame
   // flush: a restore is a replacement we already know is coming, so wait for
   // the class to lift and flush then only if nothing arrived. Welcome, title,
-  // and composer focus stay put while a conversation is still on screen — a
-  // resync must not blank, refocus, or paint "Starting" over it, even before
-  // those nodes are marked pending-clear.
+  // composer focus, and the reader's pin stay put while a conversation is
+  // still on screen — a resync must not blank, refocus, re-pin, or paint
+  // "Starting" over it, even before those nodes are marked pending-clear.
   const PENDING_CLEAR_ATTR = "data-pending-clear";
   let pendingTranscriptClear = false;
   let pendingTranscriptClearRaf = 0;
@@ -7003,9 +7003,11 @@
   // "loading" / "no-project" / "starting" match the three special cases at
   // the welcome block.
   let pendingWelcomeReveal = null;
-  // Title, worktree flag, in-progress rename, and composer focus: same hold.
-  // A resync must not blank the name or move focus (a returning phone tab
-  // would pop the keyboard). Flush still applies them for an empty swap.
+  // Title, worktree flag, in-progress rename, composer focus, and the
+  // reader's pin: same hold. A resync must not blank the name, move focus
+  // (a returning phone tab would pop the keyboard), or yank a scrolled-up
+  // reader to the bottom. Flush still applies them for an empty swap; a
+  // sessionName with a different id applies focus + pin for a real swap.
   let pendingSessionChromeReset = false;
   // Desktop launch is a different event from that resync: the app just opened
   // and the caret belongs in the composer, restored conversation or not. One
@@ -7124,6 +7126,8 @@
     renderSessionName();
     if (IS_REMOTE) renderSessionHead();
     focusComposerIfAllowed();
+    setStickToBottom(true); // a fresh/loaded session starts pinned
+    updateScrollBtn();
   }
 
   /** Empty-state path: no replacement arrived, so the welcome must appear. */
@@ -7487,8 +7491,9 @@
     markTranscriptPendingClear();
     // Incoming `session` / `sessionName` re-set these. Clearing them first is
     // why a resync blanks the title and then paints it back. Hold while the
-    // previous conversation is still on screen; flush applies the reset if
-    // this was an empty swap; a replacement drops it.
+    // previous conversation is still on screen — title, caret, and the
+    // reader's pin. Flush applies the reset if this was an empty swap; a
+    // replacement drops it.
     if (hasPendingClearNodes()) pendingSessionChromeReset = true;
     else resetSessionChrome();
     const welcome = $("welcome");
@@ -7560,8 +7565,6 @@
     state.suppressReplayTurn = false;
     state.skipUserBubble = false;
     cancelPendingSpeech();
-    setStickToBottom(true); // a fresh/loaded session starts pinned
-    updateScrollBtn();
     hideGrokking();
     hideThinkingIndicator();
     // Busy is per-session UI state — a swap must not leak the previous
@@ -14217,13 +14220,18 @@
         noteHostIdentityKnown(msg.sessionId);
         // Same conversation coming back: do not rebuild the header. Different
         // at all: paint immediately. A held resync that turns out to be a
-        // swap still lands the caret in the composer.
+        // swap still lands the caret in the composer and pins like a fresh open.
         if (!sameVisible) {
           renderSessionName();
           renderSessionHead();
         }
         pendingSessionChromeReset = false;
-        if (prev && !sameId) focusComposerIfAllowed();
+        if (prev && !sameId) {
+          focusComposerIfAllowed();
+          setStickToBottom(true);
+          updateScrollBtn();
+          scrollToBottom();
+        }
         break;
       }
       case "modelChanged": {
@@ -14506,9 +14514,10 @@
           if (IS_REMOTE) state.exportWindowed = true;
           // Follow the pin. Do not re-pin: a reader (or a cache restore) who
           // is not at the bottom must stay put. A pinned reader still lands
-          // at the bottom so new messages stay visible. Fresh open / session
-          // swap already pin in resetForNewSession. Skip while the wrapper is
-          // restoring identity — that class means a place is already owned.
+          // at the bottom so new messages stay visible. Fresh open / empty
+          // flush pin in resetSessionChrome; a swap pins when sessionName
+          // names a different id. Skip while the wrapper is restoring
+          // identity — that class means a place is already owned.
           if (!identityRestoring()) scrollToBottom();
           onFindTranscriptSettled();
         }
