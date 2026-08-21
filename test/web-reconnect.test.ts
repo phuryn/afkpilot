@@ -307,7 +307,7 @@ describe("resume probe", () => {
 });
 
 const veilFns = html.slice(
-  html.indexOf("function showReconnecting()"),
+  html.indexOf("function hideReconnectIndicator()"),
   html.indexOf("function readyMessage()"),
 );
 const finishRestoreSrc = html.slice(
@@ -369,7 +369,7 @@ function fakeEl(): VeilEl {
   return el;
 }
 
-function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } | null }) {
+function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } | null; painted?: boolean }) {
   const remembered = { value: opts?.remembered === undefined ? null : opts.remembered };
   const bodyClasses = new Set<string>();
   const body = {
@@ -381,8 +381,14 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
     },
     appendChild: (_child: VeilEl) => _child,
   };
-  const nodes: Record<string, { textContent: string; hidden: boolean; querySelector: () => null }> = {
-    messages: { textContent: "", hidden: false, querySelector: () => null },
+  const msgStub = { className: "msg" };
+  const nodes: Record<string, { textContent: string; hidden: boolean; querySelector: (sel?: string) => unknown }> = {
+    messages: {
+      textContent: "",
+      hidden: false,
+      querySelector: (sel?: string) => (opts?.painted && sel === ".msg" ? msgStub : null),
+    },
+    "reconnecting-indicator": { textContent: "Reconnecting…", hidden: true, querySelector: () => null },
     "host-too-old-copy": { textContent: "", hidden: false, querySelector: () => null },
     "host-too-old": { textContent: "", hidden: true, querySelector: () => null },
     app: { textContent: "", hidden: false, querySelector: () => null },
@@ -449,6 +455,10 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
         overlayVisible: function () {
           return !!(overlayEl && !overlayEl.hidden);
         },
+        indicatorUp: function () {
+          var el = document.getElementById("reconnecting-indicator");
+          return !!(el && !el.hidden);
+        },
       };
     `,
   )(WS, {
@@ -466,6 +476,7 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
     setHostBlocked: (value: boolean) => void;
     veilUp: () => boolean;
     overlayVisible: () => boolean;
+    indicatorUp: () => boolean;
   };
 
   return runtime;
@@ -608,6 +619,88 @@ describe("reconnect veil", () => {
     expect(rt.veilUp()).toBe(false);
   });
 
+  it("a painted conversation takes the small indicator, not the veil", () => {
+    vi.useFakeTimers();
+    const rt = makeVeilRuntime({
+      remembered: { id: "sess-1", repoCwd: "/repo" },
+      painted: true,
+    });
+    rt.showReconnecting();
+    expect(rt.veilUp()).toBe(false);
+    expect(rt.overlayVisible()).toBe(false);
+    expect(rt.indicatorUp()).toBe(true);
+  });
+
+  it("an empty transcript still takes today's veil", () => {
+    vi.useFakeTimers();
+    const rt = makeVeilRuntime({ remembered: { id: "sess-1", repoCwd: "/repo" } });
+    rt.showReconnecting();
+    expect(rt.veilUp()).toBe(true);
+    expect(rt.indicatorUp()).toBe(false);
+  });
+
+  it("the indicator clears on restore complete, abandon, and notice", () => {
+    vi.useFakeTimers();
+    const complete = makeVeilRuntime({
+      remembered: { id: "sess-1", repoCwd: "/repo" },
+      painted: true,
+    });
+    complete.showReconnecting();
+    complete.beginIdentityRestore();
+    expect(complete.indicatorUp()).toBe(true);
+    complete.finishIdentityRestore();
+    expect(complete.indicatorUp()).toBe(true);
+    vi.advanceTimersByTime(450);
+    expect(complete.indicatorUp()).toBe(false);
+    expect(complete.veilUp()).toBe(false);
+
+    const abandoned = makeVeilRuntime({
+      remembered: { id: "sess-1", repoCwd: "/repo" },
+      painted: true,
+    });
+    abandoned.showReconnecting();
+    abandoned.beginIdentityRestore();
+    expect(abandoned.indicatorUp()).toBe(true);
+    abandoned.abandonIdentityRestore("the conversation could not be restored.");
+    vi.advanceTimersByTime(450);
+    expect(abandoned.indicatorUp()).toBe(false);
+
+    const noticed = makeVeilRuntime({
+      remembered: { id: "sess-1", repoCwd: "/repo" },
+      painted: true,
+    });
+    noticed.showReconnecting();
+    expect(noticed.indicatorUp()).toBe(true);
+    noticed.notice("Device not found.");
+    expect(noticed.indicatorUp()).toBe(false);
+    expect(noticed.veilUp()).toBe(false);
+    expect(noticed.overlayVisible()).toBe(true);
+    vi.advanceTimersByTime(450);
+    expect(noticed.indicatorUp()).toBe(false);
+    expect(noticed.overlayVisible()).toBe(true);
+  });
+
+  it("hostBlocked shows neither the veil nor the indicator", () => {
+    vi.useFakeTimers();
+    const blocked = makeVeilRuntime({ painted: true });
+    blocked.setHostBlocked(true);
+    blocked.showReconnecting();
+    expect(blocked.veilUp()).toBe(false);
+    expect(blocked.indicatorUp()).toBe(false);
+
+    const rt = makeVeilRuntime({
+      remembered: { id: "sess-1", repoCwd: "/repo" },
+      painted: true,
+    });
+    rt.showReconnecting();
+    expect(rt.indicatorUp()).toBe(true);
+    rt.showHostTooOld("2.0.4");
+    expect(rt.indicatorUp()).toBe(false);
+    expect(rt.veilUp()).toBe(false);
+    vi.advanceTimersByTime(450);
+    expect(rt.indicatorUp()).toBe(false);
+  });
+
   it("keys hide on restore complete, not on the inbound-frame call site", () => {
     expect(connectSrc).toContain("settleReconnectVeil()");
     expect(veilFns).toContain("identityTarget && !identityRestoreComplete");
@@ -618,8 +711,10 @@ describe("reconnect veil", () => {
       .toBeLessThan(finishRestoreSrc.indexOf("settleReconnectVeil()"));
     expect(abandonRestoreSrc).toContain("finishIdentityRestore()");
     expect(beginRestoreSrc).toContain("finishIdentityRestore()");
-    expect(showHostTooOldSrc).toContain('classList.remove("reconnecting")');
-    expect(noticeSrc).toContain('classList.remove("reconnecting")');
-    expect(persistOfflineSrc).toContain('classList.remove("reconnecting")');
+    expect(showHostTooOldSrc).toContain("clearReconnectPresentation(true)");
+    expect(noticeSrc).toContain("clearReconnectPresentation(false)");
+    expect(persistOfflineSrc).toContain("clearReconnectPresentation(true)");
+    expect(veilFns).toContain("messagesEl.querySelector(\".msg\")");
+    expect(veilFns).toContain("clearReconnectPresentation(true)");
   });
 });

@@ -248,10 +248,12 @@ try {
 
   const snapshot = (clientId, msgs) => uplink.send(JSON.stringify({ t: "snapshot", clientId, msgs }));
   const host = (clientId, msg) => uplink.send(JSON.stringify({ t: "host-to", clientIds: [clientId], msg }));
+  let lastClientId = "";
 
   uplink.on("message", (raw) => {
     const f = JSON.parse(raw.toString());
     if (f.t === "client-ready") {
+      lastClientId = f.clientId;
       snapshot(f.clientId, [
         { type: "clearMessages" },
         {
@@ -344,6 +346,16 @@ try {
     const { name, docked, ...contextOptions } = layout;
     const context = await browser.newContext(contextOptions);
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      const NativeWebSocket = window.WebSocket;
+      window.__screensTestSockets = [];
+      window.WebSocket = class extends NativeWebSocket {
+        constructor(...args) {
+          super(...args);
+          window.__screensTestSockets.push(this);
+        }
+      };
+    });
     const errors = [];
     page.on("pageerror", (e) => errors.push(String(e && e.message || e)));
 
@@ -912,6 +924,66 @@ try {
         `${name}: inputs under 16px make iOS zoom on focus (search is ${density.searchFont}px)`,
       );
     }
+
+    // A painted conversation must reconnect without the full-screen veil.
+    // happy-dom cannot see whether the overlay covers and blurs the
+    // transcript; this is the layout check for that presentation choice.
+    // Close the phone/tablet drawer first so the screenshot is the chat,
+    // not the rail covering it. Playwright's scrim click is intercepted by
+    // the rail itself; the toggle is the control that hides it.
+    if (!docked) {
+      const toggle = page.locator("#rail-toggle");
+      if (await toggle.isVisible().catch(() => false)) {
+        await toggle.click();
+        await page.waitForTimeout(300);
+      }
+    }
+    assert.ok(lastClientId, `${name}: need a live client to paint a message`);
+    host(lastClientId, { type: "userMessage", text: "still reading this" });
+    await page.locator(".msg.user", { hasText: "still reading this" }).waitFor({ timeout: 5000 });
+    await page.evaluate(() => {
+      const socket = [...(window.__screensTestSockets || [])].reverse()
+        .find((s) => String(s.url).includes("/client?"));
+      if (!socket) throw new Error("screens test could not find the browser client WebSocket");
+      socket.close();
+    });
+    await page.waitForFunction(() => {
+      const el = document.getElementById("reconnecting-indicator");
+      return !!(el && !el.hidden);
+    }, { timeout: 5000 });
+    const reconnect = await page.evaluate(() => {
+      const indicator = document.getElementById("reconnecting-indicator");
+      const overlay = document.querySelector(".auth-overlay.reconnecting");
+      const overlayCs = overlay && !overlay.hidden ? getComputedStyle(overlay) : null;
+      const msg = [...document.querySelectorAll(".msg")].find((el) =>
+        /still reading this/.test(el.textContent || ""));
+      const i = indicator ? indicator.getBoundingClientRect() : { width: 0, height: 0 };
+      const msgCs = msg ? getComputedStyle(msg) : null;
+      return {
+        overlayUp: !!(overlay && overlayCs && overlayCs.display !== "none"),
+        indicatorHidden: !indicator || indicator.hidden,
+        indicatorText: (indicator && !indicator.hidden ? indicator.textContent : "") || "",
+        indicatorH: Math.round(i.height),
+        indicatorW: Math.round(i.width),
+        indicatorFullBleed: i.width >= window.innerWidth - 2 && i.height >= window.innerHeight - 2,
+        msgVisible: !!(msg && msgCs && msgCs.visibility !== "hidden" && msgCs.display !== "none"),
+        msgFilter: msgCs ? msgCs.filter : "",
+      };
+    });
+    assert.equal(reconnect.overlayUp, false, `${name}: a painted conversation must not take the reconnect veil — ${JSON.stringify(reconnect)}`);
+    assert.equal(reconnect.indicatorHidden, false, `${name}: reconnecting must show the small indicator — ${JSON.stringify(reconnect)}`);
+    assert.match(reconnect.indicatorText, /Reconnecting/);
+    assert.ok(
+      reconnect.indicatorH > 0 && reconnect.indicatorH < 48,
+      `${name}: indicator should be a small status line (${reconnect.indicatorH}px)`,
+    );
+    assert.equal(reconnect.indicatorFullBleed, false, `${name}: indicator must not cover the viewport`);
+    assert.equal(reconnect.msgVisible, true, `${name}: the conversation must stay painted`);
+    assert.ok(
+      !reconnect.msgFilter || reconnect.msgFilter === "none",
+      `${name}: the transcript must not be blurred (${reconnect.msgFilter})`,
+    );
+    await shot(page, `${name}-10-reconnecting`);
 
     assert.deepEqual(errors, [], `${name}: the page logged errors — ${JSON.stringify(errors)}`);
     log(`${name}: ${docked ? "panel below its bar" : "panel full-screen with a way out"}, no blank icons, nothing off-screen`);

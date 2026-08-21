@@ -565,7 +565,12 @@ try {
     if (!socket) throw new Error("legacy test could not find the browser client WebSocket");
     socket.close();
   });
-  await page.locator(".auth-overlay.reconnecting").waitFor({ state: "visible", timeout: 5000 });
+  await page.locator("#reconnecting-indicator").waitFor({ state: "visible", timeout: 5000 });
+  assert.equal(
+    await page.locator(".auth-overlay.reconnecting").count(),
+    0,
+    "a painted conversation must not take the reconnect veil",
+  );
   await page.locator("#mic-btn:not(.listening):not(.connecting):not(.transcribing)").waitFor({ timeout: 5000 });
   await page.locator(".msg.error", { hasText: "Voice recording stopped because the connection was interrupted" })
     .waitFor({ timeout: 5000 });
@@ -704,6 +709,10 @@ try {
       live: live.readyState,
       count: window.__legacyTestSockets.filter((s) => String(s.url).includes("/client?")).length,
       overlayReconnecting: !!document.querySelector(".auth-overlay.reconnecting"),
+      indicatorReconnecting: (() => {
+        const el = document.getElementById("reconnecting-indicator");
+        return !!(el && !el.hidden);
+      })(),
     };
   });
   assert.equal(staleGen.before.live, 1, "the successor must still be OPEN before the stale events");
@@ -714,10 +723,15 @@ try {
     count: window.__legacyTestSockets.filter((s) => String(s.url).includes("/client?")).length,
     live: [...window.__legacyTestSockets].reverse().find((s) => String(s.url).includes("/client?"))?.readyState,
     overlayReconnecting: !!document.querySelector(".auth-overlay.reconnecting"),
+    indicatorReconnecting: (() => {
+      const el = document.getElementById("reconnecting-indicator");
+      return !!(el && !el.hidden);
+    })(),
   }));
   assert.equal(afterStale.count, staleGen.before.count, "a stale 4004 must not schedule another connect()");
   assert.equal(afterStale.live, 1, "the live socket must still be OPEN after the reconnect delay");
   assert.equal(afterStale.overlayReconnecting, false, "a stale close must not bounce a healthy session into reconnect");
+  assert.equal(afterStale.indicatorReconnecting, false, "a stale close must not show the reconnecting indicator");
   log("a stale socket error/close after a redial does not touch the live connection");
 
   const setPageVisibility = async (state) => {
@@ -772,6 +786,11 @@ try {
     await page.locator(".auth-overlay.reconnecting").count(),
     0,
     "a brief hide must not show the reconnecting veil",
+  );
+  assert.equal(
+    await page.locator("#reconnecting-indicator:visible").count(),
+    0,
+    "a brief hide must not show the reconnecting indicator",
   );
   assert.equal(
     droppedProbeCount(),
