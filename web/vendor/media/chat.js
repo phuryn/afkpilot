@@ -6977,9 +6977,12 @@
 
   // clearMessages marks existing transcript nodes instead of destroying them.
   // Destroy at the first replacement append (same task) or on the next frame
-  // if nothing replaces it. Welcome, title, and composer focus stay put while
-  // a conversation is still on screen — a resync must not blank, refocus, or
-  // paint "Starting" over it, even before those nodes are marked pending-clear.
+  // if nothing replaces it. body.identity-restoring suspends that next-frame
+  // flush: a restore is a replacement we already know is coming, so wait for
+  // the class to lift and flush then only if nothing arrived. Welcome, title,
+  // and composer focus stay put while a conversation is still on screen — a
+  // resync must not blank, refocus, or paint "Starting" over it, even before
+  // those nodes are marked pending-clear.
   const PENDING_CLEAR_ATTR = "data-pending-clear";
   let pendingTranscriptClear = false;
   let pendingTranscriptClearRaf = 0;
@@ -7058,6 +7061,14 @@
     pendingTranscriptClearRaf = 0;
   }
 
+  function schedulePendingTranscriptClearFlush() {
+    if (pendingTranscriptClearRaf) return;
+    pendingTranscriptClearRaf = requestAnimationFrame(() => {
+      pendingTranscriptClearRaf = 0;
+      flushPendingTranscriptClear();
+    });
+  }
+
   function markTranscriptPendingClear() {
     pendingTranscriptClear = true;
     for (const child of Array.from(messagesEl.children)) {
@@ -7065,10 +7076,8 @@
       child.setAttribute(PENDING_CLEAR_ATTR, "1");
     }
     cancelPendingTranscriptClearRaf();
-    pendingTranscriptClearRaf = requestAnimationFrame(() => {
-      pendingTranscriptClearRaf = 0;
-      flushPendingTranscriptClear();
-    });
+    if (identityRestoring()) return;
+    schedulePendingTranscriptClearFlush();
   }
 
   function focusComposerIfAllowed() {
@@ -7121,12 +7130,8 @@
 
   function scheduleEmptyWelcomeFlush() {
     pendingTranscriptClear = true;
-    pendingWelcomeReveal = welcomeRevealKind();
-    if (pendingTranscriptClearRaf) return;
-    pendingTranscriptClearRaf = requestAnimationFrame(() => {
-      pendingTranscriptClearRaf = 0;
-      flushPendingTranscriptClear();
-    });
+    if (pendingWelcomeReveal == null) pendingWelcomeReveal = welcomeRevealKind();
+    schedulePendingTranscriptClearFlush();
   }
 
   function syncIdentityRestoreHold() {
@@ -7136,11 +7141,14 @@
       if (welcome) welcome.hidden = true;
       if (pendingWelcomeReveal == null) pendingWelcomeReveal = welcomeRevealKind();
       identityRestoreHeld = true;
+      cancelPendingTranscriptClearRaf();
       return;
     }
     if (!identityRestoreHeld) return;
     identityRestoreHeld = false;
-    if (welcomeHoldActive()) {
+    // Pending-clear nodes still count as painted, so welcomeHoldActive cannot
+    // decide this. Flag dropped → replacement landed. Still armed → flush.
+    if (!pendingTranscriptClear && welcomeHoldActive()) {
       pendingWelcomeReveal = null;
       return;
     }

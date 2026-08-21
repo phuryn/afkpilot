@@ -2447,16 +2447,15 @@ window.grokRemoteClient = true;
     }
     identityRestoreComplete = false;
     setVoiceTransportReady(false);
-    // Veil the transcript while the restore is in flight — but ONLY over a
-    // fresh, empty one. Without this the intermediate snapshot (often a blank
-    // "New session") paints first and is then replaced by the restored
-    // conversation, which reads as the wrong session loading (owner,
-    // 2026-08-15). A mid-session socket blip re-runs this same handshake over
-    // an already-painted conversation; veiling that would flash the other
-    // way, hence the childElementCount gate. The composer stays usable — the
+    // identity-restoring is the restore-in-flight signal for chat.js (it
+    // holds a pending-clear across the round trip). The visual veil — hidden
+    // transcript + "Restoring conversation…" — stays empty-only. A mid-session
+    // socket blip re-runs this handshake over an already-painted conversation;
+    // veiling that would flash the other way. The composer stays usable — the
     // outbox holds anything typed until identity confirms.
     // "Empty" means no conversation content — the container always holds the
     // (hidden) welcome node, so childElementCount would never be zero.
+    document.body.classList.add("identity-restoring");
     if (!transcriptHasConversation()) {
       if (!document.getElementById("identity-restoring-note")) {
         var restoringNote = document.createElement("div");
@@ -2464,7 +2463,6 @@ window.grokRemoteClient = true;
         restoringNote.textContent = "Restoring conversation…";
         document.body.appendChild(restoringNote);
       }
-      document.body.classList.add("identity-restoring");
     }
     identityTimer = setTimeout(function () {
       identityTimer = null;
@@ -3656,13 +3654,12 @@ textarea#input,
   .math-export.show-actions .expr-actions,
   .mermaid-block.show-actions .expr-actions { opacity: 1; pointer-events: auto; }
 }
-/* The identity-restore veil: while a remembered conversation is being
-   restored on a fresh page, the transcript stays hidden and a quiet note
-   shows, so the intermediate "New session" snapshot never flashes before
-   being replaced. Applied by beginIdentityRestore only over an EMPTY
-   transcript; lifted by finish/abandon. pointer-events none — the composer
-   underneath stays usable. */
-body.identity-restoring #messages { visibility: hidden; }
+/* The identity-restore veil: body.identity-restoring is set for the whole
+   restore so chat.js can hold a pending-clear. The visual veil — hidden
+   transcript + "Restoring conversation…" — applies only while there is no
+   conversation content (pending-clear .msg still counts). Lifted by
+   finish/abandon. pointer-events none — the composer underneath stays usable. */
+body.identity-restoring #messages:not(:has(.msg:not(.error))) { visibility: hidden; }
 /* Errors punch through the veil (visibility, unlike display, lets a
    descendant reassert itself): the delay notice, a refusal, offline text —
    the user must see those mid-restore. Only ordinary transcript paint hides. */
@@ -3670,7 +3667,7 @@ body.identity-restoring #messages .msg.error { visibility: visible; }
 /* The top bar's session name is the same intermediate paint — it read
    "New session" for the restore window after the transcript was already
    veiled (owner, 2026-08-15). Same veil, same lift. */
-body.identity-restoring #session-head-title { visibility: hidden; }
+body.identity-restoring:not(:has(#messages .msg:not(.error))) #session-head-title { visibility: hidden; }
 #identity-restoring-note {
   display: none;
   position: fixed;
@@ -3682,7 +3679,7 @@ body.identity-restoring #session-head-title { visibility: hidden; }
   color: var(--vscode-descriptionForeground);
   font-size: 13px;
 }
-body.identity-restoring #identity-restoring-note { display: flex; }
+body.identity-restoring:not(:has(#messages .msg:not(.error))) #identity-restoring-note { display: flex; }
 
 /* Message actions (Copy + timestamp) need NO touch rule here anymore: the
    vendored chat.css rests them dimmed (0.4) and tappable on every surface —

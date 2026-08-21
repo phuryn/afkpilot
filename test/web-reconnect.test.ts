@@ -450,6 +450,7 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
         beginIdentityRestore: beginIdentityRestore,
         showHostTooOld: showHostTooOld,
         notice: notice,
+        identityRestoring: function () { return document.body.classList.contains("identity-restoring"); },
         setHostBlocked: function (v) { hostBlocked = v; },
         veilUp: function () {
           return !!(overlayEl && !overlayEl.hidden && overlayEl.classList.contains("reconnecting"));
@@ -476,6 +477,7 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
     beginIdentityRestore: () => void;
     showHostTooOld: (version: string) => void;
     notice: (html: string) => void;
+    identityRestoring: () => boolean;
     setHostBlocked: (value: boolean) => void;
     veilUp: () => boolean;
     overlayVisible: () => boolean;
@@ -638,6 +640,7 @@ describe("reconnect veil", () => {
 
     rt.beginIdentityRestore();
     rt.syncReconnectPresentation();
+    expect(rt.identityRestoring()).toBe(true);
     expect(rt.veilUp()).toBe(false);
     expect(rt.indicatorUp()).toBe(true);
   });
@@ -726,7 +729,9 @@ describe("reconnect veil", () => {
     complete.showReconnecting();
     complete.beginIdentityRestore();
     expect(complete.indicatorUp()).toBe(true);
+    expect(complete.identityRestoring()).toBe(true);
     complete.finishIdentityRestore();
+    expect(complete.identityRestoring()).toBe(false);
     expect(complete.indicatorUp()).toBe(true);
     vi.advanceTimersByTime(450);
     expect(complete.indicatorUp()).toBe(false);
