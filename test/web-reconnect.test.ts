@@ -494,7 +494,6 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
       function armIdentityFailTimer() {}
       function identityRestoreTimeoutMs() { return 15000; }
       function reportOutboxDelay() {}
-      function probeNote() {}
       function restoreRenderedTranscript() { return false; }
       ${showHostTooOldSrc}
       ${veilFns}

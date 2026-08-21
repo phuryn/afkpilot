@@ -1937,17 +1937,6 @@ window.grokRemoteClient = true;
   var resyncScrollTop = null;
   var readerScrollTop = null;
   var readerAwayFromBottom = false;
-  // Feeds the TEMPORARY ?scrolldebug=1 panel and is inert without it. The
-  // panel could only see scrollTop writes, which cannot show why a restore
-  // decided to do nothing. Goes when the probe goes.
-  function probeNote(ev) {
-    try {
-      if (!window.__grokScrollLog || !ev) return;
-      ev.t = Math.round(performance.now());
-      window.__grokScrollLog.push(ev);
-      if (window.__grokScrollRow) window.__grokScrollRow(ev);
-    } catch (_) {}
-  }
   // Cached paint → host replay. A programmatic scrollTop (paint, replay) is
   // not the reader asking to move; only a gesture is. Same 80px slack as the
   // reconnect capture below.
@@ -2916,7 +2905,6 @@ window.grokRemoteClient = true;
     if (identityReplayDepth > 0) return;
     var messagesEl = document.getElementById("messages");
     if (!messagesEl) return;
-    probeNote({ ev: "painted-restore", resync: resyncScrollTop, cachedLive: cachedViewLive });
     if (finishCachedViewScroll()) {
       resyncScrollTop = null;
       return;
@@ -3351,9 +3339,6 @@ window.grokRemoteClient = true;
         var m = document.getElementById("messages");
         if (m && m.scrollHeight - m.scrollTop - m.clientHeight > 80) resyncScrollTop = m.scrollTop;
         else if (readerAwayFromBottom && readerScrollTop !== null) resyncScrollTop = readerScrollTop;
-        probeNote({ ev: "capture", resync: resyncScrollTop, readerTop: readerScrollTop,
-          away: readerAwayFromBottom,
-          sh: m ? m.scrollHeight : -1, st: m ? m.scrollTop : -1, ch: m ? m.clientHeight : -1 });
       }
       firstConnect = false;
       clearOfflineGrace();
@@ -4749,100 +4734,6 @@ body.identity-restore-veil #identity-restoring-note { display: flex; }
   </script>
   <script src="/vendor/media/mathjax/tex-svg-full.js"></script>
   <script src="/vendor/media/mermaid/mermaid.min.js"></script>
-  <!-- TEMPORARY diagnostic, opt-in via ?scrolldebug=1. Records every write to
-       #messages.scrollTop with the code that caused it, and shows it ON SCREEN
-       because the device that has the bug is a phone with no console. Remove
-       once the restore scroll behaviour is settled. -->
-  <script>
-  (function () {
-    try {
-      if (new URLSearchParams(location.search).get("scrolldebug") !== "1") return;
-      var log = [];
-      window.__grokScrollLog = log;
-      window.__grokScrollDump = function () { return JSON.stringify(log); };
-
-      var panel, list;
-      function ui() {
-        if (panel) return;
-        panel = document.createElement("div");
-        panel.style.cssText = "position:fixed;left:0;right:0;bottom:0;max-height:46vh;z-index:99999;"
-          + "background:rgba(0,0,0,.92);color:#0f0;font:10px/1.35 ui-monospace,monospace;"
-          + "overflow:auto;padding:4px 6px;border-top:2px solid #0f0;";
-        var bar = document.createElement("div");
-        bar.style.cssText = "position:sticky;top:0;background:#000;padding:2px 0;display:flex;gap:6px";
-        var copy = document.createElement("button");
-        copy.textContent = "COPY";
-        copy.style.cssText = "font:11px monospace;padding:3px 8px";
-        copy.onclick = function () {
-          var t = window.__grokScrollDump();
-          if (navigator.clipboard) navigator.clipboard.writeText(t);
-          copy.textContent = "COPIED " + log.length;
-        };
-        var clr = document.createElement("button");
-        clr.textContent = "CLEAR";
-        clr.style.cssText = copy.style.cssText;
-        clr.onclick = function () { log.length = 0; list.textContent = ""; };
-        bar.appendChild(copy); bar.appendChild(clr);
-        list = document.createElement("div");
-        panel.appendChild(bar); panel.appendChild(list);
-        (document.body || document.documentElement).appendChild(panel);
-      }
-      function row(text) {
-        ui();
-        var d = document.createElement("div");
-        d.textContent = text;
-        list.appendChild(d);
-        panel.scrollTop = panel.scrollHeight;
-      }
-      window.__grokScrollRow = function (e) {
-        try { row(e.t + " -- " + JSON.stringify(e)); } catch (_) {}
-      };
-      function callers() {
-        try {
-          var f = String(new Error().stack || "").split(String.fromCharCode(10)).slice(3, 7);
-          return f.map(function (x) {
-            var m = x.match(/at\s+([A-Za-z0-9_$.]+)/);
-            var n = x.match(/(chat\.js|chat\.html)[^:]*:(\d+)/);
-            return (m ? m[1] : "?") + (n ? "@" + n[1].replace(".js", "").replace(".html", "H") + ":" + n[2] : "");
-          }).join(" < ");
-        } catch (_) { return "?"; }
-      }
-      var d0 = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
-      if (d0 && d0.set) {
-        Object.defineProperty(Element.prototype, "scrollTop", {
-          configurable: true, enumerable: d0.enumerable, get: d0.get,
-          set: function (v) {
-            if (this && this.id === "messages") {
-              var from = Math.round(d0.get.call(this));
-              var to = Math.round(v);
-              if (from !== to) {
-                var e = { t: Math.round(performance.now()), from: from, to: to, h: this.scrollHeight, by: callers() };
-                log.push(e);
-                row(e.t + " " + from + "->" + to + " h" + e.h + "  " + e.by);
-              }
-            }
-            return d0.set.call(this, v);
-          },
-        });
-      }
-      ["identity-restoring", "identity-restore-veil"].forEach(function (cls) {
-        var on = false;
-        setInterval(function () {
-          if (!document.body) return;
-          var now = document.body.classList.contains(cls);
-          if (now !== on) {
-            on = now;
-            var e = { t: Math.round(performance.now()), cls: cls, on: on };
-            log.push(e);
-            row(e.t + " -- " + cls + " " + (on ? "ON" : "OFF"));
-          }
-        }, 25);
-      });
-      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", ui);
-      else ui();
-    } catch (_) {}
-  })();
-  </script>
   <script src="/vendor/media/webview-helpers.js"></script>
   <!-- Before file-panel.js on purpose: the panel reads GrokSyntaxHighlight at
        render time and degrades to plain text if it is not there yet. -->
