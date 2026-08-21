@@ -6971,8 +6971,9 @@
 
   // clearMessages marks existing transcript nodes instead of destroying them.
   // Destroy at the first replacement append (same task) or on the next frame
-  // if nothing replaces it. The welcome stays hidden until that same moment —
-  // otherwise a resync paints "Starting" over a conversation still on screen.
+  // if nothing replaces it. Welcome, title, and composer focus stay put until
+  // that same moment — a resync must not blank, refocus, or paint "Starting"
+  // over a conversation still on screen.
   const PENDING_CLEAR_ATTR = "data-pending-clear";
   let pendingTranscriptClear = false;
   let pendingTranscriptClearRaf = 0;
@@ -6981,6 +6982,10 @@
   // replaces them, dropped if a replacement arrives. "loading" / "no-project"
   // / "starting" match the three special cases at the welcome block.
   let pendingWelcomeReveal = null;
+  // Title, worktree flag, in-progress rename, and composer focus: same hold.
+  // A resync must not blank the name or move focus (a returning phone tab
+  // would pop the keyboard). Flush still applies them for an empty swap.
+  let pendingSessionChromeReset = false;
 
   function isPendingClearNode(el) {
     return !!(el && typeof el.closest === "function" && el.closest("[" + PENDING_CLEAR_ATTR + "]"));
@@ -7041,6 +7046,24 @@
     });
   }
 
+  function focusComposerIfAllowed() {
+    // Guarded on document.hasFocus(): a host-initiated clear can arrive while
+    // the user is typing in the editor, and focusing then would yank keyboard
+    // focus across panels. The same argument keeps a resync from focusing —
+    // that path never reaches here because the chrome reset is held.
+    if (typeof document.hasFocus !== "function" || document.hasFocus()) input.focus();
+  }
+
+  function resetSessionChrome() {
+    pendingSessionChromeReset = false;
+    if (state.sessionNameEditing) finishSessionNameEdit(false);
+    state.isWorktree = false;
+    state.sessionName = null;
+    renderSessionName();
+    if (IS_REMOTE) renderSessionHead();
+    focusComposerIfAllowed();
+  }
+
   /** Empty-state path: no replacement arrived, so the welcome must appear. */
   function flushPendingTranscriptClear() {
     if (!pendingTranscriptClear) return;
@@ -7051,6 +7074,7 @@
     pendingTranscriptClear = false;
     const kind = pendingWelcomeReveal;
     pendingWelcomeReveal = null;
+    const chrome = pendingSessionChromeReset;
     cancelPendingTranscriptClearRaf();
     for (const child of Array.from(messagesEl.children)) {
       if (child.getAttribute(PENDING_CLEAR_ATTR) === "1") child.remove();
@@ -7059,6 +7083,7 @@
       applyWelcomeRevealKind(kind);
       renderWelcomeTip();
     }
+    if (chrome) resetSessionChrome();
     revealWelcome();
   }
 
@@ -7072,6 +7097,7 @@
     const scrollTop = messagesEl.scrollTop;
     pendingTranscriptClear = false;
     pendingWelcomeReveal = null;
+    pendingSessionChromeReset = false;
     cancelPendingTranscriptClearRaf();
     HTMLElement.prototype.appendChild.call(messagesEl, el);
     for (const child of Array.from(messagesEl.children)) {
@@ -7087,19 +7113,13 @@
     // The transcript is about to be emptied wholesale; drop the reference so a
     // later echo can't try to remove a node from the previous session.
     state.optimisticSendEl = null;
-    state.isWorktree = false; // re-set by the incoming session's `session` message
-    state.sessionName = null;
-    state.sessionNameEditing = null;
-    renderSessionName();
-    if (IS_REMOTE) renderSessionHead();
-    // The caret belongs in the box after any session swap — new session, a
-    // history-row re-focus, a disk restore (all funnel through here via the
-    // host's clearMessages). Guarded on document.hasFocus(): user-initiated
-    // swaps start with a click inside this webview, but a host-initiated clear
-    // (an automatic restart) can arrive while the user is typing in the editor,
-    // and focusing then would yank keyboard focus across panels.
-    if (typeof document.hasFocus !== "function" || document.hasFocus()) input.focus();
     markTranscriptPendingClear();
+    // Incoming `session` / `sessionName` re-set these. Clearing them first is
+    // why a resync blanks the title and then paints it back. Hold while the
+    // previous conversation is still on screen; flush applies the reset if
+    // this was an empty swap; a replacement drops it.
+    if (hasPendingClearNodes()) pendingSessionChromeReset = true;
+    else resetSessionChrome();
     const welcome = $("welcome");
     if (welcome) {
       const onb = $("welcome-onboarding");
@@ -13766,7 +13786,8 @@
         break;
       }
       case "sessionName": {
-        state.sessionName = {
+        const prev = state.sessionName;
+        const next = {
           sessionId: msg.sessionId,
           name: String(msg.name || "New session"),
           cwd: String(msg.cwd || ""),
@@ -13775,6 +13796,12 @@
           // still has a fallback rather than depending on this.
           repoCwd: typeof msg.repoCwd === "string" ? msg.repoCwd : "",
         };
+        const sameId = !!(prev && prev.sessionId === next.sessionId);
+        const sameVisible = !!(sameId
+          && prev.name === next.name
+          && prev.cwd === next.cwd
+          && (prev.repoCwd || "") === (next.repoCwd || ""));
+        state.sessionName = next;
         // Host-confirmed identity only. Optimistic rail clicks never write here.
         state.activeSessionId = msg.sessionId;
         // May complete a resume (id match) or bind a new-session resolved id.
@@ -13782,8 +13809,15 @@
         // AFTER the note: a surviving transition means this frame was about a
         // different conversation. See noteHostIdentityKnown.
         noteHostIdentityKnown(msg.sessionId);
-        renderSessionName();
-        renderSessionHead();
+        // Same conversation coming back: do not rebuild the header. Different
+        // at all: paint immediately. A held resync that turns out to be a
+        // swap still lands the caret in the composer.
+        if (!sameVisible) {
+          renderSessionName();
+          renderSessionHead();
+        }
+        pendingSessionChromeReset = false;
+        if (prev && !sameId) focusComposerIfAllowed();
         break;
       }
       case "modelChanged": {
