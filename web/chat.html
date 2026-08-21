@@ -1891,7 +1891,13 @@ window.grokRemoteClient = true;
   var cachedViewUserScrolled = false;
   var cachedViewGesturePending = false;
   var cachedViewPinnedToBottom = false;
+  var cachedViewHoldPlace = false;
   var cachedViewAnchor = null;
+  var restoringCachedView = false;
+  // The socket we last sent `ready` on. resumeSession is refused unless the
+  // host has this tab's token; ready is what registers it. A replacement
+  // must not ask to resume before that handshake has gone out on THIS socket.
+  var readySentSocket = null;
   var offlineHold = null;
   var hostReturnDuringCapture = null;
   var deviceOffline = false;
@@ -2081,6 +2087,18 @@ window.grokRemoteClient = true;
       type: "ready",
       ...(remoteTabToken ? { tabToken: remoteTabToken } : {}),
     };
+  }
+  function sendReadyToHost(socket) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+    try { socket.send(JSON.stringify(readyMessage())); }
+    catch (_) { return false; }
+    readySentSocket = socket;
+    return true;
+  }
+  function ensureHostHasTabToken(socket) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+    if (readySentSocket === socket) return true;
+    return sendReadyToHost(socket);
   }
 
   function rememberedIdentity() {
@@ -2504,14 +2522,18 @@ window.grokRemoteClient = true;
     cachedViewUserScrolled = false;
     cachedViewGesturePending = false;
     cachedViewPinnedToBottom = false;
+    cachedViewHoldPlace = false;
     cachedViewAnchor = null;
+    restoringCachedView = false;
   }
   function clearCachedViewScroll() {
     cachedViewLive = false;
     cachedViewUserScrolled = false;
     cachedViewGesturePending = false;
     cachedViewPinnedToBottom = false;
+    cachedViewHoldPlace = false;
     cachedViewAnchor = null;
+    restoringCachedView = false;
   }
   function transcriptScrollRows(messagesEl) {
     var rows = [];
@@ -2600,6 +2622,10 @@ window.grokRemoteClient = true;
     if (!messagesEl || typeof messagesEl.dispatchEvent !== "function") return;
     try {
       messagesEl.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      // pointerdown only latches intent. A scroll at the current offset is
+      // what recomputes the pin — needed when we have already left the
+      // bottom and must stop MutationObserver writing scrollTop.
+      messagesEl.dispatchEvent(new Event("scroll"));
     } catch (_) { /* tests / older UAs */ }
   }
   function noteCachedViewUserIntent() {
@@ -2607,27 +2633,75 @@ window.grokRemoteClient = true;
     cachedViewGesturePending = true;
   }
   function onCachedViewScroll() {
-    if (!cachedViewLive || !cachedViewGesturePending) return;
-    cachedViewGesturePending = false;
-    cachedViewUserScrolled = true;
+    // Stick-to-bottom (MutationObserver / forceScroll) writes scrollTop during
+    // reconnect. That fires `scroll` while a finger is down. Consuming the
+    // gesture on that yank used to record "user is at the bottom", after which
+    // the real scroll-up was ignored — so settle had no place to restore.
+    if (!cachedViewLive || restoringCachedView) return;
+    var wasGesture = cachedViewGesturePending;
+    if (wasGesture) cachedViewUserScrolled = true;
     var messagesEl = document.getElementById("messages");
     if (!messagesEl) return;
-    cachedViewAnchor = captureTranscriptScrollAnchor(messagesEl);
-    cachedViewPinnedToBottom = cachedViewIsPinnedToBottom(messagesEl);
-  }
-  function settleCachedViewScroll() {
-    if (!cachedViewLive) return false;
-    var keep = cachedViewUserScrolled && cachedViewAnchor && !cachedViewPinnedToBottom;
-    var messagesEl = document.getElementById("messages");
-    cachedViewLive = false;
-    if (keep && messagesEl) {
+    var atBottom = cachedViewIsPinnedToBottom(messagesEl);
+    if (!atBottom) {
+      if (!cachedViewUserScrolled && !wasGesture) return;
+      cachedViewGesturePending = false;
+      cachedViewUserScrolled = true;
+      cachedViewHoldPlace = true;
+      cachedViewPinnedToBottom = false;
+      cachedViewAnchor = captureTranscriptScrollAnchor(messagesEl);
+      restoringCachedView = true;
+      signalUserScrollToRenderer(messagesEl);
+      restoringCachedView = false;
+      return;
+    }
+    if (cachedViewHoldPlace) {
+      if (wasGesture) {
+        cachedViewGesturePending = false;
+        cachedViewHoldPlace = false;
+        cachedViewPinnedToBottom = true;
+        cachedViewAnchor = null;
+        return;
+      }
+      restoringCachedView = true;
       signalUserScrollToRenderer(messagesEl);
       restoreTranscriptScrollAnchor(messagesEl, cachedViewAnchor);
-      clearCachedViewScroll();
+      restoringCachedView = false;
+      return;
+    }
+    // Still at the bottom and never held a place. Keep a pending gesture
+    // alive so a stick-to-bottom yank cannot eat the rest of the same touch.
+  }
+  function settleCachedViewScroll() {
+    // Restore the held row without disarming. Snapshot replay and the
+    // resumeSession replay both force-scroll; clearing here left the
+    // second swap with nothing to honour.
+    if (!cachedViewLive) return false;
+    var keep = cachedViewHoldPlace && cachedViewAnchor;
+    var messagesEl = document.getElementById("messages");
+    if (keep && messagesEl) {
+      restoringCachedView = true;
+      signalUserScrollToRenderer(messagesEl);
+      restoreTranscriptScrollAnchor(messagesEl, cachedViewAnchor);
+      restoringCachedView = false;
       return true;
     }
-    clearCachedViewScroll();
     return false;
+  }
+  function finishCachedViewScroll() {
+    var kept = settleCachedViewScroll();
+    clearCachedViewScroll();
+    return kept;
+  }
+  function maybeFinishCachedViewScroll() {
+    // Hold across snapshot replay AND the resumeSession replay. Disarm only
+    // once identity is confirmed and no replay is still in flight.
+    if (!cachedViewLive) return false;
+    var kept = settleCachedViewScroll();
+    if (identityReplayDepth > 0) return kept;
+    if (!identityRestoreComplete && identityTarget) return kept;
+    finishCachedViewScroll();
+    return kept;
   }
   function bindCachedViewScrollListeners() {
     if (bindCachedViewScrollListeners.bound) return;
@@ -2663,7 +2737,7 @@ window.grokRemoteClient = true;
     if (!messagesEl) return;
     clearTimeout(restoreTimer);
     restoreTimer = null;
-    if (settleCachedViewScroll()) {
+    if (finishCachedViewScroll()) {
       resyncScrollTop = null;
       return;
     }
@@ -2698,11 +2772,13 @@ window.grokRemoteClient = true;
     }
     if (identityReplayDepth > 0) identityReplayDepth -= 1;
     if (identityReplayDepth > 0) return;
-    // Replay-end is when chat.js force-scrolls to the bottom. Settle the
-    // cached-view decision here, after that write, whether or not the
-    // handshake has finished (painted cache has no veil to lift).
+    // Replay-end is when chat.js force-scrolls to the bottom. Put the
+    // reader back if they had moved, but keep the hold for a later swap
+    // (snapshot replay then resumeSession replay). Painted cache has no
+    // veil to lift.
     settleCachedViewScroll();
     if (identityRestoreComplete) revealRestoredTranscript();
+    maybeFinishCachedViewScroll();
   }
 
   function finishIdentityRestore() {
@@ -2716,6 +2792,9 @@ window.grokRemoteClient = true;
     identityEverCompleted = true;
     forgetUnbouncedLiveOutbound();
     revealRestoredTranscript();
+    // Painted reconnect never lifts a veil, so applyRestoreScroll did not
+    // run. Disarm here once the last replay has already ended.
+    maybeFinishCachedViewScroll();
     setVoiceTransportReady(
       !!ws && ws.readyState === WebSocket.OPEN && !deviceOffline && !offlineHold
     );
@@ -3055,7 +3134,7 @@ window.grokRemoteClient = true;
       clearOfflineGrace();
       deviceOffline = false;
       beginIdentityRestore();
-      socket.send(JSON.stringify(readyMessage())); // (re)sync on connect/reconnect
+      sendReadyToHost(socket); // (re)sync on connect/reconnect; registers the tab token
     });
     socket.addEventListener("message", function (e) {
       if (ws !== socket) return;
@@ -3575,7 +3654,7 @@ window.grokRemoteClient = true;
             }
           }
           if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify(readyMessage()));
+            sendReadyToHost(ws);
           }
           return;
         }
@@ -3674,6 +3753,13 @@ window.grokRemoteClient = true;
           changesIdentity: explicitlyChangesIdentity(m),
         });
         if (disposition === "send") {
+          // resumeSession / selectRepo are refused unless the host has this
+          // tab's token. ready is what registers it; never let either frame
+          // leave this socket first. Not a retry: at most one extra ready,
+          // and only when this socket has not sent one yet.
+          if (m && (m.type === "resumeSession" || m.type === "selectRepo")) {
+            ensureHostHasTabToken(ws);
+          }
           ws.send(s);
           if (!restoreMsg && (isQueueReleaseMessage(m) || authored)) {
             rememberLiveOutbound(s, m, authored);
@@ -3684,6 +3770,9 @@ window.grokRemoteClient = true;
           }
         } else if (disposition === "abandon-and-send") {
           abandonIdentityRestore("you chose a different repository or conversation.");
+          if (m && (m.type === "resumeSession" || m.type === "selectRepo")) {
+            ensureHostHasTabToken(ws);
+          }
           ws.send(s);
         } else {
           // The renderer awaits these (30s). Persist is wrong (not user work);

@@ -452,7 +452,9 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
       var cachedViewUserScrolled = false;
       var cachedViewGesturePending = false;
       var cachedViewPinnedToBottom = false;
+      var cachedViewHoldPlace = false;
       var cachedViewAnchor = null;
+      var restoringCachedView = false;
       var ws = { readyState: WebSocket.OPEN };
       var deviceOffline = false;
       var offlineHold = null;
@@ -849,6 +851,7 @@ describe("reconnect veil", () => {
     expect(veilFns).toContain("identityTarget && !identityRestoreComplete");
     expect(finishRestoreSrc).toContain("settleReconnectVeil()");
     expect(finishRestoreSrc).toContain("revealRestoredTranscript()");
+    expect(finishRestoreSrc).toContain("maybeFinishCachedViewScroll()");
     expect(finishRestoreSrc.indexOf("identityTarget = null"))
       .toBeLessThan(finishRestoreSrc.indexOf("settleReconnectVeil()"));
     expect(finishRestoreSrc.indexOf("identityRestoreComplete = true"))
@@ -1016,3 +1019,113 @@ describe("cold restore transcript veil", () => {
       .toBeLessThan(beginRestoreSrc.indexOf('classList.add("identity-restore-veil")'));
   });
 });
+
+const readyFnsSrc = html.slice(
+  html.indexOf("function readyMessage()"),
+  html.indexOf("function rememberedIdentity()"),
+);
+const shimSrc = html.slice(
+  html.indexOf("window.acquireVsCodeApi"),
+  html.indexOf("getState: function ()"),
+);
+
+const TAB_TOKEN = "tab-token-abcdefghijklmnopqrstuv";
+
+function makeReadyRuntime(token = TAB_TOKEN) {
+  const sent: Array<{ type: string; tabToken?: string; id?: string }> = [];
+  function socket() {
+    return {
+      readyState: WS.OPEN,
+      send(raw: string) {
+        sent.push(JSON.parse(raw) as { type: string; tabToken?: string; id?: string });
+      },
+    };
+  }
+  const fns = new Function(
+    "WebSocket",
+    `
+      var remoteTabToken = ${JSON.stringify(token)};
+      var readySentSocket = null;
+      ${readyFnsSrc}
+      return { sendReadyToHost: sendReadyToHost, ensureHostHasTabToken: ensureHostHasTabToken };
+    `,
+  )(WS) as {
+    sendReadyToHost: (socket: { readyState: number; send: (raw: string) => void }) => boolean;
+    ensureHostHasTabToken: (socket: { readyState: number; send: (raw: string) => void }) => boolean;
+  };
+  const first = socket();
+  return { sent, first, socket, ...fns };
+}
+
+// Mirrors grok-build-vscode src/sidebar.ts reserveSessionLoad: a live
+// reservation is joined only when the requester's token matches the owner.
+function claimSessionLoad(
+  reservations: Map<string, { ownerTabToken?: string }>,
+  id: string,
+  ownerTabToken: string | undefined,
+): "join" | "refuse" | "create" {
+  const existing = reservations.get(id);
+  if (existing) {
+    return ownerTabToken && existing.ownerTabToken === ownerTabToken ? "join" : "refuse";
+  }
+  reservations.set(id, { ownerTabToken });
+  return "create";
+}
+
+describe("probe replacement resume vs tab token", () => {
+  it("connect sends ready (with the token) on the new socket before any resume can fire", () => {
+    expect(connectSrc).toContain("sendReadyToHost(socket)");
+    expect(connectSrc.indexOf("beginIdentityRestore()"))
+      .toBeLessThan(connectSrc.indexOf("sendReadyToHost(socket)"));
+    expect(connectSrc).not.toContain("socket.send(JSON.stringify(readyMessage()))");
+    expect(shimSrc).toContain("ensureHostHasTabToken(ws)");
+    const resumeSend = shimSrc.slice(shimSrc.indexOf('disposition === "send"'));
+    expect(resumeSend.indexOf("ensureHostHasTabToken(ws)"))
+      .toBeLessThan(resumeSend.indexOf("ws.send(s)"));
+  });
+
+  it("ensureHostHasTabToken sends ready once on a socket, then resume follows", () => {
+    const rt = makeReadyRuntime();
+    expect(rt.ensureHostHasTabToken(rt.first)).toBe(true);
+    expect(rt.sent).toEqual([{ type: "ready", tabToken: TAB_TOKEN }]);
+    expect(rt.ensureHostHasTabToken(rt.first)).toBe(true);
+    expect(rt.sent).toHaveLength(1);
+    rt.first.send(JSON.stringify({ type: "resumeSession", id: "s1" }));
+    expect(rt.sent.map((m) => m.type)).toEqual(["ready", "resumeSession"]);
+  });
+
+  it("a replacement socket that has not sent ready prepends it before resume", () => {
+    const rt = makeReadyRuntime();
+    rt.sendReadyToHost(rt.first);
+    const replacement = rt.socket();
+    expect(rt.ensureHostHasTabToken(replacement)).toBe(true);
+    replacement.send(JSON.stringify({ type: "resumeSession", id: "s1" }));
+    expect(rt.sent.map((m) => m.type)).toEqual(["ready", "ready", "resumeSession"]);
+    expect(rt.sent[1].tabToken).toBe(TAB_TOKEN);
+  });
+
+  it("a probe-triggered replacement with the same token joins an in-flight load", () => {
+    const reservations = new Map<string, { ownerTabToken?: string }>();
+    const tokenByClient = new Map<string, string | undefined>();
+    const readyThenResume = (clientId: string, token: string | undefined) => {
+      if (token) tokenByClient.set(clientId, token);
+      return claimSessionLoad(reservations, "s1", tokenByClient.get(clientId));
+    };
+
+    expect(readyThenResume("old", TAB_TOKEN)).toBe("create");
+    expect(readyThenResume("replacement", TAB_TOKEN)).toBe("join");
+  });
+
+  it("resume without a registered token is refused as another tab", () => {
+    const reservations = new Map<string, { ownerTabToken?: string }>();
+    expect(claimSessionLoad(reservations, "s1", TAB_TOKEN)).toBe("create");
+    expect(claimSessionLoad(reservations, "s1", undefined)).toBe("refuse");
+  });
+
+  it("a genuinely different tab is still refused", () => {
+    const reservations = new Map<string, { ownerTabToken?: string }>();
+    expect(claimSessionLoad(reservations, "s1", TAB_TOKEN)).toBe("create");
+    expect(claimSessionLoad(reservations, "s1", "other-tab-abcdefghijklmnopqrstuvwx")).toBe("refuse");
+  });
+});
+

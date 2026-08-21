@@ -736,7 +736,12 @@ function loadScrollFns(messages: LayoutMessages) {
       var cachedViewUserScrolled = false;
       var cachedViewGesturePending = false;
       var cachedViewPinnedToBottom = false;
+      var cachedViewHoldPlace = false;
       var cachedViewAnchor = null;
+      var restoringCachedView = false;
+      var identityReplayDepth = 0;
+      var identityRestoreComplete = false;
+      var identityTarget = null;
       var resyncScrollTop = null;
       var restoreTimer = null;
       ${scrollSrc}
@@ -747,6 +752,7 @@ function loadScrollFns(messages: LayoutMessages) {
         applyRestoreScroll: applyRestoreScroll,
         settleCachedViewScroll: settleCachedViewScroll,
         userScrolled: function () { return cachedViewUserScrolled; },
+        holdPlace: function () { return cachedViewHoldPlace; },
         live: function () { return cachedViewLive; },
       };
     `,
@@ -760,6 +766,7 @@ function loadScrollFns(messages: LayoutMessages) {
     applyRestoreScroll: () => void;
     settleCachedViewScroll: () => boolean;
     userScrolled: () => boolean;
+    holdPlace: () => boolean;
     live: () => boolean;
   };
 }
@@ -870,6 +877,91 @@ describe("cached view scroll across host replay", () => {
     expect(fns.userScrolled()).toBe(true);
   });
 
+  it("a stick-to-bottom yank during the same touch does not eat the reader's place", () => {
+    const page = layoutTranscript();
+    const fns = loadScrollFns(page.messages);
+    pinToBottom(page.messages);
+    fns.armCachedViewScroll();
+    fns.noteCachedViewUserIntent();
+    pinToBottom(page.messages);
+    fns.onCachedViewScroll();
+    expect(fns.holdPlace()).toBe(false);
+
+    page.messages.scrollTop = 100;
+    fns.onCachedViewScroll();
+    const viewed = rowByText(page, "two");
+    expect(viewed).toBeTruthy();
+    const savedY = viewed!.getBoundingClientRect().top;
+    expect(fns.holdPlace()).toBe(true);
+
+    replayRows(page, {
+      texts: ["one", "two", "three", "four", "five", "six"],
+      heights: [180, 100, 100, 100, 100, 100],
+    });
+    pinToBottom(page.messages);
+    fns.applyRestoreScroll();
+
+    const same = rowByText(page, "two");
+    expect(same).toBeTruthy();
+    expect(Math.abs(same!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+  });
+
+  it("a yank after the reader has left the bottom is undone immediately, through replay", () => {
+    const page = layoutTranscript();
+    const fns = loadScrollFns(page.messages);
+    pinToBottom(page.messages);
+    fns.armCachedViewScroll();
+    userScrollTo(fns, page.messages, 100);
+    const viewed = rowByText(page, "two");
+    const savedY = viewed!.getBoundingClientRect().top;
+
+    pinToBottom(page.messages);
+    fns.onCachedViewScroll();
+    expect(Math.abs(viewed!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+
+    replayRows(page, {
+      texts: ["one", "two", "three", "four", "five", "six"],
+      heights: [180, 100, 100, 100, 100, 100],
+    });
+    pinToBottom(page.messages);
+    fns.onCachedViewScroll();
+    const same = rowByText(page, "two");
+    expect(Math.abs(same!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+    fns.applyRestoreScroll();
+    expect(Math.abs(rowByText(page, "two")!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+  });
+
+  it("keeps the held row through a second replay after the first has settled", () => {
+    const page = layoutTranscript();
+    const fns = loadScrollFns(page.messages);
+    pinToBottom(page.messages);
+    fns.armCachedViewScroll();
+    userScrollTo(fns, page.messages, 100);
+    const viewed = rowByText(page, "two");
+    const savedY = viewed!.getBoundingClientRect().top;
+
+    replayRows(page, {
+      texts: ["one", "two", "three", "four", "five", "six"],
+      heights: [180, 100, 100, 100, 100, 100],
+    });
+    pinToBottom(page.messages);
+    fns.onCachedViewScroll();
+    expect(fns.settleCachedViewScroll()).toBe(true);
+    expect(fns.live()).toBe(true);
+    expect(Math.abs(rowByText(page, "two")!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+
+    replayRows(page, {
+      texts: ["one", "two", "three", "four", "five", "six", "seven"],
+      heights: [180, 100, 100, 100, 100, 100, 100],
+    });
+    pinToBottom(page.messages);
+    fns.onCachedViewScroll();
+    expect(Math.abs(rowByText(page, "two")!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+    fns.applyRestoreScroll();
+    expect(fns.live()).toBe(false);
+    expect(Math.abs(rowByText(page, "two")!.getBoundingClientRect().top - savedY)).toBeLessThan(2);
+  });
+
   it("a gesture that leaves the reader at the bottom still lands on new messages", () => {
     const page = layoutTranscript();
     const fns = loadScrollFns(page.messages);
@@ -890,6 +982,8 @@ describe("cached view scroll across host replay", () => {
 
   it("decides from a user gesture and a node, not a timer or a stored offset", () => {
     expect(scrollSrc).toContain("cachedViewGesturePending");
+    expect(scrollSrc).toContain("cachedViewHoldPlace");
+    expect(scrollSrc).toContain("restoringCachedView");
     expect(scrollSrc).toContain("getBoundingClientRect().top");
     expect(scrollSrc).toContain("messagesEl.scrollTop += delta");
     expect(scrollSrc).not.toContain("setTimeout");
@@ -904,13 +998,22 @@ describe("cached view scroll across host replay", () => {
       html.indexOf("function finishIdentityRestore()"),
     );
     expect(noteReplaySrc).toContain("settleCachedViewScroll()");
+    expect(noteReplaySrc).toContain("maybeFinishCachedViewScroll()");
     expect(noteReplaySrc.indexOf("settleCachedViewScroll()"))
       .toBeLessThan(noteReplaySrc.indexOf("revealRestoredTranscript()"));
+    expect(scrollSrc).toContain("finishCachedViewScroll()");
+    expect(scrollSrc).toContain("maybeFinishCachedViewScroll()");
     const revealSrc = html.slice(
       html.indexOf("function revealRestoredTranscript()"),
       html.indexOf("function noteIdentityReplay(data)"),
     );
     expect(revealSrc).not.toContain("settleCachedViewScroll");
     expect(revealSrc).not.toContain("applyRestoreScroll");
+    const applySrc = html.slice(
+      html.indexOf("function applyRestoreScroll()"),
+      html.indexOf("function liftIdentityRestoreVeil()"),
+    );
+    expect(applySrc).toContain("finishCachedViewScroll()");
+    expect(applySrc).not.toContain("settleCachedViewScroll()");
   });
 });

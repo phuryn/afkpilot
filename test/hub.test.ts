@@ -152,6 +152,34 @@ describe("Hub routing", () => {
     ]);
   });
 
+  it("a replacement socket's ready-with-token precedes resumeSession while the old socket is still attached", () => {
+    const hub = new Hub();
+    const up = new FakeSender();
+    hub.attachUplink("devA", up);
+    hello(hub);
+    const old = hub.addClient("devA", new FakeSender());
+    hub.fromClient("devA", old, JSON.stringify({ type: "ready", tabToken: "logical-tab-1" }));
+    up.sent = [];
+
+    const replacement = hub.addClient("devA", new FakeSender());
+    hub.fromClient("devA", replacement, JSON.stringify({ type: "ready", tabToken: "logical-tab-1" }));
+    hub.fromClient("devA", replacement, JSON.stringify({ type: "resumeSession", id: "s1" }));
+
+    expect(up.json()).toEqual([
+      { t: "clients", count: 2 },
+      { t: "client-ready", clientId: replacement, tabToken: "logical-tab-1" },
+      { t: "msg", clientId: replacement, msg: { type: "resumeSession", id: "s1" } },
+    ]);
+    hub.removeClient("devA", old);
+    expect(up.json().some((frame) => (frame as { t?: string }).t === "client-left")).toBe(true);
+    const readyAt = up.json().findIndex((frame) => (frame as { t?: string }).t === "client-ready");
+    const resumeAt = up.json().findIndex((frame) => (frame as { t?: string }).t === "msg");
+    const leftAt = up.json().findIndex((frame) => (frame as { t?: string }).t === "client-left");
+    expect(readyAt).toBeGreaterThan(-1);
+    expect(resumeAt).toBeGreaterThan(readyAt);
+    expect(leftAt).toBeGreaterThan(resumeAt);
+  });
+
   it("a client that disconnects during an uplink outage is not replayed on reconnect", () => {
     const hub = new Hub();
     hub.attachUplink("devA", new FakeSender());
