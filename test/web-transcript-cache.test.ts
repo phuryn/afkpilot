@@ -331,13 +331,15 @@ type CacheFns = {
 function loadFns(opts: {
   doc: FakeDoc;
   storage: ReturnType<typeof memoryStorage>;
-  identity?: { id: string; repoCwd: string } | null;
+  identity?: { id: string; repoCwd: string; cwd?: string } | null;
   painted?: boolean;
   prefixRemaining?: number;
   quotaFail?: boolean;
+  dispatched?: unknown[];
 }): CacheFns {
   const identity = opts.identity === undefined ? { id: "sess-1", repoCwd: "/repo" } : opts.identity;
   const storage = opts.storage;
+  const dispatched = opts.dispatched;
   if (opts.quotaFail) {
     storage.setItem = () => {
       throw new Error("QuotaExceededError");
@@ -347,6 +349,7 @@ function loadFns(opts: {
     "document",
     "sessionStorage",
     "window",
+    "MessageEvent",
     "TRANSCRIPT_CACHE_KEY",
     "TRANSCRIPT_CACHE_VERSION",
     "rememberedIdentity",
@@ -363,7 +366,17 @@ function loadFns(opts: {
   )(
     opts.doc,
     storage,
-    { __grokHistory: { prefixRemaining: () => opts.prefixRemaining || 0 } },
+    {
+      __grokHistory: { prefixRemaining: () => opts.prefixRemaining || 0 },
+      dispatchEvent(event: { data?: unknown }) {
+        if (dispatched) dispatched.push(event && event.data);
+        return true;
+      },
+    },
+    function MessageEvent(this: { type: string; data: unknown }, type: string, init?: { data?: unknown }) {
+      this.type = type;
+      this.data = init && init.data;
+    },
     TRANSCRIPT_CACHE_KEY,
     TRANSCRIPT_CACHE_VERSION,
     () => identity,
@@ -441,7 +454,8 @@ describe("hide -> reload -> paint before the host", () => {
     expect(stored).not.toHaveProperty("historyPrefix");
 
     const reload = fakeDoc();
-    const reader = loadFns({ doc: reload.doc, storage });
+    const dispatched: unknown[] = [];
+    const reader = loadFns({ doc: reload.doc, storage, dispatched });
     expect(reload.messages.querySelector(".msg")).toBeNull();
     expect(reader.restoreRenderedTranscript()).toBe(true);
     expect(reload.messages.querySelector(".msg")?.textContent).toContain("hello from cache");
@@ -449,6 +463,13 @@ describe("hide -> reload -> paint before the host", () => {
     expect(reload.doc.getElementById("history-head")).toBeTruthy();
     expect(reload.title.textContent).toBe("Fix the login");
     expect(reload.messages.scrollTop).toBe(reload.messages.scrollHeight);
+    expect(dispatched).toEqual([{
+      type: "sessionName",
+      sessionId: "sess-1",
+      name: "Fix the login",
+      cwd: "",
+      repoCwd: "/repo",
+    }]);
   });
 
   it("a cache for a different session id is ignored, not shown", () => {
@@ -1015,5 +1036,31 @@ describe("cached view scroll across host replay", () => {
     );
     expect(applySrc).toContain("finishCachedViewScroll()");
     expect(applySrc).not.toContain("settleCachedViewScroll()");
+  });
+
+  it("reload cache paint never calls applyRestoreScroll — a reader who moved is held by the cached-view path", () => {
+    // Cache paint makes transcriptHasConversation true, so the visual veil
+    // is not used and liftIdentityRestoreVeil (the only applyRestoreScroll
+    // caller) does not run. A held place is settled by maybeFinishCachedViewScroll,
+    // the same hold 81fb108 added; applyRestoreScroll cannot yank this path
+    // to the bottom because it is not on it.
+    expect(beginRestoreSrc.indexOf("restoreRenderedTranscript()"))
+      .toBeLessThan(beginRestoreSrc.indexOf("transcriptHasConversation()"));
+    const revealSrc = html.slice(
+      html.indexOf("function revealRestoredTranscript()"),
+      html.indexOf("function noteIdentityReplay(data)"),
+    );
+    expect(revealSrc).not.toContain("applyRestoreScroll");
+    const finishSrc = html.slice(
+      html.indexOf("function finishIdentityRestore()"),
+      html.indexOf("function abandonIdentityRestore("),
+    );
+    expect(finishSrc).toContain("maybeFinishCachedViewScroll()");
+    expect(html.slice(
+      html.indexOf("function liftIdentityRestoreVeil()"),
+      html.indexOf("function revealRestoredTranscript()"),
+    )).toContain("applyRestoreScroll()");
+    const applyCallers = html.split("applyRestoreScroll()");
+    expect(applyCallers.length).toBe(3);
   });
 });

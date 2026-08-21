@@ -2269,6 +2269,25 @@ window.grokRemoteClient = true;
     return true;
   }
 
+  function publishCachedSessionName(identity, title) {
+    // Cache paint writes the title into the DOM. chat.js state is still
+    // empty on a reload, so the next renderSessionHead would replace it
+    // with the empty-state fallback. Publish the remembered id's name so
+    // that paint is the conversation until the host names this id.
+    if (!identity || !identity.id || !title) return;
+    try {
+      window.dispatchEvent(new MessageEvent("message", {
+        data: {
+          type: "sessionName",
+          sessionId: identity.id,
+          name: title,
+          cwd: identity.cwd || "",
+          repoCwd: identity.repoCwd || "",
+        },
+      }));
+    } catch (_) { /* tests without a dispatcher; renderer not listening yet */ }
+  }
+
   function restoreRenderedTranscript() {
     if (transcriptHasConversation()) return false;
     var identity = rememberedIdentity();
@@ -2280,10 +2299,12 @@ window.grokRemoteClient = true;
     var messagesEl = document.getElementById("messages");
     if (!messagesEl) return false;
     try {
-      return applyTranscriptCache(messagesEl, cache);
+      if (!applyTranscriptCache(messagesEl, cache)) return false;
     } catch (_) {
       return false;
     }
+    publishCachedSessionName(identity, cache.title);
+    return true;
   }
 
   function queuedSendTexts() {
@@ -2970,6 +2991,44 @@ window.grokRemoteClient = true;
       data.text.indexOf("Could not restore") === 0);
   }
 
+  function identityRestoreInFlight() {
+    return !!(identityTarget &&
+      document.body &&
+      document.body.classList.contains("identity-restoring"));
+  }
+
+  function inboundSessionNameApplies(data) {
+    // A new socket is a new client id, so the host binds an empty session
+    // and announces it. That name is not the conversation on screen.
+    // Gate on the restore target's id, never on the text — "New session"
+    // is a real title when that is the session being restored.
+    if (!data || data.type !== "sessionName") return true;
+    if (!identityRestoreInFlight()) return true;
+    return data.sessionId === identityTarget.id;
+  }
+
+  function inboundFrameForRenderer(data) {
+    if (!inboundSessionNameApplies(data)) return null;
+    if (
+      identityRestoreInFlight() &&
+      data &&
+      data.type === "sessions" &&
+      data.activeId !== undefined &&
+      data.activeId !== identityTarget.id
+    ) {
+      // Catalog still applies. Binding the interim session as active would
+      // re-render the header as that session and remember it as ours.
+      var copy = {};
+      for (var key in data) {
+        if (Object.prototype.hasOwnProperty.call(data, key) && key !== "activeId") {
+          copy[key] = data[key];
+        }
+      }
+      return copy;
+    }
+    return data;
+  }
+
   function maybeFinishIdentityRestore(data) {
     if (!identityTarget) return;
     var failedId = resumeFailedId(data);
@@ -3209,7 +3268,10 @@ window.grokRemoteClient = true;
       }
       inspectRepoOpenFrame(data);
       settleReconnectVeil();
-      window.dispatchEvent(new MessageEvent("message", { data: data }));
+      var renderData = inboundFrameForRenderer(data);
+      if (renderData) {
+        window.dispatchEvent(new MessageEvent("message", { data: renderData }));
+      }
       // Host-supplied machine marker. chat.js paints `.msg.error` from `text`
       // only; copy is not a contract, so the code has to live on the node.
       var stampedCode = errorCodeFromFrame(data);
