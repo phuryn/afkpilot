@@ -8293,6 +8293,15 @@
     if (start == null && total != null && total > 0) return { start: 1, end: total };
     return null;
   }
+  // `path#Lstart-Lend` — the syntax `parseFileRef` already accepts, so the host
+  // opens the REAL file with those lines selected instead of an untitled copy of
+  // the excerpt (#122). No range on the wire → the path alone.
+  function readOpenFileRef(call) {
+    const p = String(toolFilePath(call) || "").trim();
+    if (!p) return "";
+    const range = readLineRange(call);
+    return range ? `${p}#L${range.start}-L${range.end}` : p;
+  }
   function toolRenamePaths(call) {
     const r = call && (call.rawInput || call.input) || {};
     const from = r.old_path || r.old_file || r.from;
@@ -8769,7 +8778,7 @@
     return toggle;
   }
 
-  function appendCommandPreview(container, text, className, language, maxLines = MAX_COMMAND_PREVIEW_LINES) {
+  function appendCommandPreview(container, text, className, language, maxLines = MAX_COMMAND_PREVIEW_LINES, openRef) {
     const fullText = text == null ? "" : String(text);
     const logicalPreview = commandTextPreview(fullText, maxLines);
     const pre = document.createElement("pre");
@@ -8806,6 +8815,15 @@
         viewAll.textContent = previewLabel;
         viewAll.onclick = (e) => {
           e.stopPropagation();
+          // A Read row's "View all" means the file, not a copy of the lines the
+          // agent happened to request (#122) — otherwise the surrounding context
+          // is exactly what you can't see. Editor hosts only: the desktop app's
+          // openTextFile cannot honour a line selection and falls back to the OS
+          // default app, which is worse than its own in-app preview.
+          if (openRef && !hostPreviewsInApp()) {
+            vscode.postMessage({ type: "openFile", path: openRef });
+            return;
+          }
           const openLanguage = language
             || (className === "tool-cmd" ? state.commandLanguage : "");
           if (hostPreviewsInApp()) {
@@ -9021,7 +9039,7 @@
     // Only render the output <pre> when there's actually output — a marker alone
     // carries the empty cases (success/error/cancel).
     if (hasOutput) {
-      appendCommandPreview(body, output, "tool-cmd-output");
+      appendCommandPreview(body, output, "tool-cmd-output", undefined, MAX_COMMAND_PREVIEW_LINES, msg.openFileRef);
     }
     if (msg.truncated) {
       const note = document.createElement("div");
@@ -9062,7 +9080,14 @@
     if (!res) return false;
     // Read rows reuse this OUT chrome. The 100K cap is display-only —
     // grok already saw the full FileContent (same polarity as MCP).
-    attachCommandOutput(entry.details, isReadTool(call) ? { ...res, agentSawCut: false } : res);
+    // The ref comes from the ROW's merged call, not this update: grok puts the
+    // path on the first tool_call and the result on a later one, so the update
+    // that carries the text usually has no rawInput to read a path from.
+    const rowCall = (state.toolItemsByToolCallId.get(id) || {})._call || call;
+    attachCommandOutput(
+      entry.details,
+      isReadTool(rowCall) ? { ...res, agentSawCut: false, openFileRef: readOpenFileRef(rowCall) } : res,
+    );
     return true;
   }
 
