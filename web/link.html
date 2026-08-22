@@ -6,6 +6,10 @@
 <script>
   (function () {
     var root = document.documentElement;
+    // Same app-shell stamp as index.html and chat.html. /link is reachable
+    // from the app (it handles the deep link), so Clerk's UserButton — and
+    // the Billing tab inside UserProfile — must be suppressed here too.
+    if (/AFKPilotApp/.test(navigator.userAgent)) root.classList.add("afk-app");
     var saved;
     try { saved = localStorage.getItem("grok-remote-theme"); } catch (e) {}
     var initial = saved || ((window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark");
@@ -284,7 +288,14 @@
       const mountUser = () => {
         if (!userBtnMounted && a.isSignedIn()) {
           userBtnMounted = true;
-          a.mountUserButton(document.getElementById("user-button"));
+          // In the app shell the chip stays unmounted: Clerk's UserButton
+          // opens UserProfile, which carries a Billing tab on this instance.
+          // Nothing is lost here — showIdentity() below already says who is
+          // approving, and this page is a transient approval step with no
+          // account management of its own.
+          if (!document.documentElement.classList.contains("afk-app")) {
+            a.mountUserButton(document.getElementById("user-button"));
+          }
         }
         showIdentity();
       };

@@ -5,8 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <script>
   // Set the theme before first paint (no flash), and expose the toggle.
+  // App-mode class is stamped here too so CSS can hide purchase/marketing
+  // surfaces before first paint — a flash of pricing is a store-review screenshot.
   (function () {
     var root = document.documentElement;
+    if (/AFKPilotApp/.test(navigator.userAgent)) root.classList.add("afk-app");
     var saved;
     try { saved = localStorage.getItem("grok-remote-theme"); } catch (e) {}
     var initial = saved || ((window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark");
@@ -651,6 +654,37 @@
     .setup-steps li { padding-left: 1.9rem; }
   }
 
+  /* Native app shell (Capacitor, UA contains AFKPilotApp): hide every
+     purchase and marketing surface before first paint. Class is stamped in
+     the head script above. !important beats a later JS unhide. */
+  html.afk-app #hero,
+  html.afk-app #billing,
+  html.afk-app #faq,
+  html.afk-app .faq-link,
+  html.afk-app #install-btn,
+  html.afk-app #desktop-link,
+  html.afk-app .usage-upgrade {
+    display: none !important;
+  }
+
+  /* Signed-out app landing: get the user signed in, nothing else. */
+  .app-signin {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 1.25rem;
+    padding-block: clamp(4rem, 16vw, 8rem);
+  }
+  .app-signin[hidden] { display: none; }
+  .app-signin .logo-mark { width: 48px; height: 48px; }
+  .app-signin p {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--step-1);
+    max-width: 28ch;
+  }
+
   .ok-badge {
     display: inline-block;
     color: var(--green);
@@ -828,6 +862,7 @@
       </button>
       <button id="signin-btn" class="btn btn-primary js-signin" type="button" hidden>Sign in</button>
       <span id="signed-in-as" class="signed-in-as" hidden></span>
+      <button id="signout-btn" class="btn btn-secondary" type="button" hidden>Sign out</button>
       <div id="user-button"></div>
     </div>
   </header>
@@ -945,6 +980,14 @@
         </div>
       </section>
     </div>
+
+    <!-- App-mode signed-out: sign-in only. Marketing lives in #hero, which CSS
+         hides before first paint when the Capacitor shell is the user agent. -->
+    <section id="app-signin" class="app-signin wrap" hidden>
+      <span class="logo-mark" aria-hidden="true"></span>
+      <p>Sign in to continue.</p>
+      <button class="btn btn-primary js-signin" type="button">Sign in</button>
+    </section>
 
     <!-- "Continue remotely" / post-link: this page is a WAYPOINT, not a
          destination. Show a quiet forwarding state instead of flashing the
@@ -1178,7 +1221,9 @@
       <span class="copy">© The Product Compass</span>
       <nav>
         <a href="/desktop">Desktop app</a>
-        <a href="#faq">FAQ</a>
+        <!-- Hidden in the app shell along with #faq itself: the section is
+             display:none there, so this anchor would scroll to nothing. -->
+        <a class="faq-link" href="#faq">FAQ</a>
         <a href="https://github.com/phuryn/grok-build-vscode/issues" target="_blank" rel="noopener">Support</a>
         <a href="/privacy">Privacy</a>
         <a href="/terms">Terms</a>
@@ -1194,7 +1239,10 @@
   const picker = document.getElementById("picker");
   const billing = document.getElementById("billing");
   const signinBtn = document.getElementById("signin-btn");
+  const signoutBtn = document.getElementById("signout-btn");
+  const appSignin = document.getElementById("app-signin");
   const installBtn = document.getElementById("install-btn");
+  const isAfkApp = () => document.documentElement.classList.contains("afk-app");
   const dialog = document.getElementById("confirm-dialog");
   const dialogTitle = document.getElementById("dialog-title");
   const dialogBody = document.getElementById("dialog-body");
@@ -1447,7 +1495,7 @@
       '<div class="usage-head">' +
         '<span class="usage-label">This week · <b>' + used + " / " + total + "</b> remote messages</span>" +
         resetNote;
-    if (pct >= 80) html += '<a class="usage-upgrade" href="#billing">Upgrade for unlimited →</a>';
+    if (pct >= 80 && !isAfkApp()) html += '<a class="usage-upgrade" href="#billing">Upgrade for unlimited →</a>';
     html += "</div>";
     html += '<div class="usage-bar"><span class="usage-fill' + (pct >= 90 ? " is-high" : "") +
       '" style="width:' + pct + '%"></span></div>';
@@ -1469,7 +1517,7 @@
     if (!forwarding) return;
     forwarding = false;
     document.getElementById("forwarding").hidden = true;
-    document.getElementById("faq").hidden = false; // held back for the hop
+    if (!isAfkApp()) document.getElementById("faq").hidden = false; // held back for the hop
     if (billingPending) {
       billingPending = false;
       // showSignedIn deferred the upsell for the hop that isn't happening.
@@ -1542,7 +1590,7 @@
     // Here rather than in showSignedIn(): mock mode reaches the picker without
     // ever signing in, and the link is just as useful there. Computers only —
     // on a phone this slot belongs to Install app, and the two never share it.
-    if (installCta() === "desktop") document.getElementById("desktop-link").hidden = false;
+    if (!isAfkApp() && installCta() === "desktop") document.getElementById("desktop-link").hidden = false;
     // Step 2's address is this deployment, not a hardcoded domain.
     document.querySelectorAll(".js-origin").forEach((el) => { el.textContent = location.host; });
     if (forwarding) document.getElementById("forwarding").hidden = false;
@@ -1560,10 +1608,14 @@
 
   async function showSignedIn(auth) {
     hero.hidden = true;
+    appSignin.hidden = true;
     signinBtn.hidden = true;
     showIdentity(auth);
-    auth.mountUserButton(document.getElementById("user-button"));
-    if (offersWebApp(installCta())) installBtn.hidden = false;
+    // Clerk's UserButton opens UserProfile, which carries a Billing tab on
+    // this instance. In the app that is a purchase surface — do not mount it.
+    if (isAfkApp()) signoutBtn.hidden = false;
+    else auth.mountUserButton(document.getElementById("user-button"));
+    if (!isAfkApp() && offersWebApp(installCta())) installBtn.hidden = false;
     startPicker();
     const feature = auth.requiredFeature;
     if (!feature) return; // gate open — nothing to upsell
@@ -1577,6 +1629,7 @@
   let billingPending = false;
 
   async function revealBilling(auth, feature) {
+    if (isAfkApp()) return;
     billing.hidden = false;
     if (await auth.hasFeature(feature)) {
       document.getElementById("entitled-badge").hidden = false;
@@ -1596,6 +1649,9 @@
     // always visibly does something.
     window.grokAuth.signOut().finally(() => location.reload());
   });
+  signoutBtn.addEventListener("click", () => {
+    window.grokAuth.signOut().finally(() => location.reload());
+  });
   dialogCancel.addEventListener("click", closeDialog);
   dialogConfirm.addEventListener("click", function () {
     const id = dialogDeviceId;
@@ -1611,7 +1667,7 @@
   window.addEventListener("beforeinstallprompt", function (e) {
     e.preventDefault();
     installPrompt = e;
-    if (offersWebApp(installCta()) && window.grokAuth.enabled && window.grokAuth.isSignedIn()) installBtn.hidden = false;
+    if (!isAfkApp() && offersWebApp(installCta()) && window.grokAuth.enabled && window.grokAuth.isSignedIn()) installBtn.hidden = false;
   });
   installBtn.addEventListener("click", async function () {
     if (installPrompt) {
@@ -1629,7 +1685,7 @@
     // both, so it waits for the same gate instead of painting on its own. A
     // forwarding visit is passing through and shows nothing but its note;
     // stopForwarding() reveals this if the hop turns out not to happen.
-    if (!forwarding) document.getElementById("faq").hidden = false;
+    if (!forwarding && !isAfkApp()) document.getElementById("faq").hidden = false;
     if (!auth.enabled) { // mock mode: exactly the old picker page
       document.getElementById("picker-hint").textContent = "Mock auth — no sign-in. Pick a connected VS Code workspace.";
       startPicker();
@@ -1640,8 +1696,9 @@
     if (shown) {
       showSignedIn(auth);
     } else {
-      hero.hidden = false;
       signinBtn.hidden = false;
+      if (isAfkApp()) appSignin.hidden = false;
+      else hero.hidden = false;
     }
     auth.clerk.addListener(() => {
       if (auth.clerk.user && !shown) { shown = true; showSignedIn(auth); }

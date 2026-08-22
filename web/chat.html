@@ -16,6 +16,7 @@
 <script>
   (function () {
     var root = document.documentElement;
+    if (/AFKPilotApp/.test(navigator.userAgent)) root.classList.add("afk-app");
     var saved;
     try { saved = localStorage.getItem("grok-remote-theme"); } catch (e) {}
     var initial = saved || ((window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark");
@@ -515,6 +516,33 @@ body.has-rail #reconnecting-indicator { padding-inline: max(10px, calc((100% - 8
 .site-brand .wordmark b { font-weight: 600; }
 .site-brand .wordmark .dim { color: var(--sb-muted); font-weight: 500; }
 .site-actions { display: inline-flex; align-items: center; gap: 0.6rem; }
+/* App mode replaces Clerk's UserButton (Billing tab) with identity + Sign out. */
+#user-button.app-account {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+#user-button.app-account .app-account-id {
+  color: var(--sb-muted, var(--vscode-descriptionForeground));
+  font-size: 0.75rem;
+  line-height: 1.35;
+  max-width: min(28ch, 36vw);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+#user-button.app-account .app-signout {
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0.45rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--sb-border, var(--vscode-widget-border));
+  background: var(--sb-surface, var(--vscode-editorWidget-background));
+  color: var(--sb-heading, var(--vscode-foreground));
+  cursor: pointer;
+}
 .icon-toggle {
   width: 38px;
   height: 38px;
@@ -1888,6 +1916,15 @@ window.grokRemoteClient = true;
     overlayHideTimer = null;
     clearReconnectPresentation(false);
     panel.innerHTML = html;
+  }
+  // 4005 copy: the web path links to upgrade; the app path must not link,
+  // name a domain, or mention a website (store guideline 3.1.1 / 3.1.3(b)).
+  function entitlementCloseCopy(appMode, queued) {
+    var saved = queued ? " Your unsent message is saved and will be handled when you return." : "";
+    if (appMode) {
+      return "This device needs Remote Max. Subscriptions aren't managed in the app." + saved;
+    }
+    return 'Remote Max required to use this device from the web. <a href="/" data-native-link>Upgrade</a>, then reload.' + saved;
   }
   function gateSignIn() {
     var panel = overlay();
@@ -3466,7 +3503,7 @@ window.grokRemoteClient = true;
       // loss (review find, 2026-08-15). The queue resumes its normal
       // flush-or-fail life when the tab reconnects after the user acts; the
       // notice just has to SAY the text is safe.
-      if (e.code === 4005) { notice('Remote Max required to use this device from the web. <a href="/" data-native-link>Upgrade</a>, then reload.' + (queue.length ? " Your unsent message is saved and will be handled when you return." : "")); return; }
+      if (e.code === 4005) { notice(entitlementCloseCopy(document.documentElement.classList.contains("afk-app"), queue.length)); return; }
       if (e.code === 4003) { notice('Device not found — or it isn’t linked to your account. <a href="/" data-native-link>Pick another device</a>.' + (queue.length ? " Your unsent message is saved and will be handled when you return." : "")); return; }
       showReconnecting();
       setTimeout(connect, 1000);
@@ -3818,10 +3855,34 @@ window.grokRemoteClient = true;
     // This script runs in <head>; the overlay needs <body> to exist.
     return domReady().then(function () {
       var userBtnMounted = false;
+      function mountAppAccount(el) {
+        if (!el) return;
+        el.classList.add("app-account");
+        el.innerHTML = "";
+        var id = auth.signedInIdentity && auth.signedInIdentity();
+        if (id) {
+          var who = document.createElement("span");
+          who.className = "app-account-id";
+          who.textContent = id;
+          el.appendChild(who);
+        }
+        var out = document.createElement("button");
+        out.type = "button";
+        out.className = "app-signout";
+        out.textContent = "Sign out";
+        out.addEventListener("click", function () {
+          auth.signOut().finally(function () { location.reload(); });
+        });
+        el.appendChild(out);
+      }
       function mountUserButton() {
         if (auth.enabled && auth.isSignedIn() && !userBtnMounted) {
           userBtnMounted = true;
-          auth.mountUserButton(document.getElementById("user-button"));
+          var el = document.getElementById("user-button");
+          // Clerk UserButton → UserProfile includes a Billing tab on this
+          // instance. Do not mount it in the app; identity + Sign out is enough.
+          if (document.documentElement.classList.contains("afk-app")) mountAppAccount(el);
+          else auth.mountUserButton(el);
         }
       }
       mountUserButton();
