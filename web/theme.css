@@ -326,3 +326,16 @@ code, .mono { font-family: var(--font-mono); }
    Scoped to html.afk-app, so a normal browser is untouched — no extra rule
    matches, nothing to evaluate. */
 html.afk-app .cl-navbarButton__billing { display: none !important; }
+
+/* The iOS shell ships WITHOUT NSMicrophoneUsageDescription — deliberately, to
+   drop an App Review conversation — so the voice affordance must not be
+   offered there. Android keeps it: Play has no equivalent friction, and
+   applying an Apple constraint to Android would be solving a problem that
+   platform does not have.
+
+   #mic-btn is the vendored chat UI's own id, so this hides the control
+   without a change in the extension repo — which matters because that repo
+   must carry nothing about this product surface. Nothing else can reach the
+   recorder: it is the only entry point, and iOS denies getUserMedia outright
+   without the usage description. */
+html.afk-ios #mic-btn { display: none !important; }

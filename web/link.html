@@ -9,7 +9,12 @@
     // Stamped on every page that can mount Clerk's UserButton — theme.css
     // keys the Billing suppression off html.afk-app, and /link is a deep-link
     // target for the shell.
-    if (/AFKPilotApp/.test(navigator.userAgent)) root.classList.add("afk-app");
+    if (/AFKPilotApp/.test(navigator.userAgent)) {
+      root.classList.add("afk-app");
+      // iOS ships without a microphone permission, so the voice
+      // affordance must not be offered there. Android keeps it.
+      if (/AFKPilotIOS/.test(navigator.userAgent)) root.classList.add("afk-ios");
+    }
     var saved;
     try { saved = localStorage.getItem("grok-remote-theme"); } catch (e) {}
     var initial = saved || ((window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark");

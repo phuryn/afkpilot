@@ -92,6 +92,23 @@ describe("app-mode copy and detection (source)", () => {
     expect(themeCss).toMatch(/html\.afk-app \.cl-navbarButton__billing/);
   });
 
+  // Two tokens, because the platforms genuinely differ: Android keeps voice
+  // (Play has no RECORD_AUDIO review friction) while the iOS build ships
+  // without NSMicrophoneUsageDescription, so the affordance must not be
+  // offered there. A shared token could not express that.
+  it("distinguishes the iOS shell, and hides voice only there", () => {
+    for (const [name, src] of [["index", indexHtml], ["chat", chatHtml], ["link", linkHtml]] as const) {
+      expect(src, `${name} must detect the iOS shell`).toMatch(/\/AFKPilotIOS\/\.test\(navigator\.userAgent\)/);
+      // The iOS class is only meaningful inside the shell — never stamped alone.
+      const stamp = src.slice(src.indexOf("AFKPilotApp"), src.indexOf("AFKPilotApp") + 500);
+      expect(stamp.indexOf("afk-app"), `${name} must stamp afk-app before afk-ios`)
+        .toBeLessThan(stamp.indexOf("afk-ios"));
+    }
+    expect(themeCss).toMatch(/html\.afk-ios #mic-btn/);
+    // Android must NOT lose the microphone — this is the whole point of the split.
+    expect(themeCss).not.toMatch(/html\.afk-app #mic-btn/);
+  });
+
   // /link is a deep-link target for the shell, so Clerk's UserButton — and the
   // Billing tab inside UserProfile — is one tap away there too. Easy to lose
   // in a later edit because this page has no other app-mode behaviour.
