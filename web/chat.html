@@ -516,33 +516,6 @@ body.has-rail #reconnecting-indicator { padding-inline: max(10px, calc((100% - 8
 .site-brand .wordmark b { font-weight: 600; }
 .site-brand .wordmark .dim { color: var(--sb-muted); font-weight: 500; }
 .site-actions { display: inline-flex; align-items: center; gap: 0.6rem; }
-/* App mode replaces Clerk's UserButton (Billing tab) with identity + Sign out. */
-#user-button.app-account {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.55rem;
-  min-width: 0;
-}
-#user-button.app-account .app-account-id {
-  color: var(--sb-muted, var(--vscode-descriptionForeground));
-  font-size: 0.75rem;
-  line-height: 1.35;
-  max-width: min(28ch, 36vw);
-  text-align: right;
-  overflow-wrap: anywhere;
-}
-#user-button.app-account .app-signout {
-  font: inherit;
-  font-size: 0.8125rem;
-  font-weight: 500;
-  line-height: 1;
-  padding: 0.45rem 0.75rem;
-  border-radius: 8px;
-  border: 1px solid var(--sb-border, var(--vscode-widget-border));
-  background: var(--sb-surface, var(--vscode-editorWidget-background));
-  color: var(--sb-heading, var(--vscode-foreground));
-  cursor: pointer;
-}
 .icon-toggle {
   width: 38px;
   height: 38px;
@@ -3855,34 +3828,12 @@ window.grokRemoteClient = true;
     // This script runs in <head>; the overlay needs <body> to exist.
     return domReady().then(function () {
       var userBtnMounted = false;
-      function mountAppAccount(el) {
-        if (!el) return;
-        el.classList.add("app-account");
-        el.innerHTML = "";
-        var id = auth.signedInIdentity && auth.signedInIdentity();
-        if (id) {
-          var who = document.createElement("span");
-          who.className = "app-account-id";
-          who.textContent = id;
-          el.appendChild(who);
-        }
-        var out = document.createElement("button");
-        out.type = "button";
-        out.className = "app-signout";
-        out.textContent = "Sign out";
-        out.addEventListener("click", function () {
-          auth.signOut().finally(function () { location.reload(); });
-        });
-        el.appendChild(out);
-      }
       function mountUserButton() {
         if (auth.enabled && auth.isSignedIn() && !userBtnMounted) {
           userBtnMounted = true;
-          var el = document.getElementById("user-button");
-          // Clerk UserButton → UserProfile includes a Billing tab on this
-          // instance. Do not mount it in the app; identity + Sign out is enough.
-          if (document.documentElement.classList.contains("afk-app")) mountAppAccount(el);
-          else auth.mountUserButton(el);
+          // auth.js hides UserProfile's Billing page in the app shell, so this
+          // call is identical on every surface.
+          auth.mountUserButton(document.getElementById("user-button"));
         }
       }
       mountUserButton();

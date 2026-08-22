@@ -660,10 +660,10 @@
   html.afk-app #hero,
   html.afk-app #billing,
   html.afk-app #faq,
-  html.afk-app .faq-link,
   html.afk-app #install-btn,
   html.afk-app #desktop-link,
-  html.afk-app .usage-upgrade {
+  html.afk-app .usage-upgrade,
+  html.afk-app .app-hidden {
     display: none !important;
   }
 
@@ -862,7 +862,6 @@
       </button>
       <button id="signin-btn" class="btn btn-primary js-signin" type="button" hidden>Sign in</button>
       <span id="signed-in-as" class="signed-in-as" hidden></span>
-      <button id="signout-btn" class="btn btn-secondary" type="button" hidden>Sign out</button>
       <div id="user-button"></div>
     </div>
   </header>
@@ -1220,10 +1219,12 @@
     <div class="wrap">
       <span class="copy">© The Product Compass</span>
       <nav>
-        <a href="/desktop">Desktop app</a>
-        <!-- Hidden in the app shell along with #faq itself: the section is
-             display:none there, so this anchor would scroll to nothing. -->
-        <a class="faq-link" href="#faq">FAQ</a>
+        <!-- Both hidden in the app shell. The desktop download is inert on a
+             phone, and #faq is display:none there, so its anchor would scroll
+             to nothing. Support, Privacy and Terms stay — stores require the
+             last two, and the first is the only way to reach a human. -->
+        <a class="app-hidden" href="/desktop">Desktop app</a>
+        <a class="app-hidden" href="#faq">FAQ</a>
         <a href="https://github.com/phuryn/grok-build-vscode/issues" target="_blank" rel="noopener">Support</a>
         <a href="/privacy">Privacy</a>
         <a href="/terms">Terms</a>
@@ -1239,7 +1240,6 @@
   const picker = document.getElementById("picker");
   const billing = document.getElementById("billing");
   const signinBtn = document.getElementById("signin-btn");
-  const signoutBtn = document.getElementById("signout-btn");
   const appSignin = document.getElementById("app-signin");
   const installBtn = document.getElementById("install-btn");
   const isAfkApp = () => document.documentElement.classList.contains("afk-app");
@@ -1611,10 +1611,9 @@
     appSignin.hidden = true;
     signinBtn.hidden = true;
     showIdentity(auth);
-    // Clerk's UserButton opens UserProfile, which carries a Billing tab on
-    // this instance. In the app that is a purchase surface — do not mount it.
-    if (isAfkApp()) signoutBtn.hidden = false;
-    else auth.mountUserButton(document.getElementById("user-button"));
+    // Billing is hidden inside UserProfile by auth.js in app mode, so the
+    // button mounts the same way everywhere.
+    auth.mountUserButton(document.getElementById("user-button"));
     if (!isAfkApp() && offersWebApp(installCta())) installBtn.hidden = false;
     startPicker();
     const feature = auth.requiredFeature;
@@ -1647,9 +1646,6 @@
     // is a no-op promise — reload instead, which re-attempts the Clerk boot.
     // finally(): a REJECTED sign-out must also land on a reload, so the button
     // always visibly does something.
-    window.grokAuth.signOut().finally(() => location.reload());
-  });
-  signoutBtn.addEventListener("click", () => {
     window.grokAuth.signOut().finally(() => location.reload());
   });
   dialogCancel.addEventListener("click", closeDialog);

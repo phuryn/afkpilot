@@ -313,3 +313,16 @@ code, .mono { font-family: var(--font-mono); }
    classes (.btn, .app, flex rows), and an author-origin `display` silently
    defeats the UA's [hidden] rule without this belt. */
 [hidden] { display: none !important; }
+
+/* Inside the native shell, Clerk's UserProfile must not offer Billing — app
+   stores forbid routing users to a purchase outside their billing, and Clerk
+   Billing is enabled on this instance. auth.js already passes the supported
+   appearance override; this is the second half of a belt and braces, and the
+   two fail differently: the override dies if the props stop being forwarded,
+   this rule dies only if Clerk renames the class. Clerk documents these
+   cl- classes as stable, and the modal portals into this document, so the
+   root-scoped selector reaches it.
+
+   Scoped to html.afk-app, so a normal browser is untouched — no extra rule
+   matches, nothing to evaluate. */
+html.afk-app .cl-navbarButton__billing { display: none !important; }

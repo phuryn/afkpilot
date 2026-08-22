@@ -14,6 +14,8 @@ const webRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "w
 const indexHtml = readFileSync(new URL("../web/index.html", import.meta.url), "utf8");
 const chatHtml = readFileSync(new URL("../web/chat.html", import.meta.url), "utf8");
 const linkHtml = readFileSync(new URL("../web/link.html", import.meta.url), "utf8");
+const authJs = readFileSync(new URL("../web/auth.js", import.meta.url), "utf8");
+const themeCss = readFileSync(new URL("../web/theme.css", import.meta.url), "utf8");
 
 const APP_UA =
   "Mozilla/5.0 (Linux; Android 15; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Mobile Safari/537.36 AFKPilotApp/1";
@@ -33,8 +35,11 @@ function clerkStub(signedIn: boolean): string {
       user: user,
       session: user ? { getToken: function () { return Promise.resolve("not.a.jwt"); } } : null,
       load: function () { return Promise.resolve(); },
-      mountUserButton: function (el) {
+      mountUserButton: function (el, props) {
         window.__userButtonMounted = true;
+        // Record what the page actually hands Clerk, so the test can assert
+        // the Billing suppression rather than trusting the source read.
+        window.__userButtonProps = props || null;
         if (el) el.innerHTML = '<div data-clerk-user-button="1">Manage account</div>';
       },
       mountPricingTable: function (el) {
@@ -78,33 +83,39 @@ async function paintedText(page: Page, pattern: string): Promise<string[]> {
 
 describe("app-mode copy and detection (source)", () => {
   it("detects the shell by substring, never a version number", () => {
-    expect(indexHtml).toMatch(/\/AFKPilotApp\/\.test\(navigator\.userAgent\)/);
-    expect(chatHtml).toMatch(/\/AFKPilotApp\/\.test\(navigator\.userAgent\)/);
-    expect(linkHtml).toMatch(/\/AFKPilotApp\/\.test\(navigator\.userAgent\)/);
-    expect(indexHtml).not.toMatch(/AFKPilotApp\/1/);
-    expect(chatHtml).not.toMatch(/AFKPilotApp\/1/);
-    expect(linkHtml).not.toMatch(/AFKPilotApp\/1/);
+    // Every page that can mount Clerk's UserButton must stamp html.afk-app —
+    // theme.css keys the Billing suppression off it.
+    for (const [name, src] of [["index", indexHtml], ["chat", chatHtml], ["link", linkHtml], ["auth.js", authJs]] as const) {
+      expect(src, `${name} must detect the shell`).toMatch(/\/AFKPilotApp\/\.test\(navigator\.userAgent\)/);
+      expect(src, `${name} must not pin a version`).not.toMatch(/AFKPilotApp\/1/);
+    }
+    expect(themeCss).toMatch(/html\.afk-app \.cl-navbarButton__billing/);
   });
 
   // /link is a deep-link target for the shell, so Clerk's UserButton — and the
   // Billing tab inside UserProfile — is one tap away there too. Easy to lose
   // in a later edit because this page has no other app-mode behaviour.
-  it("never mounts Clerk's UserButton in app mode, on any page that has one", () => {
-    // Match the METHOD call (auth./a./clerk.), not a local `function
-    // mountUserButton()` wrapper — and not the inline getElementById form,
-    // which chat.html does not use. An earlier version of this test keyed on
-    // that inline form, matched zero lines in chat.html, and passed by never
-    // running its loop. Assert the count so vacuity is impossible.
-    const guarded = /afk-app|isAfkApp\(\)/;
+  // UserProfile's Billing page is suppressed in ONE place — auth.js — because
+  // index, chat and link all mount a user button and a per-page opt-in is one
+  // forgotten page away from shipping a purchase surface. /link was that page
+  // once already. So the contract is: no page may reach Clerk directly.
+  it("routes every user-button mount through auth.js, which hides Billing", () => {
+    expect(authJs).toMatch(/navbarButton__billing/);
+    const props = authJs.slice(authJs.indexOf("function userButtonProps"));
+    expect(props).toMatch(/if \(!inAppShell\(\)\) return undefined;/);
+    expect(props).toMatch(/display:\s*"none"/);
+
     for (const [name, html] of [["link", linkHtml], ["index", indexHtml], ["chat", chatHtml]] as const) {
       const sites = [...html.matchAll(/^.*\.mountUserButton\(.*$/gm)];
-      expect(sites.length, `${name}.html: expected exactly one Clerk UserButton call site`).toBe(1);
-      const site = sites[0]!;
-      const around = html.slice(Math.max(0, site.index! - 400), site.index! + 200);
-      expect(
-        guarded.test(around),
-        `${name}.html mounts Clerk's UserButton without an app-mode guard — UserProfile carries a Billing tab`,
-      ).toBe(true);
+      expect(sites.length, `${name}.html: expected exactly one user-button call site`).toBe(1);
+      // It must go through the auth helper (auth./a.), never window.Clerk —
+      // reaching Clerk directly would bypass the central Billing suppression.
+      expect(sites[0]![0], `${name}.html must mount via the auth helper`).toMatch(
+        /\b(auth|a)\.mountUserButton\(/,
+      );
+      expect(html, `${name}.html must not call clerk.mountUserButton directly`).not.toMatch(
+        /(clerk|Clerk)\.mountUserButton\(/,
+      );
     }
   });
 
@@ -287,7 +298,7 @@ describe("app-mode landing page", () => {
   });
 
   describe("signed-in unentitled (Clerk enabled)", () => {
-    it("with AFKPilotApp: does not mount the pricing table or UserButton", async () => {
+    it("with AFKPilotApp: no pricing table, and UserProfile is told to hide Billing", async () => {
       const { page, close } = await openLanding({ userAgent: APP_UA, clerk: { signedIn: true } });
       try {
         await waitReady(page);
@@ -296,15 +307,24 @@ describe("app-mode landing page", () => {
         expect(await painted(page, "#billing")).toBe(false);
         expect(await painted(page, "#pricing-section")).toBe(false);
         expect(await painted(page, "[data-clerk-pricing-table]")).toBe(false);
-        expect(await painted(page, "[data-clerk-user-button]")).toBe(false);
         expect(await painted(page, "#manage-btn")).toBe(false);
         expect(await paintedText(page, "upgrade")).toEqual([]);
         expect(await paintedText(page, "manage subscription")).toEqual([]);
         expect(await page.evaluate(() => (window as unknown as { __pricingTableMounted?: boolean }).__pricingTableMounted)).toBeUndefined();
-        expect(await page.evaluate(() => (window as unknown as { __userButtonMounted?: boolean }).__userButtonMounted)).toBeUndefined();
-        expect(await painted(page, "#signout-btn")).toBe(true);
+
+        // Account management stays — only the purchase surface goes. This is
+        // the runtime half of the contract: what the page hands Clerk, not
+        // what the source looks like.
+        expect(await page.evaluate(() => (window as unknown as { __userButtonMounted?: boolean }).__userButtonMounted)).toBe(true);
+        expect(await painted(page, "[data-clerk-user-button]")).toBe(true);
+        const props = await page.evaluate(() => (window as unknown as { __userButtonProps?: unknown }).__userButtonProps);
+        expect(props).toMatchObject({
+          userProfileProps: { appearance: { elements: { navbarButton__billing: { display: "none" } } } },
+        });
+
         expect(await painted(page, "#signed-in-as")).toBe(true);
         expect(await painted(page, "#faq")).toBe(false);
+        expect(await painted(page, ".app-hidden")).toBe(false);
       } finally {
         await close();
       }
@@ -321,8 +341,11 @@ describe("app-mode landing page", () => {
         expect(await painted(page, "[data-clerk-pricing-table]")).toBe(true);
         expect(await paintedText(page, "choose a plan")).not.toEqual([]);
         expect(await page.evaluate(() => (window as unknown as { __userButtonMounted?: boolean }).__userButtonMounted)).toBe(true);
-        expect(await painted(page, "#signout-btn")).toBe(false);
+        // A normal browser must get Clerk's UserProfile untouched — no
+        // appearance override, so Billing stays exactly where it was.
+        expect(await page.evaluate(() => (window as unknown as { __userButtonProps?: unknown }).__userButtonProps)).toBeNull();
         expect(await painted(page, "#faq")).toBe(true);
+        expect(await painted(page, ".app-hidden")).toBe(true);
       } finally {
         await close();
       }

@@ -27,6 +27,35 @@
     signedInIdentity: function () { return null; },
   };
 
+  // Inside the native shell (Capacitor appends AFKPilotApp to the UA), Clerk's
+  // UserProfile must not offer Billing: app stores forbid an app that routes
+  // users to a purchase outside their billing, and Clerk Billing is enabled on
+  // this instance, so "Manage account" would otherwise open straight onto a
+  // plan picker. Everything else about the profile stays — account, security,
+  // sign out — because only the purchase surface is the problem.
+  //
+  // navbarButton__billing is a supported appearance descriptor, not a scraped
+  // class. clerk-js builds it as descriptors.navbarButton.setId(page.id) with
+  // page ids { account, security, billing, apiKeys }, and Clerk documents these
+  // classes as stable. The mobile layout collapses the same list behind a
+  // hamburger rather than rendering its own items, so one rule covers both.
+  //
+  // This lives HERE rather than at each call site on purpose: index, chat and
+  // link all mount a user button, and a per-page opt-in is one forgotten page
+  // away from shipping a purchase surface. /link was exactly that page once.
+  function inAppShell() {
+    return /AFKPilotApp/.test(navigator.userAgent);
+  }
+
+  function userButtonProps() {
+    if (!inAppShell()) return undefined;
+    return {
+      userProfileProps: {
+        appearance: { elements: { navbarButton__billing: { display: "none" } } },
+      },
+    };
+  }
+
   // Clerk user → a string the header can print. Email first; username/id only
   // when there is no primary email. Returns null when there is no user (and
   // therefore in mock mode) so pages never invent an identity.
@@ -96,7 +125,7 @@
               return clerk.session ? clerk.session.getToken() : Promise.resolve(null);
             };
             state.isSignedIn = function () { return !!clerk.user; };
-            state.mountUserButton = function (el) { clerk.mountUserButton(el); };
+            state.mountUserButton = function (el) { clerk.mountUserButton(el, userButtonProps()); };
             // Always come back to the page that asked: Clerk's default
             // post-auth redirect lands on "/", which loses /link?code=
             // context whenever the flow does a full-page handshake.
