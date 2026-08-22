@@ -2,8 +2,8 @@
   "version": 1,
   "source": {
     "repository": "grok-build-vscode",
-    "revision": "62c86533e9754a809486132075d398147ff366cb",
-    "appVersion": "3.14.0",
+    "revision": "772c5c14271f7a84c45f353f0f773965147c9d18",
+    "appVersion": "3.14.1",
     "filesMatchRevision": false
   },
   "artifacts": [
@@ -60,7 +60,7 @@
     {
       "source": "media/webview-helpers.js",
       "destination": "media/webview-helpers.js",
-      "sha256": "716bfb8b776c942b7b7c60eed392e56fc785dcd2bbd531c3f39cf8bf6dd46401"
+      "sha256": "0048a39d4fcf41abb32ba88d83c46fd37aca303274e2d26db82c1b7624cc66c4"
     },
     {
       "source": "media/mathjax/tex-svg-full.js",

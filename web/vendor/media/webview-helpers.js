@@ -1216,8 +1216,17 @@
 
   // The relay currently returns plain HostMsg-shaped errors without a request
   // id. Only these canonical texts are attributable to a refused browser send.
+  //
+  // The quota tail is deliberately loose. It used to require the sentence to
+  // end "Upgrade to Remote Max for unlimited use." \u2014 which made the relay's
+  // exact marketing prose a wire contract with this regex. When that sentence
+  // was dropped (an upsell cannot ship inside the native app), this stopped
+  // matching, the refused send never became the editable "Not sent" block, and
+  // the user's text was lost on the next reload. Match the stable identifying
+  // prefix and let the tail vary; the anchors plus the message-count shape are
+  // what make this attributable, not the merchandising.
   function isRelaySendRejection(text) {
-    return /^(?:Slow down \u2014 at most \d+ messages per minute\.|Free plan limit reached \(\d+ messages this week\)\. Resets in .+ Upgrade to Remote Max for unlimited use\.)$/
+    return /^(?:Slow down \u2014 at most \d+ messages per minute\.|Free plan limit reached \(\d+ messages this week\)\. Resets in .+)$/
       .test(String(text || ""));
   }
 
