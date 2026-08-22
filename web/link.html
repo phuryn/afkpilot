@@ -260,9 +260,19 @@
       }
     } else if (res.status === 403) {
       result.className = "err";
+      // Both 403 reasons are paywall moments, so both carried an upgrade
+      // route. Inside the app neither may: "Remove the old device" is fine
+      // (that is device management, not a purchase), the upgrade offer is not.
+      var inApp = document.documentElement.classList.contains("afk-app");
+      var removeLink = '<a href="/">Remove the old device</a>';
       result.innerHTML = body.reason === "device-limit"
-        ? "Free plan limit: " + body.limit + " linked device" + (body.limit === 1 ? "" : "s") + '. <a href="/">Remove the old device</a> or upgrade to Remote Max.'
-        : 'Remote Max required to link devices. <a href="/">Upgrade</a>, then approve again.';
+        ? "Free plan limit: " + body.limit + " linked device" + (body.limit === 1 ? "" : "s") + ". " +
+          (inApp
+            ? removeLink + ". Subscriptions aren't managed in the app."
+            : removeLink + " or upgrade to Remote Max.")
+        : (inApp
+            ? "Remote Max is required to link devices. Subscriptions aren't managed in the app."
+            : 'Remote Max required to link devices. <a href="/">Upgrade</a>, then approve again.');
     } else {
       say("err", "Approval failed (" + (body.status || res.status) + ").");
     }

@@ -1019,8 +1019,16 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
           try {
             const count = await freeTier.usage.increment(userId, win.start);
             if (count > freeTier.weeklyMsgs) {
+              // States the fact and stops. The upsell used to live here, but
+              // this text is painted in the transcript of EVERY client —
+              // including the native app, where an upgrade offer is a store
+              // rejection (App Store 3.1.1). Merchandising belongs to the
+              // client, which knows what it is: the web quota wall still
+              // carries a real Upgrade link, the app's deliberately does not.
+              // Keeping it off the wire means the relay needs no notion of
+              // who is listening.
               return bounce(
-                `Free plan limit reached (${freeTier.weeklyMsgs} messages this week). Resets in ${resetsInText(win.resetsAt - Date.now())}. Upgrade to Remote Max for unlimited use.`,
+                `Free plan limit reached (${freeTier.weeklyMsgs} messages this week). Resets in ${resetsInText(win.resetsAt - Date.now())}.`,
                 submissionId,
               );
             }

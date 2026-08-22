@@ -2013,19 +2013,29 @@ window.grokRemoteClient = true;
       if (!footer) return;
       footer.parentNode.insertBefore(quotaWall, footer);
     }
+    // Same split as the 4005 wall: the web merchandises, the app states the
+    // limit and stops. window.open here would leave the shell for the system
+    // browser and land on the pricing page — the clearest possible version of
+    // what App Store 3.1.1 forbids.
+    var appMode = document.documentElement.classList.contains("afk-app");
     quotaWall.innerHTML =
       "Free weekly limit reached" + (resetTxt ? " — resets in " + resetTxt : "") +
       '. Only messages you send count; agent replies and approvals are free. ' +
-      '<a href="/" data-native-link target="_blank" rel="noopener">Upgrade</a>';
+      (appMode
+        ? "Subscriptions aren't managed in the app."
+        : '<a href="/" data-native-link target="_blank" rel="noopener">Upgrade</a>');
     // The vendored chat.js swallows every anchor click (routes it to the host
     // as openFile/openUrl — dropped on remotes, and it preventDefaults). "/"
     // isn't http so our capture handler skips it too. Open the portal
     // explicitly and stop the click before the vendored handler eats it.
-    quotaWall.querySelector("a").addEventListener("click", function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      window.open("/", "_blank", "noopener");
-    });
+    var upgradeLink = quotaWall.querySelector("a");
+    if (upgradeLink) {
+      upgradeLink.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        window.open("/", "_blank", "noopener");
+      });
+    }
     // The send path is dead until the window resets — disable and dim the
     // input, send, and mic so it's clear (the relay also blocks it). Gear/
     // history stay reachable; a reload re-checks /api/me and clears this.

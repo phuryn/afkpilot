@@ -138,6 +138,49 @@ describe("app-mode copy and detection (source)", () => {
   });
 });
 
+// The 4005 wall was not the only paywall moment, and an unsteered review found
+// the two that were missed: the weekly-quota wall above the composer, and
+// /link's 403 when a free user links a second computer. Both are ordinary
+// free-tier journeys, not exotic ones. These pin every route that remains.
+describe("no purchase route survives in app mode", () => {
+  const serverTs = readFileSync(new URL("../src/server.ts", import.meta.url), "utf8");
+
+  it("the relay never puts an upgrade offer on the wire", () => {
+    // bounce() copy is painted in EVERY client's transcript, so the relay
+    // cannot carry merchandising without it reaching the app. Note the file
+    // says "upgrade" constantly about WebSockets — only bounce text is scanned.
+    const copy = [...serverTs.matchAll(/bounce\(\s*[`"]([^`"]*)[`"]/g)].map((m) => m[1]!);
+    expect(copy.length, "expected to find the relay's bounce copy").toBeGreaterThan(2);
+    for (const c of copy) {
+      expect(c, `relay bounce copy offers an upgrade: ${c}`).not.toMatch(/upgrade|remote max/i);
+    }
+  });
+
+  it("the weekly-quota wall drops its Upgrade link in the app", () => {
+    const start = chatHtml.indexOf("function showQuotaWall");
+    const body = chatHtml.slice(start, chatHtml.indexOf("document.body.classList.add(\"quota-exceeded\")", start));
+    expect(start).toBeGreaterThan(0);
+    expect(body).toMatch(/afk-app/);
+    expect(body).toMatch(/Subscriptions aren't managed in the app/);
+    // The app branch must be decided BEFORE the markup that carries the link.
+    expect(body.indexOf("afk-app")).toBeLessThan(body.indexOf(">Upgrade</a>"));
+    // window.open would leave the shell for the system browser — it must only
+    // ever be reached through an anchor that app mode never renders.
+    expect(body).toMatch(/if \(upgradeLink\)/);
+  });
+
+  it("link's device-limit and entitlement refusals drop their upgrade route", () => {
+    const start = linkHtml.indexOf("res.status === 403");
+    const body = linkHtml.slice(start, start + 1200);
+    expect(start).toBeGreaterThan(0);
+    expect(body).toMatch(/afk-app/);
+    expect(body.indexOf("afk-app")).toBeLessThan(body.indexOf("upgrade to Remote Max"));
+    expect(body).toMatch(/Subscriptions aren't managed in the app/);
+    // Device management is not a purchase, so it survives in both branches.
+    expect(body).toMatch(/Remove the old device/);
+  });
+});
+
 describe("4005 entitlement close copy", () => {
   const start = chatHtml.indexOf("function entitlementCloseCopy");
   const end = chatHtml.indexOf("function gateSignIn()", start);
