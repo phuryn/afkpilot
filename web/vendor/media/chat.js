@@ -2272,16 +2272,26 @@
 
   function previewLineWindow(total, range) {
     if (total <= PREVIEW_MAX_LINES) return { from: 1, to: total, clipped: false };
-    const start = (range && range.start) || 1;
-    const end = (range && range.end) || start;
-    const span = Math.max(1, end - start + 1);
-    // Centre on the range when it fits, otherwise take its head.
-    const budget = Math.max(PREVIEW_MAX_LINES, span + PREVIEW_CONTEXT_LINES * 2);
-    let from = Math.max(1, start - PREVIEW_CONTEXT_LINES);
-    let to = Math.min(total, from + Math.min(budget, PREVIEW_MAX_LINES) - 1);
-    if (to - from + 1 < Math.min(PREVIEW_MAX_LINES, total)) {
-      from = Math.max(1, to - Math.min(PREVIEW_MAX_LINES, total) + 1);
+    const start = Math.min(Math.max(1, (range && range.start) || 1), total);
+    const end = Math.min(Math.max(start, (range && range.end) || start), total);
+    const span = end - start + 1;
+
+    // The lines the agent READ are never trimmed to make room for context —
+    // context is the thing that gives way. An earlier version computed a budget
+    // that grew with the span and then clamped it straight back to the cap, so
+    // a 4000-line read starting at 5000 rendered 4600-8599 and silently
+    // dropped 400 lines the user had asked to see.
+    if (span >= PREVIEW_MAX_LINES) {
+      const to = Math.min(total, start + PREVIEW_MAX_LINES - 1);
+      return { from: start, to, clipped: start > 1 || to < total };
     }
+
+    // Spend whatever is left on context, split either side, and give the unused
+    // half to the other when the range sits near a file boundary.
+    const slack = PREVIEW_MAX_LINES - span;
+    const before = Math.min(Math.floor(slack / 2), start - 1);
+    const from = Math.max(1, start - before);
+    const to = Math.min(total, from + PREVIEW_MAX_LINES - 1);
     return { from, to, clipped: from > 1 || to < total };
   }
 
@@ -2505,7 +2515,7 @@
         // ones. A one-line `{"n":1e3}` becomes three lines reading `"n": 1000`.
         // The host tells us when it did this, so take the honest path instead
         // of numbering a file the user does not have.
-        if (result && result.ok && result.pretty) {
+        if (result && result.ok && result.reformatted) {
           clearPreviewBody(body);
           renderPreviewFallback(
             body,
