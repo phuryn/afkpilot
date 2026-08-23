@@ -20,7 +20,24 @@
       root.classList.add("afk-app");
       // iOS ships without a microphone permission, so the voice
       // affordance must not be offered there. Android keeps it.
-      if (/AFKPilotIOS/.test(navigator.userAgent)) root.classList.add("afk-ios");
+      if (/AFKPilotIOS/.test(navigator.userAgent)) {
+        root.classList.add("afk-ios");
+        // WKWebView fills the whole screen on iOS, so our header paints UNDER
+        // the clock and battery icons. Android's WebView already starts below
+        // them. Tell the status bar to stop overlaying rather than padding
+        // every page with safe-area insets: one call fixes all three pages and
+        // leaves browser CSS untouched. The bridge is injected even in
+        // remote-URL mode, but not necessarily before this runs.
+        var fixStatusBar = function () {
+          var sb = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.StatusBar;
+          if (sb && sb.setOverlaysWebView) sb.setOverlaysWebView({ overlay: false });
+        };
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", fixStatusBar);
+        } else {
+          fixStatusBar();
+        }
+      }
     }
     var saved;
     try { saved = localStorage.getItem("grok-remote-theme"); } catch (e) {}
