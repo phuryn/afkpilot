@@ -2260,14 +2260,40 @@
     return true;
   }
 
+  // The host serves text files up to FILE_PREVIEW_MAX_BYTES (2 MiB), and a
+  // 2 MiB file of one-character lines is a million rows — four DOM nodes each,
+  // built synchronously on the UI thread. Rendering all of it would wedge the
+  // renderer for a file the host considers perfectly ordinary. So a window is
+  // rendered around the range the agent read, which is the only part anyone
+  // opened this to see; the count says what was left out, because a silently
+  // truncated file is the same lie as a silently substituted one.
+  const PREVIEW_MAX_LINES = 4000;
+  const PREVIEW_CONTEXT_LINES = 400;
+
+  function previewLineWindow(total, range) {
+    if (total <= PREVIEW_MAX_LINES) return { from: 1, to: total, clipped: false };
+    const start = (range && range.start) || 1;
+    const end = (range && range.end) || start;
+    const span = Math.max(1, end - start + 1);
+    // Centre on the range when it fits, otherwise take its head.
+    const budget = Math.max(PREVIEW_MAX_LINES, span + PREVIEW_CONTEXT_LINES * 2);
+    let from = Math.max(1, start - PREVIEW_CONTEXT_LINES);
+    let to = Math.min(total, from + Math.min(budget, PREVIEW_MAX_LINES) - 1);
+    if (to - from + 1 < Math.min(PREVIEW_MAX_LINES, total)) {
+      from = Math.max(1, to - Math.min(PREVIEW_MAX_LINES, total) + 1);
+    }
+    return { from, to, clipped: from > 1 || to < total };
+  }
+
   function buildNumberedFilePreview(text, language, pathStr, range) {
     const wrap = document.createElement("div");
     wrap.className = "tool-diff-region preview-file-region";
     const lines = String(text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
     const start = range && range.start;
     const end = range && range.end;
+    const win = previewLineWindow(lines.length, range);
     let firstRead = null;
-    for (let i = 0; i < lines.length; i++) {
+    for (let i = win.from - 1; i < win.to; i++) {
       const n = i + 1;
       const inRange = start != null && end != null && n >= start && n <= end;
       const row = document.createElement("div");
@@ -2293,8 +2319,10 @@
       }
       wrap.appendChild(row);
     }
-    wrap.style.setProperty("--tdl-num-w", tdlGutterCh(lines.length));
+    wrap.style.setProperty("--tdl-num-w", tdlGutterCh(win.to));
     wrap._firstRead = firstRead;
+    wrap._window = win;
+    wrap._totalLines = lines.length;
     return wrap;
   }
 
@@ -2470,11 +2498,34 @@
       overlay._previewToken = token;
       fetchPreviewFile(relPath).then((result) => {
         if (overlay._closed || overlay._previewToken !== token) return;
-        if (result && result.ok && typeof result.text === "string") {
+        // `readProjectFile` PRETTY-PRINTS JSON (file-tree.ts: JSON.stringify of
+        // the parsed value). That is right for the file panel, which edits and
+        // writes it back, and wrong here: the numbers in our gutter would count
+        // reformatted lines, and the highlighted range would mark the wrong
+        // ones. A one-line `{"n":1e3}` becomes three lines reading `"n": 1000`.
+        // The host tells us when it did this, so take the honest path instead
+        // of numbering a file the user does not have.
+        if (result && result.ok && result.pretty) {
+          clearPreviewBody(body);
+          renderPreviewFallback(
+            body,
+            excerpt,
+            language,
+            opts.path,
+            "This JSON file is reformatted when loaded, so line numbers would not match the file on disk — showing the excerpt the agent read.",
+          );
+        } else if (result && result.ok && typeof result.text === "string") {
           payload.text = result.text;
           clearPreviewBody(body);
           const region = buildNumberedFilePreview(result.text, language, opts.path, opts.range);
           body.appendChild(region);
+          if (region._window && region._window.clipped) {
+            const clip = document.createElement("div");
+            clip.className = "preview-notice";
+            clip.textContent =
+              `Showing lines ${region._window.from}–${region._window.to} of ${region._totalLines} — the file is too long to render in full.`;
+            body.insertBefore(clip, region);
+          }
           insertPreviewPanelButton(actions, saveBtn, relPath);
           const startEl = region._firstRead;
           if (startEl && typeof startEl.scrollIntoView === "function") {
