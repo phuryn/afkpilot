@@ -2527,6 +2527,20 @@
         } else if (result && result.ok && typeof result.text === "string") {
           payload.text = result.text;
           clearPreviewBody(body);
+          // The band marks the line numbers the agent asked for. That is a
+          // POSITIONAL reference, exactly what an editor host does when it
+          // opens the file at those lines, and it stays true whether or not the
+          // file has moved on since.
+          //
+          // A guard that tried to verify the content still matched was removed
+          // rather than tuned: the excerpt is the CLI's rendered transcript,
+          // not the file's bytes. A ranged read arrives decorated —
+          // `... 2219 lines not shown ...` and `  2220|  }` — so comparing it
+          // against raw file lines never matched, and the guard fired on every
+          // ordinary ranged read, stripped the markers, and announced a change
+          // that had not happened. Parsing those decorations would mean
+          // tracking a format that differs per CLI, to defend against a
+          // staleness the editor host has always had and nobody minds.
           const region = buildNumberedFilePreview(result.text, language, opts.path, opts.range);
           body.appendChild(region);
           if (region._window && region._window.clipped) {
