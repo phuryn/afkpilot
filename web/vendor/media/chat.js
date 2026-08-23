@@ -2162,18 +2162,140 @@
 
   function previewFilename(opts) {
     if (opts.filename) return previewBasename(opts.filename);
-    if (opts.kind === "diff" && opts.path) {
+    if (opts.path) {
       const base = previewBasename(opts.path);
-      return /\.diff$/i.test(base) ? base : base + ".diff";
+      if (opts.kind === "diff") return /\.diff$/i.test(base) ? base : base + ".diff";
+      return base;
     }
     const ext = PREVIEW_EXT_BY_LANG[opts.language] || ".txt";
     return "Untitled" + ext;
   }
 
   function previewTitle(opts) {
-    if (opts.kind === "diff" && opts.path) return previewBasename(opts.path);
+    if (opts.path) return previewBasename(opts.path);
     if (opts.filename) return previewBasename(opts.filename);
     return opts.language ? `Untitled (${opts.language})` : "Untitled";
+  }
+
+  function previewLanguage(opts) {
+    if (opts.language) return opts.language;
+    const api = globalThis.GrokSyntaxHighlight;
+    if (opts.path && api && typeof api.languageForPath === "function") {
+      return api.languageForPath(opts.path) || "";
+    }
+    return "";
+  }
+
+  // Same `#Lstart-Lend` suffix parseFileRef accepts, kept local because the
+  // webview cannot import src/file-ref.ts. Anchored at the end so a `#` earlier
+  // in the path (C#/F# folders) stays in the path.
+  function previewFileRef(raw) {
+    const s = String(raw || "").trim();
+    if (!s) return { path: "", range: null };
+    const frag = s.match(/^(.*?)#L(\d+)(?:-L?(\d+))?$/i);
+    if (!frag) return { path: s, range: null };
+    const start = Number(frag[2]);
+    const end = frag[3] ? Number(frag[3]) : start;
+    return { path: frag[1], range: { start, end } };
+  }
+
+  // Workspace-relative path the file panel / readProjectFile will accept, or
+  // "" when the path is out of cwd scope (~/Downloads, another drive, …).
+  function workspaceRelPath(pathStr) {
+    const raw = String(pathStr || "").replace(/\\/g, "/").trim();
+    if (!raw || raw === "." || raw === "./") return "";
+    if (raw === "~" || raw.startsWith("~/")) return "";
+    const cwd = String(state.cwd || "").replace(/\\/g, "/").replace(/\/+$/, "");
+    const isAbs = raw.startsWith("/") || /^[A-Za-z]:\//.test(raw);
+    if (!isAbs) return raw.replace(/^\.\//, "");
+    if (!cwd) return "";
+    const fold = /^[A-Za-z]:\//.test(cwd);
+    const a = fold ? raw.toLowerCase() : raw;
+    const c = fold ? cwd.toLowerCase() : cwd;
+    if (a === c) return "";
+    if (a.startsWith(c + "/")) return raw.slice(cwd.length).replace(/^\//, "");
+    return "";
+  }
+
+  // One formula for every `.tdl` gutter: 4ch through 999, then digits+1.
+  function tdlGutterCh(widest) {
+    return Math.max(4, String(widest).length + 1) + "ch";
+  }
+
+  function previewFilePanelController() {
+    if (!hostPreviewsInApp()) return null;
+    const desk = window.__grokDeskFilePanel;
+    if (desk && typeof desk.openPath === "function") return desk;
+    const remote = state.filesBrowse && state.filesBrowse.component;
+    if (remote && typeof remote.openPath === "function") return remote;
+    return null;
+  }
+
+  let previewFileSeq = 0;
+  let previewOverlayGen = 0;
+  const previewFilePending = new Map();
+
+  function fetchPreviewFile(relPath) {
+    const cwd = state.cwd || "";
+    if (!cwd || !relPath) return Promise.resolve({ ok: false, reason: "no path" });
+    return new Promise((resolve) => {
+      const requestId = "preview-" + (++previewFileSeq);
+      const timer = setTimeout(() => {
+        if (!previewFilePending.has(requestId)) return;
+        previewFilePending.delete(requestId);
+        resolve({ ok: false, reason: "timed out" });
+      }, 15000);
+      previewFilePending.set(requestId, { resolve, timer });
+      vscode.postMessage({ type: "readProjectFile", cwd, relPath, requestId });
+    });
+  }
+
+  function settlePreviewFileRequest(msg) {
+    if (!msg || typeof msg.requestId !== "string") return false;
+    const pending = previewFilePending.get(msg.requestId);
+    if (!pending) return false;
+    clearTimeout(pending.timer);
+    previewFilePending.delete(msg.requestId);
+    pending.resolve(msg);
+    return true;
+  }
+
+  function buildNumberedFilePreview(text, language, pathStr, range) {
+    const wrap = document.createElement("div");
+    wrap.className = "tool-diff-region preview-file-region";
+    const lines = String(text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+    const start = range && range.start;
+    const end = range && range.end;
+    let firstRead = null;
+    for (let i = 0; i < lines.length; i++) {
+      const n = i + 1;
+      const inRange = start != null && end != null && n >= start && n <= end;
+      const row = document.createElement("div");
+      row.className = "tdl" + (inRange ? " tdl-read" : "");
+      row.dataset.line = String(n);
+      const sign = document.createElement("span");
+      sign.className = "tdl-sign";
+      sign.textContent = "";
+      const num = document.createElement("span");
+      num.className = "tdl-num";
+      num.textContent = String(n);
+      const code = document.createElement("span");
+      code.className = "tdl-code";
+      const line = lines[i];
+      if (line === "") code.textContent = " ";
+      else code.innerHTML = highlightPreviewHtml(line, language, pathStr);
+      row.appendChild(sign);
+      row.appendChild(num);
+      row.appendChild(code);
+      if (inRange && !firstRead) {
+        row.id = "preview-read-start";
+        firstRead = row;
+      }
+      wrap.appendChild(row);
+    }
+    wrap.style.setProperty("--tdl-num-w", tdlGutterCh(lines.length));
+    wrap._firstRead = firstRead;
+    return wrap;
   }
 
   function highlightPreviewHtml(text, language, pathStr) {
@@ -2206,14 +2328,57 @@
     const existing = document.getElementById("preview-overlay");
     if (!existing) return;
     if (existing._onKey) document.removeEventListener("keydown", existing._onKey, true);
+    existing._closed = true;
     existing.remove();
+  }
+
+  function insertPreviewPanelButton(actions, saveBtn, relPath) {
+    if (!hostPreviewsInApp() || !relPath) return null;
+    const controller = previewFilePanelController();
+    if (!controller) return null;
+    if (actions.querySelector(".preview-open-panel")) return actions.querySelector(".preview-open-panel");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "preview-action-btn preview-open-panel";
+    btn.textContent = "Open in file panel";
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      closePreviewOverlay();
+      controller.openPath(relPath);
+    };
+    actions.insertBefore(btn, saveBtn);
+    return btn;
+  }
+
+  function renderPreviewExcerpt(body, text, language, pathStr) {
+    const pre = document.createElement("pre");
+    pre.className = "preview-code";
+    const code = document.createElement("code");
+    code.innerHTML = highlightPreviewHtml(String(text ?? ""), language, pathStr);
+    pre.appendChild(code);
+    body.appendChild(pre);
+  }
+
+  function clearPreviewBody(body) {
+    while (body.firstChild) body.removeChild(body.firstChild);
+  }
+
+  function renderPreviewFallback(body, excerpt, language, pathStr, reason) {
+    clearPreviewBody(body);
+    const notice = document.createElement("div");
+    notice.className = "preview-notice";
+    notice.textContent = reason;
+    body.appendChild(notice);
+    renderPreviewExcerpt(body, excerpt, language, pathStr);
   }
 
   function openPreviewOverlay(opts) {
     closePreviewOverlay();
-    const copyText = opts.kind === "diff" ? unifiedDiffText(opts) : String(opts.content ?? "");
+    const payload = { text: opts.kind === "diff" ? unifiedDiffText(opts) : String(opts.content ?? "") };
     const filename = previewFilename(opts);
-    const language = opts.language || (opts.kind === "diff" ? "diff" : "");
+    const language = opts.kind === "diff" ? (opts.language || "diff") : previewLanguage(opts);
+    const excerpt = String(opts.content ?? "");
+    const relPath = workspaceRelPath(opts.path || "");
 
     const overlay = document.createElement("div");
     overlay.id = "preview-overlay";
@@ -2247,7 +2412,7 @@
     copyBtn.onclick = (e) => {
       e.stopPropagation();
       if (!navigator.clipboard || !navigator.clipboard.writeText) return;
-      navigator.clipboard.writeText(copyText).then(() => {
+      navigator.clipboard.writeText(payload.text).then(() => {
         copyBtn.textContent = "Copied";
         setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = "Copy"; }, 1200);
       });
@@ -2258,7 +2423,7 @@
     saveBtn.textContent = "Save As";
     saveBtn.onclick = (e) => {
       e.stopPropagation();
-      const message = { type: "openText", content: copyText, filename };
+      const message = { type: "openText", content: payload.text, filename };
       if (language) message.language = language;
       vscode.postMessage(message);
     };
@@ -2285,13 +2450,46 @@
         result: computeLineDiff(site.oldText, site.newText),
       }));
       body.appendChild(buildInlineDiffRegion(hunks, { full: true }));
+      insertPreviewPanelButton(actions, saveBtn, relPath);
+    } else if (!opts.path) {
+      renderPreviewExcerpt(body, excerpt, language, opts.path);
+    } else if (!relPath) {
+      renderPreviewFallback(
+        body,
+        excerpt,
+        language,
+        opts.path,
+        "This file is outside the project, so only the excerpt the agent read is shown.",
+      );
     } else {
-      const pre = document.createElement("pre");
-      pre.className = "preview-code";
-      const code = document.createElement("code");
-      code.innerHTML = highlightPreviewHtml(String(opts.content ?? ""), language, opts.path);
-      pre.appendChild(code);
-      body.appendChild(pre);
+      const notice = document.createElement("div");
+      notice.className = "preview-notice";
+      notice.textContent = "Loading file…";
+      body.appendChild(notice);
+      const token = ++previewOverlayGen;
+      overlay._previewToken = token;
+      fetchPreviewFile(relPath).then((result) => {
+        if (overlay._closed || overlay._previewToken !== token) return;
+        if (result && result.ok && typeof result.text === "string") {
+          payload.text = result.text;
+          clearPreviewBody(body);
+          const region = buildNumberedFilePreview(result.text, language, opts.path, opts.range);
+          body.appendChild(region);
+          insertPreviewPanelButton(actions, saveBtn, relPath);
+          const startEl = region._firstRead;
+          if (startEl && typeof startEl.scrollIntoView === "function") {
+            startEl.scrollIntoView({ block: "center", inline: "nearest" });
+          }
+        } else {
+          renderPreviewFallback(
+            body,
+            excerpt,
+            language,
+            opts.path,
+            "Couldn't load the full file — showing the excerpt the agent read.",
+          );
+        }
+      });
     }
     panel.appendChild(body);
     overlay.appendChild(panel);
@@ -8290,7 +8488,11 @@
     if (start != null && limit != null && limit > 0) return { start, end: start + limit - 1 };
     if (start == null && limit != null && limit > 0) return { start: 1, end: limit };
     if (start != null && total != null && total >= start) return { start, end: total };
-    if (start == null && total != null && total > 0) return { start: 1, end: total };
+    // No offset, no limit, no end — the agent asked for the WHOLE file, and
+    // `total_lines` is then just how long the file happens to be. Rendering it
+    // as "lines 1-26" reads like a range the agent chose, which it did not, and
+    // costs the row space the path needs (owner, 2026-08-23). The row shows the
+    // path alone and the link opens the file with nothing selected.
     return null;
   }
   // `path#Lstart-Lend` — the syntax `parseFileRef` already accepts, so the host
@@ -8326,12 +8528,11 @@
   //   "file"    an editor that opens the real file AT the line range. The whole
   //             point: the surrounding context is why you clicked.
   //   "overlay" the desktop app. Its openTextFile cannot honour a line
-  //             selection and falls back to the OS default app, so it shows the
-  //             text it has in its own preview window instead.
+  //             selection, so the click opens the in-app preview: the whole
+  //             file, numbered, with the agent's lines marked (falls back to
+  //             the excerpt when the file can't be fetched).
   //   "inline"  a remote. `openFile` is host-local in remote-policy, so a phone
   //             can only reveal the text already on the wire.
-  // Only "file" shows the surrounding file; the other two can show just what the
-  // agent read. That is a real difference in kind, not a styling choice.
   function readLinkMode() {
     if (IS_REMOTE) return "inline";
     if (hostPreviewsInApp()) return "overlay";
@@ -8560,7 +8761,15 @@
         return;
       }
       const pre = details.querySelector(".tool-cmd-output");
-      if (pre) openPreviewOverlay({ kind: "text", content: pre.textContent });
+      const parsed = previewFileRef(ref);
+      if (pre) {
+        openPreviewOverlay({
+          kind: "text",
+          content: pre.textContent,
+          path: parsed.path,
+          range: parsed.range,
+        });
+      }
     };
     el.appendChild(link);
   }
@@ -8911,10 +9120,9 @@
         viewAll.onclick = (e) => {
           e.stopPropagation();
           // A Read row's "View all" means the file, not a copy of the lines the
-          // agent happened to request (#122) — otherwise the surrounding context
-          // is exactly what you can't see. Editor hosts only: the desktop app's
-          // openTextFile cannot honour a line selection and falls back to the OS
-          // default app, which is worse than its own in-app preview.
+          // agent happened to request (#122). Editor hosts post openFile with
+          // the range; desktop's openTextFile cannot honour a line selection,
+          // so the in-app preview fetches the file and marks those lines.
           if (openRef && !hostPreviewsInApp()) {
             vscode.postMessage({ type: "openFile", path: openRef });
             return;
@@ -8922,10 +9130,13 @@
           const openLanguage = language
             || (className === "tool-cmd" ? state.commandLanguage : "");
           if (hostPreviewsInApp()) {
+            const parsed = previewFileRef(openRef);
             openPreviewOverlay({
               kind: "text",
               content: fullText,
               language: openLanguage,
+              path: parsed.path || undefined,
+              range: parsed.range,
             });
             return;
           }
@@ -9320,7 +9531,7 @@
     // number never butts against the code column. Floored at 4ch, which is exactly
     // today's look for everything up to 999; only a 1000+ line file grows it. A
     // fixed track would instead overflow — 5 digits would collide with the +/- glyph.
-    wrap.style.setProperty("--tdl-num-w", Math.max(4, String(widest).length + 1) + "ch");
+    wrap.style.setProperty("--tdl-num-w", tdlGutterCh(widest));
     const remaining = total - rendered;
     if (remaining > 0) {
       const more = document.createElement("div");
@@ -15893,6 +16104,7 @@
   }
 
   function handleProjectFileContent(msg) {
+    if (settlePreviewFileRequest(msg)) return;
     settleRemoteFileRequest("read", msg);
   }
 

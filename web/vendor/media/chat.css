@@ -2418,14 +2418,18 @@ body.thinking-hidden .msg.thinking { display: none; }
 :root {
   --tdiff-add-bg: #40c9773b;
   --tdiff-del-bg: #fa423e3b;
+  --tdiff-read-bg: #4ea1d93b;
   --tdiff-add-line: #40c977;
   --tdiff-del-line: #fa423e;
+  --tdiff-read-line: #4ea1d9;
 }
 body.vscode-light {
   --tdiff-add-bg: #00a24026;
   --tdiff-del-bg: #ba262326;
+  --tdiff-read-bg: #0e639c26;
   --tdiff-add-line: #00a240;
   --tdiff-del-line: #ba2623;
+  --tdiff-read-line: #0e639c;
 }
 /* Edit rows: the always-visible "+A ÔłĺR" change count (green adds, red removes),
    shown inline after the label AND rolled up onto a collapsed group header, so an
@@ -2482,6 +2486,7 @@ body.vscode-light {
 .tdl-code { min-width: 0; }
 .tdl-add { background: var(--tdiff-add-bg); border-left-color: var(--tdiff-add-line); }
 .tdl-del { background: var(--tdiff-del-bg); border-left-color: var(--tdiff-del-line); }
+.tdl-read { background: var(--tdiff-read-bg); border-left-color: var(--tdiff-read-line); }
 .tdl-add .tdl-sign { color: var(--tdiff-add-line); }
 .tdl-del .tdl-sign { color: var(--tdiff-del-line); }
 /* Hairline between two NON-CONTIGUOUS hunks of one edit ÔÇö a replace_all's sites sit
@@ -4519,6 +4524,12 @@ body.vscode-light .preview-overlay {
 }
 .preview-body .tool-diff-region {
   margin: 0;
+}
+.preview-notice {
+  margin: 0 0 10px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  line-height: 1.45;
 }
 .remote-explainer-panel {
   position: relative;
