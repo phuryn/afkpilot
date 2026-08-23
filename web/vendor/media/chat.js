@@ -8302,6 +8302,41 @@
     const range = readLineRange(call);
     return range ? `${p}#L${range.start}-L${range.end}` : p;
   }
+  // The label text for a Read row's target: basename, plus the line range when
+  // one is on the wire. Shared by toolLabel and by the linked-label path, so the
+  // link's text can never drift from the row's own label.
+  function readTargetLabel(call) {
+    const filePath = toolFilePath(call);
+    if (!filePath) return "";
+    const range = readLineRange(call);
+    return range
+      ? `${prettyPath(filePath)} lines ${range.start}-${range.end}`
+      : prettyPath(filePath);
+  }
+  // #122: the path and range in a Read row's own label BECOME the link — no
+  // separate control, and no six-line excerpt of a 150-line read competing for
+  // space. The ROW LOOKS THE SAME on every host; only what the link does
+  // differs, because the hosts can do different things.
+  function readLinkRef(call) {
+    if (!isReadTool(call)) return "";
+    return readOpenFileRef(call);
+  }
+  // What that link can do here, decided by what the host proved it can do —
+  // never by a version:
+  //   "file"    an editor that opens the real file AT the line range. The whole
+  //             point: the surrounding context is why you clicked.
+  //   "overlay" the desktop app. Its openTextFile cannot honour a line
+  //             selection and falls back to the OS default app, so it shows the
+  //             text it has in its own preview window instead.
+  //   "inline"  a remote. `openFile` is host-local in remote-policy, so a phone
+  //             can only reveal the text already on the wire.
+  // Only "file" shows the surrounding file; the other two can show just what the
+  // agent read. That is a real difference in kind, not a styling choice.
+  function readLinkMode() {
+    if (IS_REMOTE) return "inline";
+    if (hostPreviewsInApp()) return "overlay";
+    return "file";
+  }
   function toolRenamePaths(call) {
     const r = call && (call.rawInput || call.input) || {};
     const from = r.old_path || r.old_file || r.from;
@@ -8455,10 +8490,7 @@
       if (isList) {
         target = prettyDir(filePath);
       } else if (isRead) {
-        const range = readLineRange(call);
-        target = range
-          ? `${prettyPath(filePath)} lines ${range.start}-${range.end}`
-          : prettyPath(filePath);
+        target = readTargetLabel(call);
       } else {
         target = prettyPath(filePath);
       }
@@ -8485,8 +8517,52 @@
   // does not), so title has to be painted wherever textContent is set.
   function applyToolLabel(el, call) {
     if (!el) return;
-    el.textContent = toolLabel(call);
+    const full = toolLabel(call);
     el.title = toolLabel(call, { full: true });
+    // Assigning textContent first is what keeps this idempotent across the
+    // repaints that call it — it drops any link node an earlier pass appended.
+    el.textContent = full;
+    const ref = readLinkRef(call);
+    const target = ref ? readTargetLabel(call) : "";
+    // Split only when the rendered label really ends with the target: a row that
+    // fell back to grok's own title (nothing synthesized) stays plain text.
+    if (!target || !full.endsWith(target)) return;
+    // Off the editor the link acts on a CARRIER, and only a real tool row ever
+    // gets one — a subagent's row is painted by this same function (the row IS
+    // the label) and never does. Rendering a link there would give those hosts a
+    // control that looks clickable and does nothing. Decided by what the label
+    // IS, not where it sits: this runs BEFORE the label is appended to its row,
+    // so closest() would see nothing yet.
+    const carrierCapable = el.classList.contains("tool-item-label")
+      || el.classList.contains("tool-label");
+    if (readLinkMode() !== "file" && !carrierCapable) return;
+    el.textContent = full.slice(0, full.length - target.length);
+    const link = document.createElement("button");
+    link.type = "button";
+    link.className = "tool-label-ref";
+    link.textContent = target;
+    link.title = `Open ${ref.replace(/#L(\d+)-L(\d+)$/, " at lines $1-$2")}`;
+    link.onclick = (e) => {
+      e.stopPropagation(); // must not toggle the row or the group
+      const mode = readLinkMode();
+      if (mode === "file") {
+        vscode.postMessage({ type: "openFile", path: ref });
+        return;
+      }
+      // Both remaining hosts act on the carrier: the text the agent read, parked
+      // hidden in the row for exactly this (attachReadCarrier).
+      const row = el.closest && el.closest(".tool-item, .tool-flat");
+      const details = row && row.querySelector(".tool-item-details");
+      if (!details) return; // still reading — nothing to show yet
+      if (mode === "inline") {
+        details.hidden = !details.hidden;
+        link.classList.toggle("open", !details.hidden);
+        return;
+      }
+      const pre = details.querySelector(".tool-cmd-output");
+      if (pre) openPreviewOverlay({ kind: "text", content: pre.textContent });
+    };
+    el.appendChild(link);
   }
 
   // Category icon for a tool row (lucide outline; sized + colored by CSS via
@@ -8542,10 +8618,14 @@
       // attaches.
       const detailsEl = el.querySelector(".tool-item-details");
       if (detailsEl) {
+        // A carrier keeps its silence through the flatten: no chevron, no row
+        // toggle. Wiring one here would hand the row back the affordance the
+        // label link replaced (#122).
+        const carrier = detailsEl.classList.contains("tool-read-carrier");
         const chev = el.querySelector(".tool-item .tool-chevron");
-        if (chev) flat.appendChild(chev);
+        if (chev && !carrier) flat.appendChild(chev);
         flat.appendChild(detailsEl);
-        wireCommandToggle(flat, detailsEl);
+        if (!carrier) wireCommandToggle(flat, detailsEl);
       }
       el.replaceWith(flat);
       const fail = calls[0].toolCallId && state.toolFailuresById.get(calls[0].toolCallId);
@@ -8623,7 +8703,11 @@
     if (cmd) attachCommandDetails(item, cmd, call.toolCallId);
     else if (isReadTool(call) && !item.querySelector(".cmd-block")) {
       const path = String(toolFilePath(call) || "");
-      if (path || extractToolResultOutput(call)) attachCommandDetails(item, path, call.toolCallId);
+      const ref = readLinkRef(call);
+      if (ref && readLinkMode() !== "file") attachReadCarrier(item, path, call.toolCallId);
+      else if (!ref && (path || extractToolResultOutput(call))) {
+        attachCommandDetails(item, path, call.toolCallId);
+      }
     }
 
     hdr.innerHTML =
@@ -8641,7 +8725,8 @@
     // full command mid-run.
     el.classList.toggle(
       "cmd-single",
-      el._calls.length === 1 && !!(commandDetailText(call) || isReadTool(call)),
+      el._calls.length === 1
+        && !!(commandDetailText(call) || (isReadTool(call) && !readLinkRef(call))),
     );
     hdr.onclick = () => {
       const expanded = !body.hidden;
@@ -8661,6 +8746,12 @@
         }
       }
     };
+    // Settle the group NOW, not only at closeToolGroup. Every row carries its
+    // detail (a command's IN block) or its link (a Read row's path) from the
+    // moment it appears, so deferring this is what made "expand tool details"
+    // look like it only fired once the command had finished (#122). An explicit
+    // toggle on this group still wins.
+    if (!el._userToggled) setGroupExpanded(el, groupShouldExpand(el));
     scrollToBottom();
   }
 
@@ -8682,7 +8773,11 @@
   // `detailShouldExpand` is group-agnostic.
   function groupShouldExpand(el) {
     if (state.toolExpandOverride !== null) return state.toolExpandOverride;
-    return effectiveExpandCommandOutputs() && !!(el && el.querySelector(".has-details"));
+    // `.tool-label-ref` counts the same as a detail: a linked Read row carries
+    // its payload in the row itself (#122), so a read-only batch is worth
+    // opening even though it holds no detail box.
+    return effectiveExpandCommandOutputs()
+      && !!(el && el.querySelector(".has-details, .tool-label-ref"));
   }
   function detailShouldExpand() {
     if (state.toolExpandOverride !== null) return state.toolExpandOverride;
@@ -8876,6 +8971,23 @@
     requestAnimationFrame(syncOverflowAffordance);
   }
 
+  // A linked Read row's detail is a CARRIER, not an affordance: no chevron, no
+  // row toggle, hidden regardless of the expand setting. It exists only so the
+  // text the agent read is in the DOM for the label's link to act on — revealed
+  // in place on a remote, handed to the preview window on the desktop. The row's
+  // own path IS the control, which is the whole of #122.
+  function attachReadCarrier(item, path, toolCallId) {
+    const details = document.createElement("div");
+    details.className = "tool-item-details tool-read-carrier";
+    details.hidden = true;
+    const block = document.createElement("div");
+    block.className = "cmd-block";
+    details.appendChild(block);
+    item.appendChild(details);
+    // Same registration shape as attachCommandDetails, so the completed update
+    // fills it through the identical path.
+    state.pendingCommandDetails.push({ command: path, details, done: false, toolCallId });
+  }
   function attachCommandDetails(item, command, toolCallId) {
     // Chevron at the END of the (possibly ellipsized) command line: › when
     // collapsed, rotated to v while expanded.
@@ -8980,10 +9092,17 @@
     if (cmd && !item.querySelector(".cmd-block")) attachCommandDetails(item, cmd, id);
     else if (isReadTool(merged) && !item.querySelector(".cmd-block")) {
       const path = String(toolFilePath(merged) || "");
-      if (path || extractToolResultOutput(merged)) attachCommandDetails(item, path, id);
+      const ref = readLinkRef(merged);
+      if (ref && readLinkMode() !== "file") attachReadCarrier(item, path, id);
+      else if (!ref && (path || extractToolResultOutput(merged))) {
+        attachCommandDetails(item, path, id);
+      }
     }
     if (groupCalls && groupCalls.classList.contains("in-progress") && groupCalls._calls && groupCalls._calls.length === 1) {
-      groupCalls.classList.toggle("cmd-single", !!(cmd || isReadTool(merged)));
+      groupCalls.classList.toggle(
+        "cmd-single",
+        !!(cmd || (isReadTool(merged) && !readLinkRef(merged))),
+      );
     }
   }
 
@@ -9084,6 +9203,10 @@
     // path on the first tool_call and the result on a later one, so the update
     // that carries the text usually has no rawInput to read a path from.
     const rowCall = (state.toolItemsByToolCallId.get(id) || {})._call || call;
+    // On an editor host a linked Read row has no detail at all — its path and
+    // range ARE the affordance (#122). Elsewhere the carrier still gets filled,
+    // because the link needs that text to reveal or to hand to the preview.
+    if (readLinkRef(rowCall) && readLinkMode() === "file") return true;
     attachCommandOutput(
       entry.details,
       isReadTool(rowCall) ? { ...res, agentSawCut: false, openFileRef: readOpenFileRef(rowCall) } : res,

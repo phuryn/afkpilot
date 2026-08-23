@@ -2313,6 +2313,28 @@ body.thinking-hidden .msg.thinking { display: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* #122: a Read row's path + line range IS the link — no separate control below
+   it. Inline, so it still flows inside the label's single-line ellipsis; link
+   colour is the only marking, because the row around it is itself a toggle
+   target and must not read as one large link.
+   Deliberately NOT scoped to a container: the class is only ever created by
+   applyToolLabel, and a SUBAGENT row (.subagent-tool) carries one too. Scoping
+   it left that one an unstyled default <button> — borders, chrome font, the
+   lot — in a compact nowrap row. */
+.tool-label-ref {
+  display: inline;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+}
+.tool-label-ref:hover {
+  color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .tool-item-details {
   flex-basis: 100%;
   min-width: 0;
