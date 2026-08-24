@@ -1120,7 +1120,12 @@
       mcpError: "",
       mcpWarning: "",
       mcpConnectors: [],
-      routines: [],
+      // NULL, not []. Routines can legitimately be empty, so "no routines" and
+      // "the host has not answered yet" are different states and the page must
+      // not show the invitation while it is still the second one. The connector
+      // catalog gets away with treating empty as not-arrived because a fixed
+      // Tier-1 list is never legitimately empty; this one is.
+      routines: null,
       routineProjects: [],
       routineModels: [],
       routineError: "",
@@ -2027,7 +2032,14 @@
     lease.textContent = routinesHostNote(env);
     el.appendChild(lease);
 
-    const routines = Array.isArray(snapshot.routines) ? snapshot.routines : [];
+    const routines = Array.isArray(snapshot.routines) ? snapshot.routines : null;
+    if (!routines) {
+      const wait = document.createElement("div");
+      wait.className = "settings-routines-loading";
+      wait.textContent = "Loading routines…";
+      el.appendChild(wait);
+      return el;
+    }
 
     // The host answers every write with a fresh frame. One carrying no error is
     // a confirmed save, so the create form has done its job and must close —

@@ -1207,3 +1207,12 @@ textarea.settings-routine-prompt {
   max-width: 52ch;
   line-height: 1.55;
 }
+
+/* Shown until the host answers listRoutines. Distinct from the empty state:
+   "no routines yet" is an invitation, and showing it before we know is a lie
+   the reader may act on. */
+.settings-routines-loading {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  padding: 20px 2px;
+}
