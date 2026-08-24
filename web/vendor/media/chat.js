@@ -2763,7 +2763,14 @@
       snapshot: settingsSnapshot(),
       env: settingsEnv(),
       category: opts && opts.category,
-      post: (msg) => vscode.postMessage(msg),
+      post: (msg) => {
+        // A refused save never reaches the host, so the host never answers and
+        // the Routines page would sit there looking like the button did
+        // nothing. Remember that one is outstanding; the relay's refusal below
+        // is its answer.
+        if (msg && msg.type === "saveRoutine") state.routineSavePending = true;
+        vscode.postMessage(msg);
+      },
       apply: applySettingsChange,
       onLocal: (name) => {
         if (name === "explainRemote") showRemoteExplainer();
@@ -14388,6 +14395,8 @@
         refreshSettingsOverlay();
         break;
       case "routines":
+        // The host answered, so any refusal we were holding is stale.
+        state.routineSavePending = false;
         state.routines = Array.isArray(msg.entries) ? msg.entries : [];
         state.routineProjects = Array.isArray(msg.projects) ? msg.projects : [];
         state.routineModels = Array.isArray(msg.models) ? msg.models : [];
@@ -15629,6 +15638,17 @@
           });
         break;
       case "error":
+        // The relay bounces a quota-refused frame as a plain error, which
+        // renders in the transcript — behind the settings overlay the reader is
+        // looking at. At the paywall that made Create appear to do nothing, at
+        // exactly the moment being clear matters most. Attribute it to the save
+        // it answers and let the Routines page show it.
+        if (state.routineSavePending) {
+          state.routineSavePending = false;
+          state.routineError = msg.text || "That could not be saved.";
+          state.routineErrorId = "";
+          refreshSettingsOverlay();
+        }
         if (state.repoSwitchPending) {
           state.repoSwitchPending = false;
           setConversationLoading(false);

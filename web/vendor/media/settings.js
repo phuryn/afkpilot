@@ -1963,7 +1963,11 @@
       ),
     );
 
-    if (snapshot.routineError && (snapshot.routineErrorId || "") === (draft.id || "")) {
+    // An id-less error belongs to whichever form is open. The host names the
+    // routine it refused; a relay bounce cannot, because it never reached the
+    // host — and only one form is open at a time, so the open one is the asker.
+    const errorId = snapshot.routineErrorId || "";
+    if (snapshot.routineError && (!errorId || errorId === (draft.id || ""))) {
       const err = document.createElement("div");
       err.className = "settings-routine-error";
       err.textContent = snapshot.routineError;
