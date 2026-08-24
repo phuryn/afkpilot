@@ -1682,19 +1682,33 @@
   // Which row is open, and the draft being edited in it. Module-level so a
   // snapshot arriving mid-edit (another window saved something) re-renders the
   // list without throwing away what is half-typed here.
-  const ROUTINE_UI = { open: "", draft: null, confirmRemove: "" };
+  const ROUTINE_UI = { open: "", draft: null, confirmRemove: "", pendingSave: false };
   const NEW_ROUTINE = "__new__";
+
+  const PROVIDER_LABELS = { grok: "Grok", codex: "Codex", claude: "Claude" };
+  function providerLabel(provider) {
+    return PROVIDER_LABELS[provider] || provider;
+  }
+
+  /** First model of `provider`, else the first model at all. Mirrors the
+   *  composer: a new conversation in a project starts on that project default
+   *  provider, and a routine is a new conversation on a timer. */
+  function defaultModelFor(models, provider) {
+    return models.find(function (m) { return m.provider === provider; }) || models[0] || null;
+  }
 
   function blankRoutineDraft(snapshot) {
     const projects = Array.isArray(snapshot.routineProjects) ? snapshot.routineProjects : [];
     const models = Array.isArray(snapshot.routineModels) ? snapshot.routineModels : [];
+    const project = projects[0];
+    const pick = defaultModelFor(models, project && project.defaultProvider);
     return {
       id: "",
       title: "",
       prompt: "",
-      cwd: projects.length ? projects[0].cwd : "",
-      provider: models.length ? models[0].provider : "",
-      model: models.length ? models[0].model : "",
+      cwd: project ? project.cwd : "",
+      provider: pick ? pick.provider : "",
+      model: pick ? pick.model : "",
       every: 1,
       unit: "days",
       at: "09:00",
@@ -1869,12 +1883,22 @@
     const model = document.createElement("select");
     model.className = "settings-routine-input";
     model.dataset.field = "model";
+    // Grouped by provider. A native <select> cannot carry an icon, but an
+    // optgroup says the same thing and needs no custom dropdown.
+    let group = null;
+    let groupProvider = "";
     for (const m of models) {
+      if (m.provider !== groupProvider) {
+        groupProvider = m.provider;
+        group = document.createElement("optgroup");
+        group.label = providerLabel(m.provider);
+        model.appendChild(group);
+      }
       const opt = document.createElement("option");
-      opt.value = m.provider + " " + m.model;
+      opt.value = m.provider + " " + m.model;
       opt.textContent = m.label;
       if (m.provider === draft.provider && m.model === draft.model) opt.selected = true;
-      model.appendChild(opt);
+      (group || model).appendChild(opt);
     }
     pair.appendChild(
       labelledField(
@@ -1986,6 +2010,20 @@
     el.appendChild(lease);
 
     const routines = Array.isArray(snapshot.routines) ? snapshot.routines : [];
+
+    // The host answers every write with a fresh frame. One carrying no error is
+    // a confirmed save, so the create form has done its job and must close —
+    // left open with the same text it reads as "that did not work", and the
+    // second press creates a duplicate routine.
+    if (ROUTINE_UI.pendingSave && !snapshot.routineError) {
+      ROUTINE_UI.pendingSave = false;
+      if (ROUTINE_UI.open === NEW_ROUTINE) {
+        ROUTINE_UI.open = "";
+        ROUTINE_UI.draft = null;
+      }
+    } else if (ROUTINE_UI.pendingSave) {
+      ROUTINE_UI.pendingSave = false;
+    }
 
     if (!routines.length && ROUTINE_UI.open !== NEW_ROUTINE) {
       const empty = document.createElement("div");
@@ -2107,7 +2145,7 @@
         pause.textContent = routine.paused ? "Resume" : "Pause";
         const runNow = document.createElement("button");
         runNow.type = "button";
-        runNow.className = "settings-action settings-routine-run";
+        runNow.className = "settings-action settings-routine-run-now";
         runNow.textContent = "Run now";
         left.append(save, pause, runNow);
 
@@ -2431,8 +2469,13 @@
         // moving. Without them an expand or a unit switch computes the same
         // key and paint() returns early, so the click does nothing.
         routineOpen: ROUTINE_UI.open,
-        routineUnit: ROUTINE_UI.draft ? ROUTINE_UI.draft.unit : "",
         routineConfirm: ROUTINE_UI.confirmRemove,
+        // The draft fields that change the DOM STRUCTURE or a select's
+        // selected option. Deliberately not title/prompt: those change per
+        // keystroke, and repainting would rebuild the input under the caret.
+        routineDraft: ROUTINE_UI.draft
+          ? [ROUTINE_UI.draft.unit, ROUTINE_UI.draft.cwd, ROUTINE_UI.draft.provider, ROUTINE_UI.draft.model].join(" ")
+          : "",
       });
     }
 
@@ -2842,6 +2885,21 @@
         input.addEventListener("input", commit);
         input.addEventListener("change", () => {
           commit();
+          // Switching project re-picks the model the same way the composer
+          // does: each project has its own default provider, and carrying the
+          // previous project's model across is rarely what was meant.
+          if (input.dataset.field === "cwd" && ROUTINE_UI.draft) {
+            const projects = Array.isArray(snapshot.routineProjects) ? snapshot.routineProjects : [];
+            const models = Array.isArray(snapshot.routineModels) ? snapshot.routineModels : [];
+            const project = projects.find((x) => x.cwd === ROUTINE_UI.draft.cwd);
+            const pick = defaultModelFor(models, project && project.defaultProvider);
+            if (pick) {
+              ROUTINE_UI.draft.provider = pick.provider;
+              ROUTINE_UI.draft.model = pick.model;
+            }
+            paint();
+            return;
+          }
           // The days branch grows a time control, so this one has to repaint.
           if (input.dataset.field === "unit") paint();
         });
@@ -2878,6 +2936,7 @@
         btn.addEventListener("click", (e) => {
           e.stopPropagation();
           if (!ROUTINE_UI.draft) return;
+          ROUTINE_UI.pendingSave = true;
           post(draftToMessage(ROUTINE_UI.draft));
           // The host answers with a fresh `routines` frame; the draft stays
           // put so a refusal comes back to the text that caused it rather than
@@ -2893,7 +2952,7 @@
           post({ type: "setRoutinePaused", id, paused: !btn.dataset.paused });
         });
       });
-      body.querySelectorAll(".settings-routine-run").forEach((btn) => {
+      body.querySelectorAll(".settings-routine-run-now").forEach((btn) => {
         btn.addEventListener("click", (e) => {
           e.stopPropagation();
           const card = btn.closest(".settings-routine");

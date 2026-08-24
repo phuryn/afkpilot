@@ -1056,8 +1056,20 @@ textarea.settings-routine-prompt {
   font-variant-numeric: tabular-nums;
 }
 
+/* Never shrink below the rendered time. `.settings-routine-input` sets
+   `min-width: 0`, which inside this flex row let the control be squeezed until
+   "09:00 AM" and its clock icon were clipped — visible on a narrow window and
+   invisible on a wide one, which is why it survived the DOM tests. */
 .settings-routine-time {
   width: auto;
+  flex: 0 0 auto;
+  min-width: 8.5rem;
+}
+
+/* The footer buttons name single actions; none of them should wrap. "Run now"
+   did, but for a different reason — see the note on .settings-routine-run. */
+.settings-routine-foot .settings-action {
+  white-space: nowrap;
 }
 
 .settings-routine-error {
@@ -1081,6 +1093,9 @@ textarea.settings-routine-prompt {
   margin-bottom: 5px;
 }
 
+/* A run LOG ROW. The "Run now" button is `.settings-routine-run-now`, and the
+   two must not share a prefix-matched class: they briefly did, so this grid
+   laid out the button's label and split it across two of these columns. */
 .settings-routine-run {
   display: grid;
   grid-template-columns: 10px 104px minmax(0, 1fr);
