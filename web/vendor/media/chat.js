@@ -2637,6 +2637,11 @@
       mcpError: state.mcpError,
       mcpWarning: state.mcpWarning,
       mcpConnectors: state.mcpConnectors,
+      routines: state.routines,
+      routineProjects: state.routineProjects,
+      routineModels: state.routineModels,
+      routineError: state.routineError,
+      routineErrorId: state.routineErrorId,
     };
   }
 

@@ -112,6 +112,7 @@
     notion: true,
     sentry: true,
     stripe: true,
+    zapier: true,
   };
   const GITHUB_ISSUE_BUG_URL = GITHUB_REPO_URL + "/issues/new?labels=bug";
   const GITHUB_ISSUE_FEATURE_URL = GITHUB_REPO_URL + "/issues/new?labels=enhancement";
@@ -1866,7 +1867,14 @@
       model.appendChild(opt);
     }
     pair.appendChild(
-      labelledField("Model", model, models.length ? "Only connected models are listed." : "No model is connected."),
+      labelledField(
+        "Model",
+        model,
+        // "No model" would be wrong twice over: a provider with no cached
+        // model list still offers its default, so an empty list can only mean
+        // no PROVIDER is connected at all.
+        models.length ? "Only connected models are listed." : "No provider connected.",
+      ),
     );
     body.appendChild(pair);
 
