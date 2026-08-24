@@ -13,6 +13,9 @@
     { id: "voice", title: "Voice", restore: true },
     { id: "notifications", title: "Notifications", restore: true },
     { id: "providers", title: "Providers", restore: false },
+    // Things you have SET UP, next to the other things you have set up —
+    // apart from General/Voice/Notifications, which are preferences.
+    { id: "routines", title: "Routines", restore: false },
     { id: "connectors", title: "Connectors", restore: false },
     // "Remote control" rather than "Account": the page is about driving this
     // desk from a phone or browser — linking, the device list, the AFK Pilot
@@ -31,6 +34,9 @@
     notifications: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
     providers: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>',
     connectors: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>',
+    // Lucide "refresh-cw" — a cycle, which is what a routine is. Deliberately
+    // not a clock: the page is about repetition, not time of day.
+    routines: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>',
     // The lucide phone the top bar uses for Continue remotely (chat.js ICON
     // .smartphone). Same shape on both so the nav row and the button read as
     // one feature — which is the point of calling this page Remote control.
@@ -628,6 +634,13 @@
       message: () => ({ type: "openProjectConfig" }),
     },
     {
+      id: "routinesList",
+      category: "routines",
+      title: "Routines",
+      description: "Send the same prompt to a project on a schedule. Each run opens a session you can read later.",
+      kind: "routines",
+    },
+    {
       id: "connectorsCatalog",
       category: "connectors",
       title: "Connectors",
@@ -1106,6 +1119,11 @@
       mcpError: "",
       mcpWarning: "",
       mcpConnectors: [],
+      routines: [],
+      routineProjects: [],
+      routineModels: [],
+      routineError: "",
+      routineErrorId: "",
       ...(partial || {}),
     };
   }
@@ -1648,9 +1666,458 @@
     return el;
   }
 
+  /* ----------------------------------------------------------- routines */
+
+  // Which row is open, and the draft being edited in it. Module-level so a
+  // snapshot arriving mid-edit (another window saved something) re-renders the
+  // list without throwing away what is half-typed here.
+  const ROUTINE_UI = { open: "", draft: null, confirmRemove: "" };
+  const NEW_ROUTINE = "__new__";
+
+  function blankRoutineDraft(snapshot) {
+    const projects = Array.isArray(snapshot.routineProjects) ? snapshot.routineProjects : [];
+    const models = Array.isArray(snapshot.routineModels) ? snapshot.routineModels : [];
+    return {
+      id: "",
+      title: "",
+      prompt: "",
+      cwd: projects.length ? projects[0].cwd : "",
+      provider: models.length ? models[0].provider : "",
+      model: models.length ? models[0].model : "",
+      every: 1,
+      unit: "days",
+      at: "09:00",
+    };
+  }
+
+  function routineDraftFrom(routine) {
+    return {
+      id: routine.id,
+      title: routine.title,
+      prompt: routine.prompt,
+      cwd: routine.cwd,
+      provider: routine.provider,
+      model: routine.model,
+      every: routine.cadence.every,
+      unit: routine.cadence.unit,
+      at: routine.cadence.at || "09:00",
+    };
+  }
+
+  function draftToMessage(draft) {
+    const cadence = { every: Number(draft.every) || 1, unit: draft.unit };
+    if (draft.unit === "days") cadence.at = draft.at || "09:00";
+    return {
+      type: "saveRoutine",
+      ...(draft.id ? { id: draft.id } : {}),
+      draft: {
+        title: draft.title,
+        prompt: draft.prompt,
+        cwd: draft.cwd,
+        provider: draft.provider,
+        model: draft.model,
+        cadence,
+      },
+    };
+  }
+
+  /**
+   * "in 42m" / "in 6h 12m" / "in 3d 4h". Floors rather than rounds, so a
+   * countdown never claims more time than is left.
+   *
+   * Deliberately duplicated rather than shared: the VS Code settings TAB loads
+   * this file and nothing else, so it cannot reach webview-helpers.js. Pinned
+   * by test/settings-routines.dom.test.ts along with its sibling.
+   */
+  function formatRoutineCountdown(ms) {
+    if (!Number.isFinite(ms)) return "";
+    if (ms <= 0) return "due now";
+    const mins = Math.floor(ms / 60000);
+    if (mins < 60) return "in " + Math.max(1, mins) + "m";
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) {
+      const rem = mins % 60;
+      return rem ? "in " + hours + "h " + rem + "m" : "in " + hours + "h";
+    }
+    const days = Math.floor(hours / 24);
+    const remH = hours % 24;
+    return remH ? "in " + days + "d " + remH + "h" : "in " + days + "d";
+  }
+
+  function routineRunLabel(run) {
+    if (run.outcome === "ran") return "Ran";
+    if (run.outcome === "running") return "Running now";
+    if (run.outcome === "skipped") return run.detail || "Skipped";
+    if (run.outcome === "interrupted") return run.detail || "Interrupted";
+    return run.detail || "Failed";
+  }
+
+  function routineRunTime(run) {
+    try {
+      return new Date(run.startedAt).toLocaleString(undefined, {
+        month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+      });
+    } catch (_) {
+      return "";
+    }
+  }
+
+  /** The run strip — the health signal, and the only place this page spends any
+   *  boldness. State is carried by HEIGHT and WIDTH as well as hue, so it
+   *  survives a greyscale screenshot and a colourblind reader. */
+  function renderRoutineStrip(routine) {
+    const strip = document.createElement("span");
+    strip.className = "settings-routine-strip";
+    const runs = (routine.runs || []).slice().reverse(); // oldest left, newest right
+    for (const run of runs) {
+      const tick = document.createElement("button");
+      tick.type = "button";
+      tick.className = "settings-routine-tick is-" + run.outcome;
+      tick.title = routineRunLabel(run) + " · " + routineRunTime(run);
+      tick.setAttribute("aria-label", tick.title);
+      if (run.sessionId) {
+        tick.dataset.session = run.sessionId;
+        tick.dataset.cwd = routine.cwd;
+      }
+      strip.appendChild(tick);
+    }
+    const count = document.createElement("span");
+    count.className = "settings-routine-count";
+    const health = routine.health || { ran: 0, total: 0 };
+    count.textContent = health.total ? health.ran + "/" + health.total : "no runs yet";
+    const wrap = document.createElement("span");
+    wrap.className = "settings-routine-strip-wrap";
+    wrap.append(strip, count);
+    return wrap;
+  }
+
+  function labelledField(labelText, control, hintText) {
+    const field = document.createElement("label");
+    field.className = "settings-routine-field";
+    const label = document.createElement("span");
+    label.className = "settings-routine-label";
+    label.textContent = labelText;
+    field.append(label, control);
+    if (hintText) {
+      const hint = document.createElement("span");
+      hint.className = "settings-routine-hint";
+      hint.textContent = hintText;
+      field.appendChild(hint);
+    }
+    return field;
+  }
+
+  function renderRoutineForm(draft, snapshot, isNew) {
+    const body = document.createElement("div");
+    body.className = "settings-routine-body";
+
+    const name = document.createElement("input");
+    name.type = "text";
+    name.className = "settings-routine-input";
+    name.value = draft.title;
+    name.placeholder = "Morning brief";
+    name.dataset.field = "title";
+    body.appendChild(labelledField("Name", name));
+
+    const prompt = document.createElement("textarea");
+    prompt.className = "settings-routine-input settings-routine-prompt";
+    prompt.value = draft.prompt;
+    prompt.rows = 4;
+    prompt.placeholder = "Summarise what changed in this repo since your last run.";
+    prompt.dataset.field = "prompt";
+    body.appendChild(
+      labelledField("Prompt", prompt, "Sent as the first message of a new session."),
+    );
+
+    const pair = document.createElement("div");
+    pair.className = "settings-routine-pair";
+
+    const projects = Array.isArray(snapshot.routineProjects) ? snapshot.routineProjects : [];
+    const project = document.createElement("select");
+    project.className = "settings-routine-input";
+    project.dataset.field = "cwd";
+    for (const p of projects) {
+      const opt = document.createElement("option");
+      opt.value = p.cwd;
+      opt.textContent = p.archived ? p.label + " (archived)" : p.label;
+      if (p.cwd === draft.cwd) opt.selected = true;
+      project.appendChild(opt);
+    }
+    if (!projects.some((p) => p.cwd === draft.cwd) && draft.cwd) {
+      const opt = document.createElement("option");
+      opt.value = draft.cwd;
+      opt.textContent = draft.cwd + " (unavailable)";
+      opt.selected = true;
+      project.appendChild(opt);
+    }
+    pair.appendChild(labelledField("Project", project));
+
+    const models = Array.isArray(snapshot.routineModels) ? snapshot.routineModels : [];
+    const model = document.createElement("select");
+    model.className = "settings-routine-input";
+    model.dataset.field = "model";
+    for (const m of models) {
+      const opt = document.createElement("option");
+      opt.value = m.provider + " " + m.model;
+      opt.textContent = m.label;
+      if (m.provider === draft.provider && m.model === draft.model) opt.selected = true;
+      model.appendChild(opt);
+    }
+    pair.appendChild(
+      labelledField("Model", model, models.length ? "Only connected models are listed." : "No model is connected."),
+    );
+    body.appendChild(pair);
+
+    const cadence = document.createElement("div");
+    cadence.className = "settings-routine-cadence";
+    const every = document.createElement("span");
+    every.className = "settings-routine-word";
+    every.textContent = "Every";
+    const count = document.createElement("input");
+    count.type = "number";
+    count.min = "1";
+    count.className = "settings-routine-input settings-routine-count-input";
+    count.value = String(draft.every);
+    count.dataset.field = "every";
+    const unit = document.createElement("select");
+    unit.className = "settings-routine-input";
+    unit.dataset.field = "unit";
+    for (const u of ["minutes", "hours", "days"]) {
+      const opt = document.createElement("option");
+      opt.value = u;
+      opt.textContent = u;
+      if (u === draft.unit) opt.selected = true;
+      unit.appendChild(opt);
+    }
+    cadence.append(every, count, unit);
+    if (draft.unit === "days") {
+      const at = document.createElement("span");
+      at.className = "settings-routine-word";
+      at.textContent = "at";
+      const time = document.createElement("input");
+      time.type = "time";
+      time.className = "settings-routine-input settings-routine-time";
+      time.value = draft.at || "09:00";
+      time.dataset.field = "at";
+      cadence.append(at, time);
+    }
+    body.appendChild(
+      labelledField(
+        "Cadence",
+        cadence,
+        draft.unit === "days"
+          ? "Anchored to the clock, so it holds through daylight saving."
+          : "At most once every 15 minutes.",
+      ),
+    );
+
+    if (snapshot.routineError && (snapshot.routineErrorId || "") === (draft.id || "")) {
+      const err = document.createElement("div");
+      err.className = "settings-routine-error";
+      err.textContent = snapshot.routineError;
+      body.appendChild(err);
+    }
+    return body;
+  }
+
+  function renderRoutineRuns(routine) {
+    const wrap = document.createElement("div");
+    wrap.className = "settings-routine-runs";
+    const head = document.createElement("div");
+    head.className = "settings-routine-runs-head";
+    head.textContent = routine.runs.length
+      ? "Last " + routine.runs.length + (routine.runs.length === 1 ? " run" : " runs")
+      : "No runs yet";
+    wrap.appendChild(head);
+    for (const run of routine.runs) {
+      const line = document.createElement("div");
+      line.className = "settings-routine-run is-" + run.outcome;
+      const bar = document.createElement("span");
+      bar.className = "settings-routine-run-bar";
+      const when = document.createElement("time");
+      when.textContent = routineRunTime(run);
+      const what = document.createElement("span");
+      what.className = "settings-routine-run-what";
+      if (run.sessionId && run.outcome === "ran") {
+        const link = document.createElement("button");
+        link.type = "button";
+        link.className = "settings-routine-open";
+        link.dataset.session = run.sessionId;
+        link.dataset.cwd = routine.cwd;
+        link.textContent = "Ran — open session";
+        what.appendChild(link);
+      } else {
+        what.textContent = routineRunLabel(run);
+      }
+      line.append(bar, when, what);
+      wrap.appendChild(line);
+    }
+    return wrap;
+  }
+
+  function renderRoutines(snapshot) {
+    const el = document.createElement("div");
+    el.className = "settings-routines";
+    el.dataset.id = "routinesList";
+
+    const lease = document.createElement("div");
+    lease.className = "settings-routines-note";
+    lease.textContent = "Routines run whenever a window is open. Nothing runs while they are all closed.";
+    el.appendChild(lease);
+
+    const routines = Array.isArray(snapshot.routines) ? snapshot.routines : [];
+
+    if (!routines.length && ROUTINE_UI.open !== NEW_ROUTINE) {
+      const empty = document.createElement("div");
+      empty.className = "settings-routines-empty";
+      const h = document.createElement("div");
+      h.className = "settings-routines-empty-title";
+      h.textContent = "No routines yet";
+      const p = document.createElement("div");
+      p.className = "settings-routines-empty-copy";
+      p.textContent =
+        "A routine sends one prompt to one project on a schedule you set — a morning summary of what changed, or a weekly dependency check. Each run becomes a session, and the last twenty stay here so you can see it working.";
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "settings-action settings-routine-new";
+      add.textContent = "New routine";
+      empty.append(h, p, add);
+      el.appendChild(empty);
+      return el;
+    }
+
+    const list = document.createElement("div");
+    list.className = "settings-routines-list";
+
+    if (ROUTINE_UI.open === NEW_ROUTINE) {
+      const draft = ROUTINE_UI.draft || blankRoutineDraft(snapshot);
+      ROUTINE_UI.draft = draft;
+      const card = document.createElement("div");
+      card.className = "settings-routine is-open is-new";
+      card.dataset.routine = NEW_ROUTINE;
+      const head = document.createElement("div");
+      head.className = "settings-routine-head";
+      const title = document.createElement("span");
+      title.className = "settings-routine-name";
+      title.textContent = "New routine";
+      head.appendChild(title);
+      card.appendChild(head);
+      card.appendChild(renderRoutineForm(draft, snapshot, true));
+      const foot = document.createElement("div");
+      foot.className = "settings-routine-foot";
+      const save = document.createElement("button");
+      save.type = "button";
+      save.className = "settings-action is-primary settings-routine-save";
+      save.textContent = "Create routine";
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "settings-action settings-routine-cancel";
+      cancel.textContent = "Cancel";
+      foot.append(save, cancel);
+      card.appendChild(foot);
+      list.appendChild(card);
+    }
+
+    for (const routine of routines) {
+      const open = ROUTINE_UI.open === routine.id;
+      const card = document.createElement("div");
+      card.className =
+        "settings-routine" + (open ? " is-open" : "") + (routine.paused ? " is-paused" : "");
+      card.dataset.routine = routine.id;
+
+      const head = document.createElement("button");
+      head.type = "button";
+      head.className = "settings-routine-head settings-routine-toggle";
+      head.setAttribute("aria-expanded", open ? "true" : "false");
+
+      const ident = document.createElement("span");
+      ident.className = "settings-routine-ident";
+      const name = document.createElement("span");
+      name.className = "settings-routine-name";
+      name.textContent = routine.title;
+      if (routine.paused) {
+        const tag = document.createElement("span");
+        tag.className = "settings-routine-tag";
+        tag.textContent = "Paused";
+        name.appendChild(tag);
+      }
+      const meta = document.createElement("span");
+      meta.className = "settings-routine-meta";
+      const bits = [routine.projectLabel, routine.cadenceLabel];
+      const modelRow = (Array.isArray(snapshot.routineModels) ? snapshot.routineModels : []).find(
+        (m) => m.provider === routine.provider && m.model === routine.model,
+      );
+      bits.push(modelRow ? modelRow.label : routine.model);
+      meta.textContent = bits.join(" · ");
+      ident.append(name, meta);
+
+      const next = document.createElement("span");
+      next.className = "settings-routine-next";
+      next.textContent = routine.paused ? "Paused" : formatRoutineCountdown(routine.nextRunAt - Date.now());
+
+      const chev = document.createElement("span");
+      chev.className = "settings-routine-chev";
+      chev.setAttribute("aria-hidden", "true");
+      chev.innerHTML =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>';
+
+      head.append(ident, renderRoutineStrip(routine), next, chev);
+      card.appendChild(head);
+
+      if (open) {
+        const draft = ROUTINE_UI.draft && ROUTINE_UI.draft.id === routine.id
+          ? ROUTINE_UI.draft
+          : routineDraftFrom(routine);
+        ROUTINE_UI.draft = draft;
+        card.appendChild(renderRoutineForm(draft, snapshot, false));
+        card.appendChild(renderRoutineRuns(routine));
+
+        const foot = document.createElement("div");
+        foot.className = "settings-routine-foot";
+        const left = document.createElement("span");
+        left.className = "settings-routine-foot-left";
+        const save = document.createElement("button");
+        save.type = "button";
+        save.className = "settings-action is-primary settings-routine-save";
+        save.textContent = "Save changes";
+        const pause = document.createElement("button");
+        pause.type = "button";
+        pause.className = "settings-action settings-routine-pause";
+        pause.dataset.paused = routine.paused ? "1" : "";
+        pause.textContent = routine.paused ? "Resume" : "Pause";
+        const runNow = document.createElement("button");
+        runNow.type = "button";
+        runNow.className = "settings-action settings-routine-run";
+        runNow.textContent = "Run now";
+        left.append(save, pause, runNow);
+
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "settings-action is-danger settings-routine-remove";
+        remove.textContent =
+          ROUTINE_UI.confirmRemove === routine.id ? "Remove for good" : "Remove";
+        foot.append(left, remove);
+        card.appendChild(foot);
+      }
+      list.appendChild(card);
+    }
+
+    el.appendChild(list);
+
+    if (ROUTINE_UI.open !== NEW_ROUTINE) {
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "settings-action settings-routine-new";
+      add.textContent = "New routine";
+      el.appendChild(add);
+    }
+    return el;
+  }
+
   function renderRow(row, snapshot, env, keyForm) {
     if (row.kind === "mcp") return renderMcpCatalog(snapshot, env);
     if (row.kind === "connectors") return renderConnectorsCatalog(snapshot, env, keyForm);
+    if (row.kind === "routines") return renderRoutines(snapshot);
     const el = document.createElement("div");
     el.className = "settings-row";
     el.dataset.id = row.id;
@@ -1781,6 +2248,7 @@
     let aboutChecked = false;
     let providersChecked = false;
     let mcpChecked = false;
+    let routinesChecked = false;
     const post = typeof opts.post === "function" ? opts.post : () => {};
     const apply = typeof opts.apply === "function" ? opts.apply : null;
     const onLocal = typeof opts.onLocal === "function" ? opts.onLocal : null;
@@ -1902,6 +2370,12 @@
       post({ type: "listMcpServers" });
     }
 
+    function maybeRefreshRoutines() {
+      if (routinesChecked || categoryId !== "routines" || query.trim()) return;
+      routinesChecked = true;
+      post({ type: "listRoutines" });
+    }
+
     function maybeRefreshMcp() {
       if (mcpChecked || categoryId !== "connectors" || query.trim()) return;
       mcpChecked = true;
@@ -1932,6 +2406,13 @@
         pendingRestore: pendingRestore ? pendingRestore.map((row) => row.id) : null,
         phoneNav,
         keyFormId: keyForm.id,
+        // Which routine is open, and which unit its cadence is on — the two
+        // pieces of local state that change the DOM without the snapshot
+        // moving. Without them an expand or a unit switch computes the same
+        // key and paint() returns early, so the click does nothing.
+        routineOpen: ROUTINE_UI.open,
+        routineUnit: ROUTINE_UI.draft ? ROUTINE_UI.draft.unit : "",
+        routineConfirm: ROUTINE_UI.confirmRemove,
       });
     }
 
@@ -1941,6 +2422,7 @@
       maybeCheckAbout();
       maybeRefreshProviders();
       maybeRefreshMcp();
+      maybeRefreshRoutines();
       const key = paintKey();
       if (key === lastPaintedKey && container.firstChild) {
         paintDeferred = false;
@@ -2166,6 +2648,7 @@
         if (next !== "about") aboutChecked = false;
         if (next !== "providers") providersChecked = false;
         if (next !== "connectors") mcpChecked = false;
+        if (next !== "routines") routinesChecked = false;
         categoryId = next;
         query = "";
         dismissRestoreConfirm();
@@ -2320,6 +2803,113 @@
           if (submit) submit.click();
         });
       });
+      // ---- routines ----
+      // Field edits update the draft WITHOUT repainting: a repaint on every
+      // keystroke would rebuild the input and lose the caret. Only structural
+      // changes (open/close, unit switch, save) paint.
+      body.querySelectorAll(".settings-routine-body [data-field]").forEach((input) => {
+        const commit = () => {
+          if (!ROUTINE_UI.draft) return;
+          const field = input.dataset.field;
+          if (field === "model") {
+            const [provider, ...rest] = String(input.value || "").split(" ");
+            ROUTINE_UI.draft.provider = provider;
+            ROUTINE_UI.draft.model = rest.join(" ");
+            return;
+          }
+          ROUTINE_UI.draft[field] = field === "every" ? Number(input.value) || 1 : input.value;
+        };
+        input.addEventListener("input", commit);
+        input.addEventListener("change", () => {
+          commit();
+          // The days branch grows a time control, so this one has to repaint.
+          if (input.dataset.field === "unit") paint();
+        });
+      });
+      body.querySelectorAll(".settings-routine-toggle").forEach((head) => {
+        head.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const card = head.closest(".settings-routine");
+          const id = card && card.dataset.routine;
+          if (!id) return;
+          ROUTINE_UI.open = ROUTINE_UI.open === id ? "" : id;
+          ROUTINE_UI.draft = null;
+          ROUTINE_UI.confirmRemove = "";
+          paint();
+        });
+      });
+      body.querySelectorAll(".settings-routine-new").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          ROUTINE_UI.open = NEW_ROUTINE;
+          ROUTINE_UI.draft = blankRoutineDraft(snapshot);
+          paint();
+        });
+      });
+      body.querySelectorAll(".settings-routine-cancel").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          ROUTINE_UI.open = "";
+          ROUTINE_UI.draft = null;
+          paint();
+        });
+      });
+      body.querySelectorAll(".settings-routine-save").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (!ROUTINE_UI.draft) return;
+          post(draftToMessage(ROUTINE_UI.draft));
+          // The host answers with a fresh `routines` frame; the draft stays
+          // put so a refusal comes back to the text that caused it rather than
+          // to a blank form.
+        });
+      });
+      body.querySelectorAll(".settings-routine-pause").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const card = btn.closest(".settings-routine");
+          const id = card && card.dataset.routine;
+          if (!id) return;
+          post({ type: "setRoutinePaused", id, paused: !btn.dataset.paused });
+        });
+      });
+      body.querySelectorAll(".settings-routine-run").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const card = btn.closest(".settings-routine");
+          const id = card && card.dataset.routine;
+          if (!id) return;
+          post({ type: "runRoutineNow", id });
+        });
+      });
+      body.querySelectorAll(".settings-routine-remove").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const card = btn.closest(".settings-routine");
+          const id = card && card.dataset.routine;
+          if (!id) return;
+          // Two clicks, and the second one says what it does. A routine is
+          // cheap to rebuild but its run history is not.
+          if (ROUTINE_UI.confirmRemove !== id) {
+            ROUTINE_UI.confirmRemove = id;
+            paint();
+            return;
+          }
+          ROUTINE_UI.confirmRemove = "";
+          ROUTINE_UI.open = "";
+          ROUTINE_UI.draft = null;
+          post({ type: "deleteRoutine", id });
+        });
+      });
+      body.querySelectorAll(".settings-routine-open, .settings-routine-tick[data-session]").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const id = btn.dataset.session;
+          if (!id) return;
+          if (onClose && !opts.standalone) onClose();
+          post({ type: "resumeSession", id, cwd: btn.dataset.cwd || undefined });
+        });
+      });
       body.querySelectorAll(".settings-connector-readonly-input").forEach((box) => {
         box.addEventListener("change", () => {
           if (env.isRemote || box.disabled) return;
@@ -2440,6 +3030,7 @@
         if (id !== "about") aboutChecked = false;
         if (id !== "providers") providersChecked = false;
         if (id !== "connectors") mcpChecked = false;
+        if (id !== "routines") routinesChecked = false;
         categoryId = id || "general";
         query = "";
         dismissRestoreConfirm();
@@ -2493,6 +3084,8 @@
     applyValue,
     defaultEnv,
     defaultSnapshot,
+    formatRoutineCountdown,
+    routineRunLabel,
     mount,
   };
 

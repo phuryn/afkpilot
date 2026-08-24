@@ -782,3 +782,413 @@ body.settings-page .settings-surface {
     min-width: 0;
   }
 }
+
+/* ---------------------------------------------------------------- routines
+   The collapsed row answers "is it healthy, when does it next run" without
+   being opened; everything you only want while editing lives behind the
+   chevron. Tokens only, same as the rest of this file. */
+
+.settings-routines {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-routines-note {
+  font-size: 11.5px;
+  color: var(--vscode-descriptionForeground);
+  border: 1px solid var(--vscode-panel-border, var(--vscode-editorWidget-border));
+  border-radius: 4px;
+  padding: 7px 10px;
+  background: color-mix(in oklab, var(--vscode-foreground) 3%, transparent);
+}
+
+.settings-routines-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-routine {
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--vscode-foreground) 3%, transparent);
+  overflow: hidden;
+}
+
+.settings-routine.is-paused {
+  background: transparent;
+}
+
+.settings-routine-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 10px 12px;
+  background: none;
+  border: 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+button.settings-routine-head {
+  cursor: pointer;
+}
+
+button.settings-routine-head:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+button.settings-routine-head:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: -2px;
+}
+
+.settings-routine-ident {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-routine-name {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.settings-routine.is-paused .settings-routine-name {
+  color: var(--vscode-descriptionForeground);
+}
+
+.settings-routine-tag {
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border));
+  color: var(--vscode-descriptionForeground);
+}
+
+.settings-routine-meta {
+  font-size: 11.5px;
+  color: var(--vscode-descriptionForeground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-routine-next {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.settings-routine-chev {
+  display: flex;
+  color: var(--vscode-descriptionForeground);
+  transition: transform 0.16s ease;
+}
+
+.settings-routine.is-open .settings-routine-chev {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-routine-chev {
+    transition: none;
+  }
+}
+
+/* The run strip. State is carried by HEIGHT and WIDTH as well as hue, so it
+   survives a greyscale screenshot and a colourblind reader. */
+
+.settings-routine-strip-wrap {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.settings-routine-strip {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 18px;
+}
+
+.settings-routine-tick {
+  width: 4px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 1px;
+  display: block;
+  background: var(--vscode-charts-green, #89d185);
+}
+
+.settings-routine-tick[data-session] {
+  cursor: pointer;
+}
+
+.settings-routine-tick:hover {
+  filter: brightness(1.25);
+}
+
+.settings-routine-tick:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.settings-routine-tick.is-skipped {
+  height: 40%;
+  background: color-mix(in oklab, var(--vscode-descriptionForeground) 60%, transparent);
+}
+
+.settings-routine-tick.is-failed,
+.settings-routine-tick.is-interrupted {
+  width: 5px;
+  background: var(--vscode-errorForeground, #f14c4c);
+}
+
+.settings-routine-tick.is-running {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--vscode-input-border, var(--vscode-editorWidget-border)) 0 2px,
+    transparent 2px 4px
+  );
+}
+
+/* The newest run carries a ring, so "most recent" never has to be inferred. */
+.settings-routine-tick:last-child {
+  box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--vscode-foreground) 30%, transparent);
+}
+
+.settings-routine.is-paused .settings-routine-tick {
+  opacity: 0.4;
+}
+
+.settings-routine-count {
+  font-size: 10.5px;
+  color: var(--vscode-descriptionForeground);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.settings-routine-body {
+  border-top: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  padding: 14px 12px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-routine-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.settings-routine-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+}
+
+.settings-routine-hint {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.settings-routine-input {
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border));
+  border-radius: 4px;
+  padding: 5px 8px;
+  min-width: 0;
+}
+
+.settings-routine-input:focus {
+  outline: none;
+  border-color: var(--vscode-focusBorder);
+  box-shadow: 0 0 0 1px var(--vscode-focusBorder);
+}
+
+textarea.settings-routine-prompt {
+  resize: vertical;
+  min-height: 72px;
+  line-height: 1.5;
+  font-family: inherit;
+}
+
+.settings-routine-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.settings-routine-cadence {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.settings-routine-word {
+  font-size: 12.5px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.settings-routine-count-input {
+  width: 62px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-routine-time {
+  width: auto;
+}
+
+.settings-routine-error {
+  font-size: 12px;
+  color: var(--vscode-errorForeground, #f14c4c);
+  border: 1px solid color-mix(in oklab, var(--vscode-errorForeground, #f14c4c) 40%, transparent);
+  border-radius: 4px;
+  padding: 6px 9px;
+}
+
+.settings-routine-runs {
+  padding: 4px 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.settings-routine-runs-head {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 5px;
+}
+
+.settings-routine-run {
+  display: grid;
+  grid-template-columns: 10px 104px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 4px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.settings-routine-run:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.settings-routine-run-bar {
+  width: 3px;
+  height: 12px;
+  border-radius: 1px;
+  background: var(--vscode-charts-green, #89d185);
+}
+
+.settings-routine-run.is-skipped .settings-routine-run-bar {
+  height: 6px;
+  background: color-mix(in oklab, var(--vscode-descriptionForeground) 60%, transparent);
+}
+
+.settings-routine-run.is-failed .settings-routine-run-bar,
+.settings-routine-run.is-interrupted .settings-routine-run-bar {
+  background: var(--vscode-errorForeground, #f14c4c);
+}
+
+.settings-routine-run time {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-routine-run-what {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-routine-run.is-skipped .settings-routine-run-what,
+.settings-routine-run.is-failed .settings-routine-run-what,
+.settings-routine-run.is-interrupted .settings-routine-run-what {
+  color: var(--vscode-descriptionForeground);
+}
+
+.settings-routine-open {
+  font: inherit;
+  font-size: 12px;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+}
+
+.settings-routine-open:hover {
+  text-decoration: underline;
+}
+
+.settings-routine-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 12px;
+}
+
+.settings-routine-foot-left {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-action.is-primary {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: var(--vscode-button-border, transparent);
+}
+
+.settings-action.is-danger {
+  color: var(--vscode-errorForeground, #f14c4c);
+  border-color: color-mix(in oklab, var(--vscode-errorForeground, #f14c4c) 40%, transparent);
+}
+
+.settings-routines-empty {
+  border: 1px dashed var(--vscode-input-border, var(--vscode-editorWidget-border));
+  border-radius: 5px;
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.settings-routines-empty-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-routines-empty-copy {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  max-width: 52ch;
+  line-height: 1.55;
+}

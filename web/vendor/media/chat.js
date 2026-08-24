@@ -14382,6 +14382,14 @@
         state.mcpConnectors = Array.isArray(msg.connectors) ? msg.connectors : [];
         refreshSettingsOverlay();
         break;
+      case "routines":
+        state.routines = Array.isArray(msg.entries) ? msg.entries : [];
+        state.routineProjects = Array.isArray(msg.projects) ? msg.projects : [];
+        state.routineModels = Array.isArray(msg.models) ? msg.models : [];
+        state.routineError = msg.error || "";
+        state.routineErrorId = msg.errorId || "";
+        refreshSettingsOverlay();
+        break;
       case "codexInstallProgress":
         state.codexInstall = {
           phase: msg.phase || "idle",
