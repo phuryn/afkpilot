@@ -28,6 +28,9 @@
 
   // Lucide-style stroke icons — same language as chat.js ICON. Labels stay
   // visible; color comes from the nav-item theme tokens.
+  /** Longest a repaint may wait on a focused nav select before flushing. */
+  const DEFERRED_PAINT_MS = 1200;
+
   const NAV_ICONS = {
     general: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg>',
     voice: '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>',
@@ -2346,6 +2349,7 @@
     let phoneNav = matchPhoneNav(container.ownerDocument);
     let lastPaintedKey = "";
     let paintDeferred = false;
+    let deferredPaintTimer = null;
 
     const modal = !opts.standalone;
     container.classList.add("settings-surface");
@@ -2525,6 +2529,7 @@
       }
       lastPaintedKey = key;
       paintDeferred = false;
+      if (deferredPaintTimer) { clearTimeout(deferredPaintTimer); deferredPaintTimer = null; }
       const focus = chrome.focus;
       const searching = !!query.trim();
       const shownCats = cats();
@@ -3120,12 +3125,32 @@
 
     container._onKey = onKey;
     document.addEventListener("keydown", onKey, true);
-    container.addEventListener("blur", (e) => {
+    // A deferred paint used to wait for exactly one event: the nav select
+    // losing focus. But `navMenuOpen` is true whenever that select merely HAS
+    // focus, and picking a category leaves it focused — so on a phone every
+    // frame that arrived afterwards was deferred and nothing flushed it. The
+    // page sat on "Loading routines…" (and "Loading Grok connectors…" before
+    // that) until the reader touched the screen for an unrelated reason.
+    //
+    // So: flush on `change` as well, which fires when the dropdown closes with
+    // a selection, and arm a timer as a backstop. Deferring exists to avoid
+    // repainting UNDER an open dropdown; it must not be able to wait for ever.
+    // `paint()` restores focus through applyFocus, so flushing costs nothing.
+    const flushDeferredPaint = () => {
       if (!paintDeferred) return;
+      paint();
+    };
+    container.addEventListener("blur", (e) => {
       const target = e.target;
       if (!target || !target.classList || !target.classList.contains("settings-nav-select")) return;
-      paint();
+      flushDeferredPaint();
     }, true);
+    container.addEventListener("change", (e) => {
+      const target = e.target;
+      if (!target || !target.classList || !target.classList.contains("settings-nav-select")) return;
+      flushDeferredPaint();
+    }, true);
+
     const view = container.ownerDocument && container.ownerDocument.defaultView;
     const phoneMq = view && view.matchMedia ? view.matchMedia(PHONE_NAV_MQ) : null;
     function onPhoneNavChange() {
@@ -3147,6 +3172,15 @@
         if (container.firstChild && paintKey() === lastPaintedKey) return;
         if (describeChrome(container).navMenuOpen) {
           paintDeferred = true;
+          // The backstop. An open dropdown is a short interaction; a focused
+          // one can last as long as the reader looks at the page.
+          if (deferredPaintTimer) clearTimeout(deferredPaintTimer);
+          deferredPaintTimer = setTimeout(() => {
+            deferredPaintTimer = null;
+            flushDeferredPaint();
+          }, DEFERRED_PAINT_MS);
+          // The backstop. An open dropdown is a short interaction; a focused
+          // one can last as long as the reader looks at the page.
           return;
         }
         paint();
@@ -3214,6 +3248,7 @@
     defaultEnv,
     defaultSnapshot,
     formatRoutineCountdown,
+    DEFERRED_PAINT_MS,
     routinesHostNote,
     keyDocsLabel,
     routineRunLabel,
