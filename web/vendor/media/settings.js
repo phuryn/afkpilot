@@ -1271,6 +1271,17 @@
     return parts.join(" · ");
   }
 
+  // Local config servers commonly report whether they are enabled but do not
+  // include a health/status field. They are still usable in that state. An
+  // explicit status (including an error or an in-progress state) remains the
+  // authoritative display signal, and an explicit enabled:false must never
+  // get a green dot from a stale "ready" status.
+  function mcpServerIsReady(server) {
+    if (server.enabled === false) return false;
+    if (server.error || server.status === "unavailable") return false;
+    return !server.status || server.status === "ready";
+  }
+
   function mcpIsManagedServer(server) {
     return !!(server && (server.managed === true || server.source === "managed"));
   }
@@ -1337,7 +1348,7 @@
       const name = document.createElement("div");
       name.className = "settings-mcp-name settings-row-title";
       const status = document.createElement("span");
-      status.className = "settings-mcp-status" + (server.status === "ready" ? " is-ready" : (server.error || server.status === "unavailable" ? " is-error" : ""));
+      status.className = "settings-mcp-status" + (mcpServerIsReady(server) ? " is-ready" : (server.error || server.status === "unavailable" ? " is-error" : ""));
       status.setAttribute("aria-hidden", "true");
       name.appendChild(status);
       const label = document.createElement("span");
