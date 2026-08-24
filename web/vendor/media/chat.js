@@ -1052,7 +1052,7 @@
 
   // ---------- markdown ----------
 
-  const { formatWaitElapsed, WAIT_ELAPSED_AFTER_MS, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, appendHighlightedText, commandProgramLabel, commandTextPreview, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage, composerHasSendIntent, explicitVisibleChips, normalizeQueuedSends, queuedSendsText, queuedSendsChips, contextOverheadTokens, nextContextBreakdown, contextBreakdownIsCurrent, createPendingOverlay, getMentionQuery, applyMentionPick, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents, flattenHistoryMessages, splitHistoryWindow, countHistoryReplayCounters, partitionHistoryCards } = globalThis.GrokWebviewHelpers;
+  const { formatWaitElapsed, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, appendHighlightedText, commandProgramLabel, commandTextPreview, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, isKnownHostMessage, composerHasSendIntent, explicitVisibleChips, normalizeQueuedSends, queuedSendsText, queuedSendsChips, contextOverheadTokens, nextContextBreakdown, contextBreakdownIsCurrent, createPendingOverlay, getMentionQuery, applyMentionPick, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents, flattenHistoryMessages, splitHistoryWindow, countHistoryReplayCounters, partitionHistoryCards } = globalThis.GrokWebviewHelpers;
 
   function escapeAttr(s) {
     return String(s == null ? "" : s)
@@ -11174,13 +11174,20 @@
   // the indicator — not just hideGrokking — cleans up.
   function armWaitElapsed(el) {
     el._waitStart = Date.now();
-    el._waitTimer = setInterval(() => {
+    // Painted at once and then every second, with NO threshold to cross.
+    //
+    // A delay was the first design and it was wrong twice over. It guaranteed
+    // that nothing was on screen at exactly the moment someone starts
+    // wondering whether the turn is stuck, and it was a constant that could
+    // never be right. The obvious objection — a number flickering on every
+    // fast turn — does not hold either: this row itself only exists between
+    // agentStart and the first content, so on a quick turn it already appears
+    // and vanishes in about a second. The churn is the row, not the number.
+    const paint = () => {
       if (!el.isConnected) {
         clearWaitElapsed(el);
         return;
       }
-      const ms = Date.now() - el._waitStart;
-      if (ms < WAIT_ELAPSED_AFTER_MS) return;
       let out = el.querySelector(".grokking-elapsed");
       if (!out) {
         out = document.createElement("span");
@@ -11190,8 +11197,10 @@
         out.setAttribute("aria-hidden", "true");
         el.appendChild(out);
       }
-      out.textContent = `\u00b7 ${formatWaitElapsed(ms)}`;
-    }, 1000);
+      out.textContent = `\u00b7 ${formatWaitElapsed(Date.now() - el._waitStart)}`;
+    };
+    paint();
+    el._waitTimer = setInterval(paint, 1000);
   }
 
   function clearWaitElapsed(el) {
