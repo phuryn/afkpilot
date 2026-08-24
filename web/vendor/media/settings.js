@@ -1777,7 +1777,9 @@
       tick.setAttribute("aria-label", tick.title);
       if (run.sessionId) {
         tick.dataset.session = run.sessionId;
-        tick.dataset.cwd = routine.cwd;
+        // The run's OWN project, not the routine's current one — repointing a
+        // routine must not break the links to what already ran.
+        tick.dataset.cwd = run.cwd || routine.cwd;
       }
       strip.appendChild(tick);
     }
@@ -1943,7 +1945,7 @@
         link.type = "button";
         link.className = "settings-routine-open";
         link.dataset.session = run.sessionId;
-        link.dataset.cwd = routine.cwd;
+        link.dataset.cwd = run.cwd || routine.cwd;
         link.textContent = "Ran — open session";
         what.appendChild(link);
       } else {
