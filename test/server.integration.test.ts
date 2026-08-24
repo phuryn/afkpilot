@@ -806,6 +806,28 @@ describe("free tier (unentitled users get capped access)", () => {
     // rate-limit suite, which is the only one configuring a messageRate.)
     browser.send(JSON.stringify({ type: "summarizeSpeech", requestId: 9, text: "a reply" }));
     expect((await uplinkInbox.matching((m) => m.t === "msg")).msg.type).toBe("summarizeSpeech");
+
+    // A routine is a prompt the user wrote, stored and replayed later. Saving
+    // one is when they wrote it, so it charges and bounces at the limit — a
+    // free save would be the paywall loop through a different door, since the
+    // scheduled run is dispatched host-side and never crosses the relay to be
+    // counted.
+    browser.send(JSON.stringify({
+      type: "saveRoutine",
+      draft: { title: "brief", prompt: "what changed?", cwd: "/w", provider: "grok", model: "" },
+    }));
+    expect((await browserInbox.matching((m) => m.type === "error")).text).toMatch(/Free plan limit/);
+
+    // Firing one by hand starts a turn without being a written message, so it
+    // is capped per minute like `newSession` but must NOT eat the weekly
+    // allowance — same rule as the summarize above.
+    browser.send(JSON.stringify({ type: "runRoutineNow", id: "r1" }));
+    expect((await uplinkInbox.matching((m) => m.t === "msg")).msg.type).toBe("runRoutineNow");
+
+    // Pausing and listing write no prompt and start no turn: free, always.
+    browser.send(JSON.stringify({ type: "setRoutinePaused", id: "r1", paused: true }));
+    expect((await uplinkInbox.matching((m) => m.t === "msg")).msg.type).toBe("setRoutinePaused");
+
     browser.send(JSON.stringify({ type: "ready" }));
     const next = await uplinkInbox.matching((m) => m.t === "client-ready" || m.t === "msg");
     expect(next.t).toBe("client-ready");

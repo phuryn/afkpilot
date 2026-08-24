@@ -999,11 +999,33 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       // Deliberately NOT capped: `ready`/`resumeSession`, which reconnect and
       // restore depend on — throttling those would break the recovery path on
       // exactly the flaky connections that need it most.
+      // ROUTINES (2026-08-24). A routine is a prompt the user wrote, stored and
+      // replayed on a schedule, so the two limits split along the same seam as
+      // everything above.
+      //
+      // `saveRoutine` CHARGES: the draft carries text the user typed, and it is
+      // going to reach the model. Saving is when they wrote it, so that is when
+      // it counts — which keeps the meter's promise literally true rather than
+      // carving out an exception for a message that happens to be delivered
+      // later. Editing charges too; the prompt can be rewritten entirely, and a
+      // free rewrite would be the same loop through a different door.
+      //
+      // `runRoutineNow` is CAPPED but does not charge, exactly like
+      // `newSession`: it makes the model run a turn without being a written
+      // message. Left uncapped it is the paywall loop this comment already
+      // describes — one paid routine, then unlimited free turns from a phone,
+      // because the run itself is dispatched host-side and never crosses the
+      // relay to be counted.
+      //
+      // `deleteRoutine`, `setRoutinePaused` and `listRoutines` are neither:
+      // they write no prompt and start no turn.
       const chargesQuota =
         type === "send" || type === "steerSend" || type === "workflowControl" ||
+        type === "saveRoutine" ||
         (type === "exitPlanAnswer" && authoredText);
       const capped = chargesQuota || type === "exitPlanAnswer" ||
-        type === "newSession" || type === "summarizeSpeech";
+        type === "newSession" || type === "summarizeSpeech" ||
+        type === "runRoutineNow";
       if (capped) {
         // Delivery is the only thing that costs — weekly quota or burst
         // token. The client retries a Device-offline bounce automatically,
