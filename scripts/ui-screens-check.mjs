@@ -219,6 +219,137 @@ async function assertToolbarEnd(page, where) {
   );
 }
 
+/**
+ * Photograph the settings surface, Routines included.
+ *
+ * The rest of this file drives /chat. Settings is a whole second surface behind
+ * the gear, and nothing was ever looking at it — which is how a button laid out
+ * by the wrong grid and a control clipped below its own text both shipped
+ * through a green gate.
+ *
+ * Screenshots are for a human (or a model) asked to check something visually.
+ * The assertion below is the deterministic half: an action button that has
+ * wrapped is never intentional, and that is exactly what "Run now" did.
+ */
+async function settingsScreens(page, name) {
+  // Below the docking breakpoint the rail is collapsed and its gear is not
+  // clickable until the rail is opened — the same route the rail shot takes.
+  let openedRail = false;
+  // Whatever this function opens, it closes. Leaving the rail up on the narrow
+  // layouts parks its scrim over everything the REST of the run needs to click,
+  // which turned a skipped screenshot into a failure three sections later.
+  const closeRail = async () => {
+    if (!openedRail) return;
+    openedRail = false;
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(250);
+    const scrim = page.locator("#rail-scrim");
+    if (await scrim.isVisible().catch(() => false)) {
+      await scrim.click({ timeout: 2000 }).catch(() => {});
+      await page.waitForTimeout(250);
+    }
+  };
+
+  let gear = page.locator("#rail-gear-btn, #gear-btn").first();
+  if (!(await gear.isVisible().catch(() => false))) {
+    const railOpen = page.locator("#rail-open");
+    if (await railOpen.isVisible().catch(() => false)) {
+      await railOpen.click();
+      openedRail = true;
+      await page.waitForTimeout(300);
+    }
+    gear = page.locator("#rail-gear-btn, #gear-btn").first();
+  }
+  if (!(await gear.isVisible().catch(() => false))) {
+    log(`${name}: no reachable gear — skipping the settings screens`);
+    await closeRail();
+    return;
+  }
+  // On the narrow layouts the rail's scrim can still be over the gear while it
+  // animates in. Skip rather than force: a forced click would photograph a
+  // surface a real tap could not reach, which is worse than no photograph. If
+  // this starts skipping every run, the scrim is genuinely covering the gear
+  // and that is a bug to chase rather than a timing quirk to absorb.
+  try {
+    await gear.click({ timeout: 4000 });
+  } catch {
+    log(`${name}: gear not tappable (rail scrim) — skipping the settings screens`);
+    await closeRail();
+    return;
+  }
+  const entry = await page.$$eval("#gear-popover .toolbar-popover-item", (els) => {
+    const hit = els.find((el) => /(^|\s)Settings$/.test((el.textContent || "").replace(/\s+/g, " ").trim()));
+    if (hit) hit.setAttribute("data-screens-settings", "1");
+    return !!hit;
+  });
+  assert.ok(entry, `${name}: the gear must offer Settings`);
+  await page.click('[data-screens-settings="1"]');
+  await page.waitForSelector("#settings-overlay", { timeout: 10000 });
+  await page.waitForTimeout(250);
+  await shot(page, `${name}-11-settings`);
+
+  for (const category of ["Routines", "Connectors"]) {
+    await page.$$eval(
+      "#settings-overlay .settings-nav-item",
+      (els, want) => {
+        const hit = els.find((el) => (el.textContent || "").trim() === want);
+        if (hit) hit.setAttribute("data-screens-nav", "1");
+      },
+      category,
+    );
+    // Presence is not reachability: the narrow layouts keep the nav list in the
+    // DOM but collapse the real control into a <select>, so the item is found
+    // and never clickable. Try the item, fall back to the select, and only then
+    // give up on this category.
+    const reached = await page
+      .click('[data-screens-nav="1"]', { timeout: 2500 })
+      .then(() => true)
+      .catch(() => page
+        .locator("#settings-overlay .settings-nav-select")
+        .selectOption({ label: category }, { timeout: 2500 })
+        .then(() => true)
+        .catch(() => false));
+    if (!reached) {
+      await page.$$eval("[data-screens-nav]", (els) => els.forEach((e) => e.removeAttribute("data-screens-nav")));
+      continue;
+    }
+    await page.waitForTimeout(300);
+    await shot(page, `${name}-12-settings-${category.toLowerCase()}`);
+    await page.$$eval("[data-screens-nav]", (els) => els.forEach((e) => e.removeAttribute("data-screens-nav")));
+  }
+
+  // Open a routine so the form, the run log and the footer are all on screen.
+  const routine = await page.$("#settings-overlay .settings-routine-toggle");
+  if (routine) {
+    await routine.click();
+    await page.waitForTimeout(250);
+    await shot(page, `${name}-13-settings-routine-open`);
+
+    const wrapped = await page.$$eval("#settings-overlay .settings-routine-foot .settings-action", (els) =>
+      els
+        .map((el) => {
+          // The CONTENT box, not the border box: padding makes a healthy
+          // single-line button ~1.7 line-heights tall, which is close enough to
+          // two to make a naive ratio useless. Subtracting the padding and
+          // borders leaves a number that is 1 when the label fits on one line
+          // and 2 when it does not.
+          const cs = getComputedStyle(el);
+          const chrome = ["paddingTop", "paddingBottom", "borderTopWidth", "borderBottomWidth"]
+            .reduce((sum, k) => sum + (parseFloat(cs[k]) || 0), 0);
+          const line = parseFloat(cs.lineHeight) || 16;
+          const content = el.getBoundingClientRect().height - chrome;
+          return { label: (el.textContent || "").trim(), lines: Math.round((content / line) * 100) / 100 };
+        })
+        .filter((m) => m.lines > 1.5),
+    );
+    assert.deepEqual(wrapped, [], `${name}: a routine action button wrapped — ${JSON.stringify(wrapped)}`);
+  }
+
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(200);
+  await closeRail();
+}
+
 async function shot(page, name) {
   await page.screenshot({ path: join(OUT, `${name}.png`) });
   log(`captured ${name}.png`);
@@ -306,6 +437,39 @@ try {
       });
       return;
     }
+    if (m.type === "listRoutines") {
+      // Enough shape to photograph every state the page can be in: a healthy
+      // run strip, a failure, a skip, an archived project in the picker, and
+      // models from two providers so the optgroups have something to group.
+      host(f.clientId, {
+        type: "routines",
+        projects: [
+          { cwd: CWD, label: "grok-remote", defaultProvider: "grok" },
+          { cwd: `${CWD}-notes`, label: "notes", archived: true, defaultProvider: "claude" },
+        ],
+        models: [
+          { provider: "grok", model: "grok-4.6", label: "Grok 4.6" },
+          { provider: "grok", model: "grok-4.6-fast", label: "Grok 4.6 Fast" },
+          { provider: "claude", model: "claude-opus-5", label: "Claude Opus 5" },
+        ],
+        entries: [{
+          id: "r1", title: "Morning brief",
+          prompt: "Summarise what changed in this repo since your last run.",
+          cwd: CWD, provider: "grok", model: "grok-4.6",
+          cadence: { every: 1, unit: "days", at: "09:00" },
+          createdAt: 1, cadenceLabel: "Every day at 09:00",
+          nextRunAt: Date.now() + 42 * 60_000,
+          projectLabel: "grok-remote",
+          runs: [
+            { routineId: "r1", windowKey: "d3", startedAt: Date.now() - 6e5, outcome: "ran", sessionId: "s-3", cwd: CWD },
+            { routineId: "r1", windowKey: "d2", startedAt: Date.now() - 9e7, outcome: "skipped", detail: "Skipped — Claude was not connected" },
+            { routineId: "r1", windowKey: "d1", startedAt: Date.now() - 1.8e8, outcome: "failed", detail: "Failed — the agent could not start" },
+          ],
+          health: { ran: 1, skipped: 1, failed: 1, total: 3 },
+        }],
+      });
+      return;
+    }
     if (m.type === "readProjectFile") {
       const body = m.relPath === "README.md"
         ? { kind: "markdown", text: README }
@@ -364,6 +528,10 @@ try {
     await page.waitForSelector("#files-browse-btn", { timeout: 30000 });
     await page.waitForTimeout(400);
     await shot(page, `${name}-1-chat`);
+    // Done here, on a freshly loaded page, rather than at the end: the later
+    // sections deliberately leave the client mid-reconnect, and settings should
+    // be photographed in its ordinary state.
+    await settingsScreens(page, name);
     await assertNoBlankIcons(page, `${name} chat`);
     await assertBarIcons(page, `${name} chat`);
     // Captured while the central header is visible — the phone's full-screen
