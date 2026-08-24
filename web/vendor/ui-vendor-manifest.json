@@ -2,7 +2,7 @@
   "version": 1,
   "source": {
     "repository": "grok-build-vscode",
-    "revision": "ad7eafbc9cbc5300470ba8e10863eec93060785c",
+    "revision": "129165474a2d0cc32b9e3fee43ca2847d0d4ca31",
     "appVersion": "3.16.0",
     "filesMatchRevision": true
   },
@@ -50,7 +50,7 @@
     {
       "source": "media/settings.js",
       "destination": "media/settings.js",
-      "sha256": "93b665eece74145ed8583c919dea51d7233068c92f07fce57f4c4c9bff09cff9"
+      "sha256": "eec1f7cc6cd8f91042667fad6bfceba58114e4c33fc5f64c19a7274676136dc0"
     },
     {
       "source": "media/connector-logos",

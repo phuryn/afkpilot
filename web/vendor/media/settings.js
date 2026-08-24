@@ -1336,6 +1336,13 @@
     return base + id + ".webp";
   }
 
+  /** "github.com/settings/personal-access-tokens" from its URL — host plus
+   *  path, without the scheme or a trailing slash. */
+  function keyDocsLabel(url) {
+    const text = String(url || "").replace(/^https?:\/\//, "").replace(/\/+$/, "");
+    return text || String(url || "");
+  }
+
   function appendConnectorLogo(titleEl, connector) {
     const src = connectorLogoSrc(connector && connector.id);
     if (!src) return;
@@ -1529,11 +1536,14 @@
     if (connector.keyDocsUrl) {
       const hint = document.createElement("div");
       hint.className = "settings-connector-key-hint";
-      hint.appendChild(document.createTextNode("Create a fine-grained token at "));
+      hint.appendChild(document.createTextNode("Get a token at "));
       const link = document.createElement("a");
       link.className = "settings-connector-key-docs";
       link.href = connector.keyDocsUrl;
-      link.textContent = "github.com/settings/personal-access-tokens";
+      // Derived from the href, never hardcoded: this line said
+      // "github.com/settings/personal-access-tokens" under EVERY key
+      // connector, so Zapier pointed its users at GitHub.
+      link.textContent = keyDocsLabel(connector.keyDocsUrl);
       link.dataset.href = connector.keyDocsUrl;
       hint.appendChild(link);
       hint.appendChild(document.createTextNode("."));
@@ -3095,6 +3105,7 @@
     defaultEnv,
     defaultSnapshot,
     formatRoutineCountdown,
+    keyDocsLabel,
     routineRunLabel,
     mount,
   };
