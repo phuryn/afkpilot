@@ -707,6 +707,19 @@
     // inviting the user to re-link a device that was working. Unknown shows
     // nothing at all.
     remoteLinked: null,
+    // Display form of the one directory new and cloned projects land in
+    // (`projectSetup.root`, e.g. `~/Grok Build`). Empty until the host says —
+    // the Add project form shows the destination as you type, so it needs this
+    // before anyone has typed anything.
+    projectRoot: "",
+    // Empty-state tip facts from the host (`welcomeTips`): the two counts the
+    // chat client never receives on its own plus the retired ids. null until
+    // the frame lands, which suppresses the count-dependent tips rather than
+    // reading an absent count as zero.
+    welcomeTips: null,
+    // Which eligible tip is showing. Advances only when the screen BECOMES
+    // empty, so a repaint cannot shuffle the line under the reader.
+    welcomeTipCursor: 0,
     // toolExpandOverride (per-session, in-memory): the Command Palette
     // Expand/Collapse All latch. null = follow the setting above; true/false =
     // force ALL groups + details open/closed for this session, and keep applying
@@ -4816,8 +4829,20 @@
       btn.setAttribute("role", "menuitem");
       btn.disabled = !!item.disabled;
       if (item.title) btn.title = item.title;
-      btn.innerHTML = `<span class="rail-menu-icon">${item.icon || ""}</span><span></span>`;
-      btn.lastChild.textContent = item.label;
+      // A description is optional and only the Add project menu uses one: its
+      // three entries differ by a verb, and "New project" vs "Import a folder"
+      // is not self-explanatory until you have used both.
+      btn.innerHTML = `<span class="rail-menu-icon">${item.icon || ""}</span>` +
+        (item.description
+          ? `<span class="rail-menu-text"><span class="rail-menu-label"></span><small class="rail-menu-desc"></small></span>`
+          : `<span></span>`);
+      if (item.description) {
+        btn.classList.add("rail-menu-item-rich");
+        btn.querySelector(".rail-menu-label").textContent = item.label;
+        btn.querySelector(".rail-menu-desc").textContent = item.description;
+      } else {
+        btn.lastChild.textContent = item.label;
+      }
       btn.onclick = (e) => {
         e.stopPropagation();
         closeRailMenu();
@@ -5759,8 +5784,8 @@
         const add = document.createElement("button");
         add.type = "button";
         add.className = "rail-empty-action";
-        add.textContent = "Add a project folder";
-        add.onclick = () => vscode.postMessage({ type: "addProjectFolder" });
+        add.textContent = "Add a project";
+        add.onclick = () => openAddProjectMenu(add);
         empty.appendChild(add);
         root.appendChild(empty);
       } else {
@@ -5849,12 +5874,15 @@
   }
 
   /**
-   * "Add project" — capability, not a host flag: only a host that answers
-   * `addProjectFolder` gets the control. Opening the picker is host-local (a
-   * native dialog on the desk that a phone could not see or answer), so a
-   * remote never shows it either.
+   * "Add project" — capability, not a host flag. Three ways in now, and they do
+   * not all have the same reach: opening the native picker is host-local (a
+   * dialog on the desk that a phone could not see or answer), while naming a
+   * new project or cloning a URL are things a remote CAN do, because the host
+   * derives the destination rather than being handed one. So the control shows
+   * wherever at least one entry is available, and the menu carries whichever
+   * ones are.
    *
-   * VS Code answers that message now too, but this rail is not where it lands:
+   * VS Code answers these messages too, but this rail is not where it lands:
    * `railAvailable()` needs a rail MOUNT and the VS Code chat view has none —
    * it gets a separate `grok.projects` view (media/projects-rail.js), which
    * carries its own copy of this control.
@@ -5864,17 +5892,142 @@
     btn.type = "button";
     btn.className = "rail-action-btn rail-add-project";
     btn.innerHTML = ICON.plus;
-    btn.title = "Add project folder";
-    btn.setAttribute("aria-label", "Add project folder");
+    btn.title = "Add project";
+    btn.setAttribute("aria-label", "Add project");
     btn.onclick = (e) => {
       e.stopPropagation();
-      vscode.postMessage({ type: "addProjectFolder" });
+      openAddProjectMenu(btn);
     };
     return btn;
   }
 
+  /**
+   * What this host offers as ways into a project.
+   *
+   * Importing needs a native picker, so it stays desk-only exactly as it always
+   * was. Creating and cloning take a NAME and a URL — the host derives the
+   * destination inside its own root — so they work from a phone, which is the
+   * whole reason they exist as separate messages rather than as arguments to
+   * `addProjectFolder`.
+   */
+  function addProjectCaps() {
+    const caps = state.hostCaps || {};
+    return {
+      appPurpose: state.appPurpose === "coding" ? "coding" : "knowledge",
+      canImport: !IS_REMOTE && caps.addProjectFolder === true,
+      canCreate: caps.createProject === true,
+      canClone: caps.cloneProject === true,
+    };
+  }
+
   function canAddProjectFolder() {
-    return !IS_REMOTE && !!(state.hostCaps && state.hostCaps.addProjectFolder);
+    const caps = addProjectCaps();
+    return caps.canImport || caps.canCreate || caps.canClone;
+  }
+
+  const ADD_PROJECT_ICON = {
+    "new": `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/><path d="M12 10v6M9 13h6"/></svg>`,
+    "import": `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>`,
+    clone: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 15V9a3 3 0 0 1 3-3h6"/></svg>`,
+  };
+
+  /**
+   * Open the Add project menu — or, when this host offers exactly one way in,
+   * just do that one thing.
+   *
+   * A menu with a single item is a click that asks permission to be a click.
+   * Older hosts advertise only `addProjectFolder`, so on those this control
+   * behaves exactly as it did before, with no menu at all.
+   */
+  function openAddProjectMenu(anchor) {
+    const helpers = window.GrokWebviewHelpers;
+    if (!helpers || typeof helpers.addProjectMenuItems !== "function") {
+      vscode.postMessage({ type: "addProjectFolder" });
+      return;
+    }
+    const spec = helpers.addProjectMenuItems(addProjectCaps());
+    const run = (id) => {
+      if (id === "import") vscode.postMessage({ type: "addProjectFolder" });
+      else openAddProjectForm(id);
+    };
+    // One way in is a click, not a menu that asks permission to be a click.
+    // NONE at all means the host has not said yet — the no-project onboarding
+    // card can be on screen before `initialState` lands, and its button has to
+    // do something. Falling through to the picker is what it did before.
+    if (spec.length <= 1) { run(spec.length ? spec[0].id : "import"); return; }
+    openRailMenu(
+      anchor,
+      spec.map((item) => ({
+        label: item.label,
+        description: item.description,
+        icon: ADD_PROJECT_ICON[item.id] || "",
+        onSelect: () => run(item.id),
+      })),
+      "add-project",
+    );
+  }
+
+  let addProjectFormApi = null;
+  let addProjectFormScrim = null;
+  let addProjectFormKeydown = null;
+
+  function closeAddProjectForm() {
+    if (addProjectFormScrim) addProjectFormScrim.remove();
+    // Capture-phase, so it must come off again — a listener left behind would
+    // swallow Escape everywhere else in the app for the rest of the session.
+    if (addProjectFormKeydown) document.removeEventListener("keydown", addProjectFormKeydown, true);
+    addProjectFormKeydown = null;
+    addProjectFormScrim = null;
+    addProjectFormApi = null;
+  }
+
+  /**
+   * The name/URL form, over a scrim.
+   *
+   * Modal on purpose: it is two fields and one button, and the rail underneath
+   * re-renders on every catalog frame — an inline form would be rebuilt out
+   * from under the caret, which is the bug the routines form spent a round on.
+   */
+  function openAddProjectForm(kind) {
+    const helpers = window.GrokWebviewHelpers;
+    if (!helpers || typeof helpers.addProjectForm !== "function") return;
+    closeAddProjectForm();
+    closeRailMenu();
+    const api = helpers.addProjectForm({
+      kind,
+      root: state.projectRoot,
+      onSubmit: (value) => {
+        vscode.postMessage(
+          kind === "clone"
+            ? { type: "cloneProject", url: value }
+            : { type: "createProject", name: value },
+        );
+      },
+      onCancel: closeAddProjectForm,
+      // Host-local, and the form stays open behind it: signing in happens in a
+      // terminal on the desk, and the user comes back here to try again.
+      onFix: (fix) => vscode.postMessage({
+        type: "setupGithubCli",
+        action: fix === "install-gh" ? "install" : "auth",
+      }),
+    });
+    if (!api) return;
+    const scrim = document.createElement("div");
+    scrim.className = "add-project-scrim";
+    scrim.appendChild(api.el);
+    scrim.addEventListener("mousedown", (e) => { if (e.target === scrim) closeAddProjectForm(); });
+    document.body.appendChild(scrim);
+    addProjectFormScrim = scrim;
+    addProjectFormApi = api;
+    addProjectFormKeydown = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeAddProjectForm();
+    };
+    document.addEventListener("keydown", addProjectFormKeydown, true);
+    api.update({ root: state.projectRoot });
+    api.focus();
   }
 
   /**
@@ -7127,6 +7280,7 @@
     ver.dataset.status = busy ? text : "";
     if (!busy) {
       ver.textContent = text;
+      renderWelcomeTip();
       return;
     }
     ver.textContent = "";
@@ -7134,6 +7288,7 @@
     const label = document.createElement("span");
     label.textContent = text;
     ver.appendChild(label);
+    renderWelcomeTip();
   }
 
   /**
@@ -7211,22 +7366,15 @@
    * `moveViewHint` is decided by the host and goes false the moment that picker
    * is opened from anywhere, so taking the advice retires the advice.
    */
-  function renderWelcomeTip() {
+  function renderMoveViewTip() {
     const welcome = $("welcome");
     if (!welcome) return;
     const existing = $("welcome-tip");
-    // Never in the browser client. The capability is mirrored to remotes with
-    // the rest of initialState, but where the chat sits is a property of the
-    // machine running the extension — `moveView` is host-local and the relay
-    // drops it, so a phone would get advice it cannot take.
-    if (IS_REMOTE || !(state.hostCaps && state.hostCaps.moveViewHint === true)) {
-      if (existing) existing.remove();
-      return;
-    }
     if (existing) return;
     const tip = document.createElement("p");
     tip.id = "welcome-tip";
     tip.className = "welcome-tip muted";
+    tip.dataset.tip = "moveView";
     // Built here rather than in the host's HTML skeleton, so the relay's mirror
     // of that skeleton cannot drift out of sync over an element it never shows.
     // Two steps, because the second cannot be done for the user. The host's
@@ -7268,6 +7416,211 @@
         if (e.key === "Enter" || e.key === " ") open(e);
       };
     }
+  }
+
+  /**
+   * Everything the tip pool needs, read off state the client already holds.
+   *
+   * Two facts are read CONSERVATIVELY rather than optimistically, because the
+   * failure modes are not symmetric. An absent routine/connector count means
+   * the host has not told us yet - welcomeTipsFor drops those tips rather than
+   * treating "unknown" as "zero", which would advertise routines to someone
+   * running twenty. Same for providers: until `providerState` arrives, claim an
+   * alternate agent IS connected, so the one tip a multi-agent user would find
+   * silly cannot flash on screen during startup.
+   */
+  function welcomeTipFacts() {
+    const host = state.welcomeTips || {};
+    const providers = state.providers || [];
+    const altConnected = providers.some(
+      (p) => p && (p.id === "codex" || p.id === "claude") && p.connected,
+    );
+    return {
+      appPurpose: state.appPurpose === "coding" ? "coding" : "knowledge",
+      isRemote: IS_REMOTE,
+      altAgentConnected: !state.providersKnown || altConnected,
+      routineCount: host.routineCount,
+      connectorCount: host.connectorCount,
+      // A phone's read-aloud is its own client-side preference, not the desk's.
+      readRepliesAloud: IS_REMOTE ? !!state.remoteTts : !!state.readRepliesAloud,
+      voiceConfigured: !!state.voiceConfigured,
+      remoteLinked: state.remoteLinked,
+      dismissed: Array.isArray(host.dismissed) ? host.dismissed : [],
+    };
+  }
+
+  /** Where a tip's action goes. Every destination is real - a tip whose target
+   *  cannot be opened from an empty screen carries no link at all (worktrees). */
+  function runWelcomeTipTarget(target) {
+    if (typeof target !== "string") return;
+    if (target.indexOf("settings:") === 0) {
+      openSettingsCategory(target.slice("settings:".length));
+      return;
+    }
+    if (target === "mode") {
+      openModePopover();
+      return;
+    }
+    if (target === "mention") {
+      // Put the caret where the advice points and type the character for them.
+      // Anything less leaves the reader to find the composer and remember what
+      // the tip said; the popover then opens on its own from the input handler.
+      const input = $("input");
+      if (!input) return;
+      input.focus();
+      const at = input.selectionStart === null || input.selectionStart === undefined
+        ? input.value.length
+        : input.selectionStart;
+      const before = input.value.slice(0, at);
+      const insert = (before && !/\s$/.test(before) ? " " : "") + "@";
+      input.value = before + insert + input.value.slice(at);
+      const caret = at + insert.length;
+      if (typeof input.setSelectionRange === "function") input.setSelectionRange(caret, caret);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  }
+
+  /** Retire a tip on this machine - the same message for "took it" and "not
+   *  interested", because both mean the reader is done with it. */
+  function retireWelcomeTip(id) {
+    const host = state.welcomeTips;
+    // Optimistic local retirement so the slot changes on this click rather than
+    // on the host's answering frame. The host echoes a fresh list either way.
+    if (host && Array.isArray(host.dismissed) && host.dismissed.indexOf(id) < 0) {
+      host.dismissed = host.dismissed.concat([id]);
+    }
+    vscode.postMessage({ type: "dismissWelcomeTip", id });
+  }
+
+  /**
+   * Advice in the empty state: one line naming something this user has not set
+   * up yet.
+   *
+   * THE SLOT IS SHARED with the move-view hint above, which wins while the host
+   * still offers it - that hint is about a window that is currently in the
+   * wrong place, which outranks anything on this list.
+   *
+   * Three suppressions, each a rule rather than a special case:
+   *  - while the status line is BUSY (Starting / Loading conversation), because
+   *    a tip under a spinner competes with the one line the reader is waiting
+   *    for;
+   *  - while the onboarding card is up, because that empty state already has a
+   *    call to action and does not need a second one;
+   *  - when the pool is empty, in which case the screen goes back to what it is
+   *    today. A permanently occupied slot stops being advice.
+   *
+   * Rotation advances only when the screen BECOMES empty (`advance`), never on
+   * a repaint - otherwise a provider frame arriving mid-startup would shuffle
+   * the line under the reader's eyes.
+   */
+  function renderWelcomeAdviceTip(advance) {
+    const welcome = $("welcome");
+    if (!welcome) return;
+    // Rotate first. The screen becoming empty is what advances the cursor, and
+    // that has already happened by the time any of the suppressions below run —
+    // a desktop cold start is BUSY at this moment, and holding the rotation
+    // until it settles (where no `advance` is passed) would pin one tip for ever.
+    if (advance) state.welcomeTipCursor = (state.welcomeTipCursor || 0) + 1;
+    const helpers = window.GrokWebviewHelpers;
+    const existing = $("welcome-tip");
+    const drop = () => { if (existing) existing.remove(); };
+    if (!helpers || typeof helpers.welcomeTipsFor !== "function") return drop();
+    const status = $("welcome-version");
+    if (status && status.classList.contains("welcome-status-busy")) return drop();
+    const onb = $("welcome-onboarding");
+    if (onb && onb.childNodes.length) return drop();
+
+    const pool = helpers.welcomeTipsFor(welcomeTipFacts());
+    if (!pool.length) return drop();
+    const cursor = state.welcomeTipCursor || 0;
+    const tip = pool[((cursor % pool.length) + pool.length) % pool.length];
+
+    // Idempotent: the same advice already on screen is left alone, so the
+    // status-line and provider frames that call through here cannot flicker it.
+    if (existing && existing.dataset.tip === tip.id) return;
+    drop();
+
+    const parts = helpers.splitWelcomeTipCopy(tip.copy);
+    const el = document.createElement("p");
+    el.id = "welcome-tip";
+    el.className = "welcome-tip welcome-advice muted";
+    el.dataset.tip = tip.id;
+
+    const bulb = document.createElement("span");
+    bulb.className = "welcome-tip-bulb";
+    bulb.textContent = "\u{1F4A1}";
+    bulb.setAttribute("aria-hidden", "true");
+    el.appendChild(bulb);
+
+    const body = document.createElement("span");
+    body.className = "welcome-tip-body";
+    // textContent throughout - tip copy is never parsed as markup.
+    body.appendChild(document.createTextNode(parts.before));
+    if (parts.action) {
+      // A <span role="button">, not an <a href="#">: an anchor makes the
+      // webview attempt a navigation and the editor answers by trying to open a
+      // file that does not exist. Same reason as the move-view hint above.
+      const action = document.createElement(tip.target ? "span" : "b");
+      action.textContent = parts.action;
+      if (tip.target) {
+        action.className = "muted-link";
+        action.setAttribute("role", "button");
+        action.setAttribute("tabindex", "0");
+        const go = (e) => {
+          if (e) e.preventDefault();
+          runWelcomeTipTarget(tip.target);
+          // Acting on advice retires the advice - the principle the move-view
+          // hint established. Retire AFTER opening, so a target that refuses to
+          // open still leaves the reader holding the tip.
+          retireWelcomeTip(tip.id);
+          renderWelcomeTip();
+        };
+        action.onclick = go;
+        action.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") go(e); };
+      }
+      body.appendChild(action);
+    }
+    body.appendChild(document.createTextNode(parts.after));
+    el.appendChild(body);
+
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "welcome-tip-dismiss";
+    close.title = "Not interested";
+    close.setAttribute("aria-label", "Dismiss this tip");
+    close.textContent = "\u00d7";
+    close.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      retireWelcomeTip(tip.id);
+      renderWelcomeTip();
+    };
+    el.appendChild(close);
+
+    welcome.appendChild(el);
+  }
+
+  /**
+   * The empty state's single advice slot.
+   *
+   * `advance` rotates to the next eligible tip and is passed only from the two
+   * places where the screen genuinely becomes empty again - a new session, and
+   * the deferred transcript wipe. Every other caller is a repaint.
+   */
+  function renderWelcomeTip(advance) {
+    // Never in the browser client. The capability is mirrored to remotes with
+    // the rest of initialState, but where the chat sits is a property of the
+    // machine running the extension - `moveView` is host-local and the relay
+    // drops it, so a phone would get advice it cannot take.
+    if (!IS_REMOTE && state.hostCaps && state.hostCaps.moveViewHint === true) {
+      const existing = $("welcome-tip");
+      if (existing && existing.dataset.tip !== "moveView") existing.remove();
+      renderMoveViewTip();
+      return;
+    }
+    const stale = $("welcome-tip");
+    if (stale && stale.dataset.tip === "moveView") stale.remove();
+    renderWelcomeAdviceTip(advance);
   }
 
   // clearMessages marks existing transcript nodes instead of destroying them.
@@ -7434,7 +7787,8 @@
     }
     if (kind) {
       applyWelcomeRevealKind(kind);
-      renderWelcomeTip();
+      // A genuinely new empty screen — rotate to the next piece of advice.
+      renderWelcomeTip(true);
     }
     if (chrome) resetSessionChrome();
     revealWelcome();
@@ -7807,7 +8161,7 @@
       } else {
         pendingWelcomeReveal = null;
         applyWelcomeRevealKind(welcomeRevealKind());
-        renderWelcomeTip();
+        renderWelcomeTip(true);
       }
     }
     state.welcomeVisible = true;
@@ -14358,6 +14712,29 @@
         if (state.hostCaps) state.hostCaps.moveViewHint = msg.value === true;
         renderWelcomeTip();
         break;
+      case "projectSetup":
+        // `root` is stated on every frame, including the first — the form has to
+        // show a destination before anyone has typed, and before any attempt has
+        // been made there is nothing else in the frame at all.
+        if (typeof msg.root === "string" && msg.root) state.projectRoot = msg.root;
+        // `done` is the only close signal. Silence is not one: a failed attempt
+        // also stops being busy, and closing on that would throw away the error
+        // the user needs to read.
+        if (msg.done) { closeAddProjectForm(); break; }
+        if (addProjectFormApi) addProjectFormApi.update(msg);
+        break;
+      case "welcomeTips":
+        // Deliberately NOT an advance: this frame arrives on startup and after
+        // every routine/connector change, and rotating the advice because a
+        // connector was linked in another window would be movement with no
+        // meaning. Re-render so a tip whose condition just went false leaves.
+        state.welcomeTips = {
+          routineCount: msg.routineCount,
+          connectorCount: msg.connectorCount,
+          dismissed: Array.isArray(msg.dismissed) ? msg.dismissed : [],
+        };
+        renderWelcomeTip();
+        break;
       case "providerState":
         state.providersKnown = true;
         state.providers = Array.isArray(msg.providers) ? msg.providers.filter((provider) =>
@@ -16340,7 +16717,7 @@
       else if (act === "connectProvider") vscode.postMessage({ type: "runGrokLogin", provider: onbAction.dataset.provider });
       else if (act === "recheckProvider") vscode.postMessage({ type: "recheckConnection", provider: onbAction.dataset.provider });
       else if (act === "retryProvider") vscode.postMessage({ type: "retryProviderSession", provider: onbAction.dataset.provider });
-      else if (act === "addProjectFolder") vscode.postMessage({ type: "addProjectFolder" });
+      else if (act === "addProjectFolder") openAddProjectMenu(onbAction);
       return;
     }
     const onbCopy = e.target.closest(".onb-copy");

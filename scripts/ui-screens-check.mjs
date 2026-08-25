@@ -350,6 +350,178 @@ async function settingsScreens(page, name) {
   await closeRail();
 }
 
+/**
+ * Empty-state advice on the BROWSER client, at whatever width this run uses.
+ *
+ * The desktop harness proves the same slot on the desk. What only this one can
+ * show is the phone: 414px with a 2.625 DPR is where a 46ch measure either sits
+ * inside the column or pushes the page sideways, and where a one-line tip
+ * becomes six. It also pins the rule the owner asked for last — the pool a
+ * remote sees must never include advice a remote cannot act on.
+ */
+async function welcomeTipScreens(page, name) {
+  const tip = await page.evaluate(() => {
+    const el = document.getElementById("welcome-tip");
+    if (!el) return null;
+    const body = el.querySelector(".welcome-tip-body");
+    const close = el.querySelector(".welcome-tip-dismiss");
+    const action = el.querySelector(".muted-link, b");
+    const r = el.getBoundingClientRect();
+    const clr = close ? close.getBoundingClientRect() : null;
+    const ar = action ? action.getBoundingClientRect() : null;
+    return {
+      id: el.dataset.tip || "",
+      text: (body?.textContent || "").replace(/\s+/g, " ").trim(),
+      width: Math.round(r.width),
+      height: Math.round(r.height),
+      right: Math.round(r.right),
+      overflows: el.scrollWidth > el.clientWidth + 1,
+      close: clr ? { w: Math.round(clr.width), h: Math.round(clr.height) } : null,
+      action: ar ? { w: Math.round(ar.width), h: Math.round(ar.height) } : null,
+      docScrollW: document.documentElement.scrollWidth,
+      docClientW: document.documentElement.clientWidth,
+    };
+  });
+  assert.ok(tip, `${name} chat: empty-state advice must render on a settled welcome screen`);
+  assert.ok(tip.id, `${name} chat: the tip must carry its id`);
+  // Desk-only advice must never reach a browser client. Signing an agent in,
+  // linking a connector and starting a worktree are all host-local, and
+  // "continue on your phone" is being read ON the phone.
+  assert.ok(
+    !["providers", "connectors", "remote", "worktrees", "moveView"].includes(tip.id),
+    `${name} chat: desk-only advice reached a remote — ${JSON.stringify(tip)}`,
+  );
+  assert.ok(tip.text.length > 10, `${name} chat: tip text looks empty — ${JSON.stringify(tip)}`);
+  assert.ok(tip.height > 10 && tip.width > 80, `${name} chat: tip has no box — ${JSON.stringify(tip)}`);
+  assert.ok(!tip.overflows, `${name} chat: tip text overflows its box — ${JSON.stringify(tip)}`);
+  assert.ok(
+    tip.close && tip.close.w >= 6 && tip.close.h >= 6,
+    `${name} chat: dismiss control rendered with no size — ${JSON.stringify(tip)}`,
+  );
+  assert.ok(
+    tip.action && tip.action.w >= 20 && tip.action.h >= 6,
+    `${name} chat: the actionable span rendered with no size — ${JSON.stringify(tip)}`,
+  );
+  // A 46ch box on a 414px phone is the case that would push the page sideways.
+  assert.ok(
+    tip.docScrollW <= tip.docClientW + 1,
+    `${name} chat: the tip made the page scroll horizontally — ${JSON.stringify(tip)}`,
+  );
+  log(`${name} welcome tip: ${tip.id} — "${tip.text}" (${tip.width}x${tip.height})`);
+  await shot(page, `${name}-1b-welcome-tip`);
+
+  // Taking it opens the settings category it names, and retires the line.
+  await page.click("#welcome-tip .muted-link");
+  await page.waitForTimeout(400);
+  const after = await page.evaluate(() => ({
+    open: !!document.getElementById("settings-overlay"),
+    category: document.querySelector(".settings-nav-item.active")?.dataset.category || "",
+    tip: document.getElementById("welcome-tip")?.dataset.tip || null,
+  }));
+  assert.ok(after.open, `${name} chat: taking a tip must open Settings — ${JSON.stringify(after)}`);
+  assert.ok(after.category, `${name} chat: Settings opened on no category — ${JSON.stringify(after)}`);
+  assert.notEqual(after.tip, tip.id, `${name} chat: acting on advice must retire that advice`);
+  await shot(page, `${name}-1c-welcome-tip-target`);
+  log(`${name} welcome tip target: settings on "${after.category}"`);
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+}
+
+/**
+ * Add project on the BROWSER client.
+ *
+ * Two things only a real layout at these widths can say. First, that the modal
+ * fits a 414px phone — it is 380px by design, and `min(380px, 100%)` either
+ * holds or pushes the page sideways. Second, that the menu carries only what a
+ * REMOTE can do: importing opens a native picker on the desk, which a phone has
+ * no way to show, so it must not appear here at all.
+ */
+async function addProjectScreens(page, name) {
+  // Coding mode, so the menu has two entries rather than collapsing to one.
+  await page.evaluate(() => window.dispatchEvent(new MessageEvent("message", {
+    data: { type: "appPurpose", value: "coding" },
+  })));
+  await page.evaluate(() => {
+    const card = document.getElementById("welcome-onboarding");
+    card.innerHTML = '<button class="onb-action" type="button" data-act="addProjectFolder">Add project</button>';
+    card.querySelector("button").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await page.waitForSelector(".rail-menu", { timeout: 8000 });
+  const menu = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll(".rail-menu-item")];
+    const box = document.querySelector(".rail-menu").getBoundingClientRect();
+    return {
+      labels: rows.map((r) => r.querySelector(".rail-menu-label")?.textContent?.trim() || ""),
+      clipped: rows.some((r) => r.scrollWidth > r.clientWidth + 1),
+      onScreen: box.left >= -1 && box.right <= window.innerWidth + 1 && box.bottom <= window.innerHeight + 1,
+      small: rows.filter((r) => r.getBoundingClientRect().height < 36).length,
+    };
+  });
+  assert.deepEqual(
+    menu.labels,
+    ["Clone from GitHub", "New project"],
+    `${name}: a remote must not be offered the native picker — ${JSON.stringify(menu)}`,
+  );
+  assert.ok(!menu.clipped, `${name}: add-project menu rows clipped — ${JSON.stringify(menu)}`);
+  assert.ok(menu.onScreen, `${name}: add-project menu runs off screen — ${JSON.stringify(menu)}`);
+  await shot(page, `${name}-1d-add-project-menu`);
+  log(`${name} add project menu: ${menu.labels.join(" / ")}`);
+
+  await page.click(".rail-menu-item");
+  await page.waitForSelector(".add-project-form", { timeout: 8000 });
+  await page.fill(".add-project-input", "https://github.com/phuryn/grok-remote.git");
+  const form = await page.evaluate(() => {
+    const el = document.querySelector(".add-project-form");
+    const b = el.getBoundingClientRect();
+    const controls = [...el.querySelectorAll("button, input")];
+    return {
+      dest: document.querySelector(".add-project-dest").textContent.trim(),
+      width: Math.round(b.width),
+      inside: b.left >= -1 && b.right <= window.innerWidth + 1,
+      tall: b.height <= window.innerHeight,
+      overflowsSelf: el.scrollWidth > el.clientWidth + 1,
+      docScrollW: document.documentElement.scrollWidth,
+      docClientW: document.documentElement.clientWidth,
+      // Visible controls only: the fix button is hidden until a clone fails in
+      // a way GitHub sign-in would mend, and a 0px hidden node is not a tap
+      // target that is too small — it is not a tap target.
+      small: controls
+        .filter((c) => !c.hidden && c.offsetParent !== null)
+        .filter((c) => c.getBoundingClientRect().height < 36)
+        .map((c) => (c.className || c.tagName) + " " + Math.round(c.getBoundingClientRect().height)),
+    };
+  });
+  assert.equal(form.dest, "~/Grok Build/grok-remote", `${name}: clone preview — ${JSON.stringify(form)}`);
+  assert.ok(form.inside, `${name}: the form escapes the viewport — ${JSON.stringify(form)}`);
+  assert.ok(form.tall, `${name}: the form is taller than the viewport — ${JSON.stringify(form)}`);
+  assert.ok(!form.overflowsSelf, `${name}: the form scrolls sideways — ${JSON.stringify(form)}`);
+  assert.ok(
+    form.docScrollW <= form.docClientW + 1,
+    `${name}: the form made the page scroll sideways — ${JSON.stringify(form)}`,
+  );
+  await shot(page, `${name}-1e-add-project-form`);
+  log(`${name} add project form: ${form.dest} (${form.width}px)`);
+
+  // Every control in a modal is a tap target on a phone. Same 36px floor the
+  // rest of the app is held to, no exemptions.
+  if (name !== "desk") {
+    assert.deepEqual(form.small, [], `${name}: form controls too small to tap — ${JSON.stringify(form.small)}`);
+    assert.equal(menu.small, 0, `${name}: menu rows too small to tap (${menu.small})`);
+  }
+
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(200);
+  assert.equal(
+    await page.evaluate(() => !!document.querySelector(".add-project-form")),
+    false,
+    `${name}: Escape must close the form`,
+  );
+  // Put the client back where the rest of the run expects it.
+  await page.evaluate(() => window.dispatchEvent(new MessageEvent("message", {
+    data: { type: "appPurpose", value: "knowledge" },
+  })));
+}
+
 async function shot(page, name) {
   await page.screenshot({ path: join(OUT, `${name}.png`) });
   log(`captured ${name}.png`);
@@ -390,7 +562,13 @@ try {
         {
           type: "initialState", version: "screens", cwd: CWD, extVersion: "3.5.0",
           hostKind: "desktop", hostName: "Pawel-Desk",
-          capabilities: { browseProjectFiles: true, editProjectFiles: true, uploadFile: true },
+          // `addProjectFolder` is deliberately absent: opening a native picker is
+          // host-local, and a remote must not be offered a dialog it cannot see.
+          // The other two take a name and a URL, so the host decides where.
+          capabilities: {
+            browseProjectFiles: true, editProjectFiles: true, uploadFile: true,
+            createProject: true, cloneProject: true,
+          },
         },
         {
           type: "repos",
@@ -406,6 +584,15 @@ try {
           activeId: "s1", dots: {}, offset: 0, total: 1, hasMore: false, nextOffset: 1, query: "",
         },
         { type: "sessionName", sessionId: "s1", name: "One file panel, two hosts" },
+        // Empty-state advice needs three things a bare snapshot never had: who
+        // is connected, the two counts a chat client cannot observe, and the
+        // Starting -> Connected cycle it waits for. `initialized` MUST precede
+        // setBusy:false — that pair is what stamps "Connected" and opens the
+        // advice slot.
+        { type: "providerState", providers: [{ id: "grok", connected: true }] },
+        { type: "welcomeTips", routineCount: 0, connectorCount: 0, dismissed: [] },
+        { type: "projectSetup", root: "~/Grok Build" },
+        { type: "initialized", info: { provider: "grok", version: "1.0.5" } },
         { type: "setBusy", value: false },
       ]);
       return;
@@ -528,6 +715,8 @@ try {
     await page.waitForSelector("#files-browse-btn", { timeout: 30000 });
     await page.waitForTimeout(400);
     await shot(page, `${name}-1-chat`);
+    await welcomeTipScreens(page, name);
+    await addProjectScreens(page, name);
     // Done here, on a freshly loaded page, rather than at the end: the later
     // sections deliberately leave the client mid-reconnect, and settings should
     // be photographed in its ordinary state.

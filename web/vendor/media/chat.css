@@ -1385,6 +1385,70 @@ body.thinking-hidden .msg.thinking.find-reveal { display: block; }
 }
 .welcome-tip b { font-weight: 600; }
 .welcome-tip [role="button"] { cursor: pointer; }
+
+/* Empty-state advice shares the hint's box and measure, so the two tenants of
+   this slot cannot look like different features. It differs only in being a
+   ROW: bulb, one line of copy, and a dismiss the hint never needed (that one
+   retires itself by being taken). */
+.welcome-tip.welcome-advice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  /* Wider than the 30ch the hint above uses. That measure is right for a
+     numbered instruction list read one step at a time; the same width turns a
+     single advisory sentence into a five-line column in the middle of an
+     otherwise empty screen. One sentence, two or three lines. */
+  max-width: 46ch;
+}
+.welcome-tip-bulb { flex: none; line-height: 1.5; }
+.welcome-tip-body { flex: 1; min-width: 0; }
+/* Not .icon-btn: that primitive is a 20x20 chrome member with its own hover
+   plate, and this sits inside a 6% wash where the plate reads as a second box.
+   A bare glyph at the copy's own size is the whole control. */
+.welcome-tip-dismiss {
+  flex: none;
+  background: none;
+  border: 0;
+  padding: 0 1px;
+  margin: -1px 0 0;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.2;
+  color: inherit;
+  opacity: 0.55;
+  cursor: pointer;
+}
+.welcome-tip-dismiss:hover { opacity: 1; }
+.welcome-tip-dismiss:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: 1px;
+  opacity: 1;
+}
+/* Touch devices: both of this row's controls are finger-sized targets drawn at
+   mouse scale, and the screens gate holds every tappable thing to 36px with no
+   exemptions. Same technique as .icon-btn above — grow the INVISIBLE hit box,
+   leave the glyph and the type alone.
+   The actionable phrase stays a plain inline (never inline-block): it wraps
+   mid-sentence — "Connect Codex or Claude Code" breaks across two lines at this
+   measure — and an atomic box would force it onto one line and push the tip
+   past its own width. Vertical padding on an inline element enlarges the hit
+   box without touching the line height, so only the horizontal padding needs
+   pulling back out with a negative margin. */
+@media (hover: none), (pointer: coarse) {
+  .welcome-tip.welcome-advice .muted-link {
+    padding: 11px 8px;
+    margin: 0 -8px;
+  }
+  .welcome-tip-dismiss {
+    width: 36px;
+    height: 36px;
+    margin: -9px -10px 0 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.7;
+  }
+}
 .muted-link { color: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .muted-link:hover { opacity: 0.8; }
 
@@ -4749,4 +4813,138 @@ body.vscode-light .preview-overlay {
    inline margins stay 12 for edge alignment. The phone gate asserts the parity. */
 @media (hover: none) and (pointer: coarse) and (max-width: 899px) {
   .rail-search-wrap { margin-block: 8px; }
+}
+
+/* ---- Add project: the menu's rich rows, and the name / URL form ---- */
+
+/* Three entries that differ by a verb. The second line is what makes "New
+   project" and "Import a folder" distinguishable before you have used both. */
+.rail-menu-item-rich { align-items: flex-start; }
+.rail-menu-item-rich .rail-menu-icon { margin-top: 2px; }
+.rail-menu-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.rail-menu-desc {
+  color: var(--vscode-descriptionForeground, currentColor);
+  font-size: 11px;
+  line-height: 1.35;
+  opacity: 0.85;
+}
+
+/* Modal, not inline: the rail underneath rebuilds on every catalog frame, and a
+   form living inside it would be recreated out from under the caret — the bug
+   the routines form spent a review round on. */
+.add-project-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.42);
+}
+.add-project-form {
+  width: min(380px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border-radius: 10px;
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, currentColor));
+  background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background, Canvas));
+  color: var(--vscode-foreground, CanvasText);
+  box-shadow: 0 12px 40px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.4));
+}
+.add-project-title { font-size: 14px; font-weight: 600; line-height: 1.3; }
+.add-project-body {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--vscode-descriptionForeground, currentColor);
+  opacity: 0.9;
+}
+.add-project-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground, currentColor);
+  margin-top: 4px;
+}
+.add-project-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--vscode-input-foreground, CanvasText);
+  background: var(--vscode-input-background, Canvas);
+  border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border, currentColor));
+  border-radius: 5px;
+}
+.add-project-input:focus {
+  outline: none;
+  border-color: var(--vscode-focusBorder, currentColor);
+}
+.add-project-input:disabled { opacity: 0.6; }
+/* The destination, live. The whole point of the feature is that nobody has to
+   choose a folder, which only works if they can see the one being chosen. */
+.add-project-dest {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--vscode-descriptionForeground, currentColor);
+  word-break: break-all;
+  min-height: 17px;
+}
+.add-project-error {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--vscode-errorForeground, currentColor);
+}
+.add-project-error[hidden] { display: none; }
+/* The one case where we can act rather than explain. Quiet — it is a way out of
+   a failure, not the thing the form is for. */
+.add-project-fix {
+  align-self: flex-start;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground, CanvasText));
+  background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.2));
+  border: 1px solid transparent;
+  text-align: left;
+}
+.add-project-fix:hover { filter: brightness(1.15); }
+.add-project-fix[hidden] { display: none; }
+.add-project-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.add-project-btn {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 6px 14px;
+  border-radius: 5px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground, CanvasText));
+  background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.2));
+}
+.add-project-primary {
+  color: var(--vscode-button-foreground, Canvas);
+  background: var(--vscode-button-background, var(--vscode-focusBorder, currentColor));
+}
+.add-project-primary:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground, var(--vscode-button-background, currentColor));
+}
+.add-project-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Touch: the universal 36px floor, same as every other control. */
+@media (hover: none), (pointer: coarse) {
+  .add-project-btn, .add-project-fix, .add-project-input { min-height: 36px; }
 }
