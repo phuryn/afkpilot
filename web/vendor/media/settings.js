@@ -1702,7 +1702,16 @@
    *  composer: a new conversation in a project starts on that project default
    *  provider, and a routine is a new conversation on a timer. */
   function defaultModelFor(models, provider) {
-    return models.find(function (m) { return m.provider === provider; }) || models[0] || null;
+    // Prefer a CONCRETE model. The host now sends each provider's empty-model
+    // sentinel first, so taking models[0] would start every new routine on
+    // "use the agent's default" — the one option the composer never offers, and
+    // the opposite of the parity this is supposed to give.
+    const real = models.filter(function (m) { return !!m.model; });
+    return real.find(function (m) { return m.provider === provider; })
+      || models.find(function (m) { return m.provider === provider; })
+      || real[0]
+      || models[0]
+      || null;
   }
 
   function blankRoutineDraft(snapshot) {
@@ -1893,9 +1902,23 @@
     model.dataset.field = "model";
     // Grouped by provider. A native <select> cannot carry an icon, but an
     // optgroup says the same thing and needs no custom dropdown.
+    // "<Provider> default" is the empty-model sentinel. The composer never
+    // shows it once real models are known, and beside them it is clutter — worse
+    // beside Claude, which has a model literally called "Default". So it is
+    // rendered only when it is the ONLY thing that provider offers, or when this
+    // routine is already saved on it, which keeps an existing one editable
+    // instead of silently re-pointing it at a concrete model.
+    const hasReal = {};
+    for (const m of models) if (m.model) hasReal[m.provider] = true;
+    const shown = models.filter(function (m) {
+      if (m.model) return true;
+      if (!hasReal[m.provider]) return true;
+      return m.provider === draft.provider && !draft.model;
+    });
+
     let group = null;
     let groupProvider = "";
-    for (const m of models) {
+    for (const m of shown) {
       if (m.provider !== groupProvider) {
         groupProvider = m.provider;
         group = document.createElement("optgroup");
