@@ -7451,7 +7451,22 @@
       voiceConfigured: !!state.voiceConfigured,
       remoteLinked: state.remoteLinked,
       dismissed: Array.isArray(host.dismissed) ? host.dismissed : [],
+      shownToday: Array.isArray(host.shownToday) ? host.shownToday : [],
+      // The tip on screen is exempt from the once-a-day filter — it joined that
+      // list when it rendered, and a repaint must not blank it mid-read.
+      keepId: (document.getElementById("welcome-tip") || {}).dataset
+        ? document.getElementById("welcome-tip").dataset.tip || ""
+        : "",
     };
+  }
+
+  /** Record that a tip has had its turn today, once. */
+  function noteWelcomeTipShown(id) {
+    const host = state.welcomeTips;
+    if (!host || !Array.isArray(host.shownToday)) return;
+    if (host.shownToday.indexOf(id) >= 0) return;
+    host.shownToday = host.shownToday.concat([id]);
+    vscode.postMessage({ type: "welcomeTipShown", id });
   }
 
   /** Where a tip's action goes. Every destination is real - a tip whose target
@@ -7460,10 +7475,6 @@
     if (typeof target !== "string") return;
     if (target.indexOf("settings:") === 0) {
       openSettingsCategory(target.slice("settings:".length));
-      return;
-    }
-    if (target === "mode") {
-      openModePopover();
       return;
     }
     if (target === "mention") {
@@ -7573,6 +7584,12 @@
         action.setAttribute("tabindex", "0");
         const go = (e) => {
           if (e) e.preventDefault();
+          // The click must NOT reach the document. Several handlers there close
+          // every popover on any outside click, and this one runs first — so a
+          // target that opens a popover had it built and then hidden again in
+          // the same tick, which is precisely how the Plan link looked broken
+          // while doing exactly what it was told.
+          if (e && typeof e.stopPropagation === "function") e.stopPropagation();
           runWelcomeTipTarget(tip.target);
           // Acting on advice retires the advice - the principle the move-view
           // hint established. Retire AFTER opening, so a target that refuses to
@@ -7603,6 +7620,8 @@
     el.appendChild(close);
 
     welcome.appendChild(el);
+    // After the append, so a tip that failed to build is not marked as seen.
+    noteWelcomeTipShown(tip.id);
   }
 
   /**
@@ -14737,6 +14756,9 @@
           routineCount: msg.routineCount,
           connectorCount: msg.connectorCount,
           dismissed: Array.isArray(msg.dismissed) ? msg.dismissed : [],
+          // Absent on an older host: no field, no once-a-day filter, and the
+          // pool behaves exactly as it did before this existed.
+          shownToday: Array.isArray(msg.shownToday) ? msg.shownToday : [],
         };
         renderWelcomeTip();
         break;

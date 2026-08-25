@@ -40,7 +40,7 @@
     "ready", "remotePreferences", "send", "newSession", "cancel", "pickModel", "setMode", "removeChip",
     "toggleChip", "openFile", "showInFolder", "openUrl", "openText", "openDiff", "exportExpr", "setEffort",
     "addProjectFolder", "removeProjectFolder", "createProject", "cloneProject", "setupGithubCli",
-    "openGlobalConfig", "openProjectConfig", "listMcpServers", "connectMcpConnector", "disconnectMcpConnector", "showLogs", "toggleDevTools", "openSettings", "openSettingsSurface", "closeSettingsSurface", "dismissWelcomeTip", "moveView",
+    "openGlobalConfig", "openProjectConfig", "listMcpServers", "connectMcpConnector", "disconnectMcpConnector", "showLogs", "toggleDevTools", "openSettings", "openSettingsSurface", "closeSettingsSurface", "dismissWelcomeTip", "welcomeTipShown", "moveView",
     "listRoutines", "saveRoutine", "deleteRoutine", "setRoutinePaused", "runRoutineNow",
     "setShowThinking", "setAppPurpose", "setExpandCommandOutputs",
     "dropFile", "permissionAnswer", "exitPlanAnswer", "questionAnswer", "questionCancel",
@@ -1964,13 +1964,6 @@
       eligible: (f) => !f.voiceConfigured,
     },
     {
-      id: "plan",
-      copy: "Want the approach before the work? Pick {Plan} in the mode menu.",
-      target: "mode",
-      deskOnly: false,
-      eligible: () => true,
-    },
-    {
       id: "mentions",
       // The actionable phrase, not the character: "@" alone is about six pixels
       // wide, and no amount of padding turns that into a finger-sized target
@@ -2011,6 +2004,14 @@
     const dismissed = Array.isArray(f.dismissed)
       ? new Set(f.dismissed)
       : new Set(Object.keys(f.dismissed || {}));
+    // Seen already today. The pool is small, so without this the same two or
+    // three lines come round again every time a conversation ends — which is
+    // how advice turns into wallpaper.
+    const shownToday = new Set(Array.isArray(f.shownToday) ? f.shownToday : []);
+    // …except whatever is on screen RIGHT NOW. It was added to that set the
+    // moment it rendered, and a repaint must not make the line the reader is
+    // in the middle of vanish from under them.
+    if (f.keepId) shownToday.delete(f.keepId);
     const known = {
       appPurpose: f.appPurpose === "coding" ? "coding" : "knowledge",
       isRemote: !!f.isRemote,
@@ -2023,6 +2024,7 @@
     };
     return WELCOME_TIPS.filter((tip) => {
       if (dismissed.has(tip.id)) return false;
+      if (shownToday.has(tip.id)) return false;
       if (known.isRemote && tip.deskOnly) return false;
       // -1 is "the host never told us" — see the doc comment.
       if (tip.id === "routines" && known.routineCount < 0) return false;
