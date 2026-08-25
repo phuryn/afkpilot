@@ -1400,7 +1400,23 @@ body.thinking-hidden .msg.thinking.find-reveal { display: block; }
      otherwise empty screen. One sentence, two or three lines. */
   max-width: 46ch;
 }
-.welcome-tip-bulb { flex: none; line-height: 1.5; }
+.welcome-tip-bulb {
+  flex: none;
+  /* Bigger than the 11px copy on purpose. The glyph's rays reach the edge of
+     the viewBox, so the bulb itself is only about half the box — sized to the
+     text it would paint a mark half the height of a capital letter. */
+  width: 15px;
+  height: 15px;
+  display: inline-block;
+  vertical-align: -3px;
+  /* Same muted colour as the sentence it introduces. The emoji this replaced
+     was a saturated yellow that read as a call to action, which is the one
+     thing this slot is not. */
+  opacity: 0.85;
+}
+.welcome-tip-bulb svg { width: 100%; height: 100%; display: block; }
+/* The move-view hint is a paragraph, not a flex row, so its mark sits inline. */
+.welcome-tip:not(.welcome-advice) .welcome-tip-bulb { display: inline-block; }
 .welcome-tip-body { flex: 1; min-width: 0; }
 /* Not .icon-btn: that primitive is a 20x20 chrome member with its own hover
    plate, and this sits inside a 6% wash where the plate reads as a second box.

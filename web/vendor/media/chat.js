@@ -748,6 +748,10 @@
     arrowUp: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>`,
     arrowDown: `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>`,
     brain: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4"/><path d="M9 13a4.5 4.5 0 0 0 3-4"/></svg>`,
+    // The empty state's advice mark. Filled paths with no `fill` of their own
+    // would render black — invisible on a dark theme — so the root states
+    // currentColor and the tip's own muted colour carries it.
+    idea: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="currentColor" aria-hidden="true"><path d="M223.718,124.76c-48.027,11.198-86.688,49.285-98.494,97.031c-11.843,47.899,1.711,96.722,36.259,130.601 C173.703,364.377,181,383.586,181,403.777V407c0,13.296,5.801,25.26,15,33.505V467c0,24.813,20.187,45,45,45h30 c24.813,0,45-20.187,45-45v-26.495c9.199-8.245,15-20.208,15-33.505v-3.282c0-19.884,7.687-39.458,20.563-52.361 C376.994,325.87,391,292.005,391,256C391,169.921,311.231,104.362,223.718,124.76z M286,467c0,8.271-6.729,15-15,15h-30 c-8.271,0-15-6.729-15-15v-15h60V467z M330.326,330.166C311.689,348.843,301,375.651,301,403.718V407c0,8.271-6.729,15-15,15h-60 c-8.271,0-15-6.729-15-15v-3.223c0-28.499-10.393-55.035-28.513-72.804c-26.89-26.37-37.409-64.493-28.141-101.981 c9.125-36.907,39.029-66.353,76.184-75.015C299.202,137.964,361,189.228,361,256C361,284.004,350.106,310.343,330.326,330.166z"/><path d="M139.327,118.114L96.9,75.688c-5.857-5.858-15.355-5.858-21.213,0c-5.858,5.858-5.858,15.355,0,21.213l42.427,42.426 c5.857,5.858,15.356,5.858,21.213,0C145.185,133.469,145.185,123.972,139.327,118.114z"/><path d="M76,241H15c-8.284,0-15,6.716-15,15s6.716,15,15,15h61c8.284,0,15-6.716,15-15S84.284,241,76,241z"/><path d="M497,241h-61c-8.284,0-15,6.716-15,15s6.716,15,15,15h61c8.284,0,15-6.716,15-15S505.284,241,497,241z"/><path d="M436.313,75.688c-5.856-5.858-15.354-5.858-21.213,0l-42.427,42.426c-5.858,5.857-5.858,15.355,0,21.213 c5.857,5.858,15.355,5.858,21.213,0l42.427-42.426C442.171,91.044,442.171,81.546,436.313,75.688z"/><path d="M256,0c-8.284,0-15,6.716-15,15v61c0,8.284,6.716,15,15,15s15-6.716,15-15V15C271,6.716,264.284,0,256,0z"/><path d="M256,181c-6.166,0-12.447,0.739-18.658,2.194c-25.865,6.037-47.518,27.328-53.879,52.979 c-1.994,8.041,2.907,16.175,10.947,18.17c8.042,1.994,16.176-2.909,18.17-10.948c3.661-14.758,16.647-27.5,31.593-30.989 C248.155,211.473,252.135,211,256,211c8.284,0,15-6.716,15-15S264.284,181,256,181z"/></svg>`,
     orbit: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.341 6.484A10 10 0 0 1 10.266 21.85"/><path d="M3.659 17.516A10 10 0 0 1 13.74 2.152"/><circle cx="12" cy="12" r="3"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/></svg>`,
     square: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>`,
     spinner: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>`,
@@ -7393,7 +7397,7 @@
     // exist. `role`/`tabindex`/keydown put back the semantics the anchor was
     // providing.
     tip.innerHTML =
-      "\u{1F4A1} <b>To move Grok to the right</b>" +
+      `<span class="welcome-tip-bulb">${ICON.idea}</span> <b>To move Grok to the right</b>` +
       "<br>After moving, click <b>Toggle Agents Side Bar</b> to show it." +
       '<br><span id="welcome-tip-link" class="muted-link" role="button" tabindex="0">Click here</span>' +
       " and select <b>New Secondary Side Bar Entry</b>.";
@@ -7548,7 +7552,7 @@
 
     const bulb = document.createElement("span");
     bulb.className = "welcome-tip-bulb";
-    bulb.textContent = "\u{1F4A1}";
+    bulb.innerHTML = ICON.idea;
     bulb.setAttribute("aria-hidden", "true");
     el.appendChild(bulb);
 

@@ -378,6 +378,12 @@ async function welcomeTipScreens(page, name) {
       overflows: el.scrollWidth > el.clientWidth + 1,
       close: clr ? { w: Math.round(clr.width), h: Math.round(clr.height) } : null,
       action: ar ? { w: Math.round(ar.width), h: Math.round(ar.height) } : null,
+      bulb: (() => {
+        const svg = el.querySelector(".welcome-tip-bulb svg");
+        if (!svg) return null;
+        const b = svg.getBoundingClientRect();
+        return { w: Math.round(b.width), h: Math.round(b.height) };
+      })(),
       docScrollW: document.documentElement.scrollWidth,
       docClientW: document.documentElement.clientWidth,
     };
@@ -407,7 +413,11 @@ async function welcomeTipScreens(page, name) {
     tip.docScrollW <= tip.docClientW + 1,
     `${name} chat: the tip made the page scroll horizontally — ${JSON.stringify(tip)}`,
   );
-  log(`${name} welcome tip: ${tip.id} — "${tip.text}" (${tip.width}x${tip.height})`);
+  assert.ok(
+    tip.bulb && tip.bulb.w >= 8 && tip.bulb.h >= 8,
+    `${name} chat: the advice mark rendered with no size — ${JSON.stringify(tip)}`,
+  );
+  log(`${name} welcome tip: ${tip.id} — "${tip.text}" (${tip.width}x${tip.height}), mark ${tip.bulb.w}x${tip.bulb.h}`);
   await shot(page, `${name}-1b-welcome-tip`);
 
   // Taking it opens the settings category it names, and retires the line.
