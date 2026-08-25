@@ -1972,7 +1972,10 @@
     },
     {
       id: "mentions",
-      copy: "Point at a file with {@}, or drop one onto the composer.",
+      // The actionable phrase, not the character: "@" alone is about six pixels
+      // wide, and no amount of padding turns that into a finger-sized target
+      // without visibly shoving the sentence around it.
+      copy: "{Mention a file with @}, or drop one onto the composer.",
       target: "mention",
       deskOnly: false,
       eligible: () => true,

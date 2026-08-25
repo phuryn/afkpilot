@@ -1450,8 +1450,13 @@ body.thinking-hidden .msg.thinking.find-reveal { display: block; }
    pulling back out with a negative margin. */
 @media (hover: none), (pointer: coarse) {
   .welcome-tip.welcome-advice .muted-link {
-    padding: 11px 8px;
-    margin: 0 -8px;
+    /* Padding on an INLINE element gives a hit box of line-box + 2x padding,
+       and the line box is a font-metric — 11px each side cleared 36 on Windows
+       (14.8px line) and landed on 34 in CI on Linux (12px line). Sized from the
+       shortest metric, not the local one: 12 + 26 = 38. The horizontal pair is
+       what carries the narrowest action phrase ("Plan") over the same floor. */
+    padding: 13px 12px;
+    margin: 0 -12px;
   }
   .welcome-tip-dismiss {
     width: 36px;

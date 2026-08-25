@@ -435,6 +435,47 @@ async function welcomeTipScreens(page, name) {
   log(`${name} welcome tip target: settings on "${after.category}"`);
   await page.keyboard.press("Escape");
   await page.waitForTimeout(300);
+
+  // EVERY tip's action, not just the one that happened to be showing.
+  //
+  // This exists because the first version of this gate measured a single tip
+  // and passed, and CI then failed on a DIFFERENT one — "Plan", reached only
+  // because an earlier step had rotated the pool. A floor that depends on which
+  // tip the rotation lands on is not a floor. So walk the whole pool by
+  // dismissing, measure each action on the way past, and report all of them.
+  const actions = await page.evaluate(() => {
+    const seen = [];
+    for (let i = 0; i < 14; i++) {
+      const el = document.getElementById("welcome-tip");
+      if (!el) break;
+      const act = el.querySelector(".muted-link");
+      if (act) {
+        const b = act.getBoundingClientRect();
+        seen.push({
+          id: el.dataset.tip || "?",
+          text: act.textContent.trim(),
+          w: Math.round(b.width),
+          h: Math.round(b.height),
+        });
+      }
+      const close = el.querySelector(".welcome-tip-dismiss");
+      if (!close) break;
+      close.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    }
+    return seen;
+  });
+  assert.ok(actions.length > 0, `${name}: the pool walk measured nothing`);
+  // The floor is a TOUCH floor, and `desk` is a mouse — same split the panel
+  // gate above uses. On a mouse an inline link is as big as its text and that
+  // is correct; on a finger it is not.
+  if (name !== "desk") {
+    const tiny = actions.filter((a) => a.w < 36 || a.h < 36);
+    assert.deepEqual(
+      tiny, [],
+      `${name}: tip actions under the 36px tap floor — ${JSON.stringify(tiny)} (saw ${JSON.stringify(actions)})`,
+    );
+  }
+  log(`${name} tip actions: ${actions.map((a) => `${a.id} ${a.w}x${a.h}`).join(", ")}`);
 }
 
 /**
