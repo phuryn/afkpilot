@@ -7450,7 +7450,10 @@
       readRepliesAloud: IS_REMOTE ? !!state.remoteTts : !!state.readRepliesAloud,
       voiceConfigured: !!state.voiceConfigured,
       remoteLinked: state.remoteLinked,
-      dismissed: Array.isArray(host.dismissed) ? host.dismissed : [],
+      // Host list plus anything retired here. The union, so the control works
+      // before the first frame and keeps working if the host never answers.
+      dismissed: (Array.isArray(host.dismissed) ? host.dismissed : [])
+        .concat(Array.from(welcomeTipsRetiredHere)),
       shownToday: Array.isArray(host.shownToday) ? host.shownToday : [],
       // The tip on screen is exempt from the once-a-day filter — it joined that
       // list when it rendered, and a repaint must not blank it mid-read.
@@ -7496,12 +7499,25 @@
     }
   }
 
-  /** Retire a tip on this machine - the same message for "took it" and "not
-   *  interested", because both mean the reader is done with it. */
+  /**
+   * Tips retired in THIS client, whatever the host has said.
+   *
+   * The dismiss control used to write only into `state.welcomeTips.dismissed`,
+   * which meant it did nothing at all whenever that frame had not arrived: no
+   * local record, so the next render recomputed the same pool and put the same
+   * tip straight back. On a host too old to answer, the X stayed inert for
+   * ever. A control whose effect depends on a frame having landed is a control
+   * that silently does nothing, so this set is consulted unconditionally and
+   * merged with whatever the host reports.
+   */
+  const welcomeTipsRetiredHere = new Set();
+
+  /** Retire a tip - the same message for "took it" and "not interested",
+   *  because both mean the reader is done with it. */
   function retireWelcomeTip(id) {
+    // First, and never conditionally: this is what makes the click work.
+    welcomeTipsRetiredHere.add(id);
     const host = state.welcomeTips;
-    // Optimistic local retirement so the slot changes on this click rather than
-    // on the host's answering frame. The host echoes a fresh list either way.
     if (host && Array.isArray(host.dismissed) && host.dismissed.indexOf(id) < 0) {
       host.dismissed = host.dismissed.concat([id]);
     }
