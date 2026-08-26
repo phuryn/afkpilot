@@ -8426,6 +8426,100 @@
     }
   }
 
+  /**
+   * Connecting an agent from a phone.
+   *
+   * This panel used to say "accounts can only be connected on the computer
+   * running this workspace" and stop there. That was true of the old
+   * implementation — `runGrokLogin` opened a terminal on the desk, which a
+   * remote cannot see — and it was a dead end at the exact moment someone most
+   * wanted a next step. The host now runs the CLI's headless device-code flow
+   * for a remote request, so the answer is a URL and a short code instead.
+   *
+   * Everything below renders from what the host reported. The client makes no
+   * judgement about which providers have a headless flow: it offers the button,
+   * and a provider that cannot be signed in from here comes back `unavailable`
+   * with a sentence saying so. That way a CLI that grows the flow starts working
+   * without a client change, and one that loses it stops lying.
+   */
+  function remoteConnectPanel(mode, info, ver) {
+    const device = info.device;
+    const provider = info.provider
+      || (mode === "codex-login" ? "codex" : mode === "claude-login" ? "claude" : mode === "auth-required" ? "grok" : "");
+    const NAMES = { grok: "Grok", codex: "Codex", claude: "Claude" };
+    const name = NAMES[provider] || "an agent";
+    const status = (text) => { if (ver) setWelcomeStatus(text, false); };
+    const cancel = `<button class="onb-action onb-secondary" type="button" data-act="cancelDeviceLogin" `
+      + `data-provider="${escapeHtml(provider)}">Cancel</button>`;
+
+    if (device && device.status === "waiting" && device.url) {
+      status("Confirm the code");
+      return `<div class="onb">` +
+        `<p class="onb-heading">Finish signing in to ${escapeHtml(name)}</p>` +
+        (device.code
+          ? `<p class="onb-desc">Open the link, then confirm this code:</p>` +
+            // Same markup as every other copyable value in this panel, so it
+            // inherits the existing copy handler and its copied state.
+            `<div class="onb-cmd">` +
+              `<code>${escapeHtml(device.code)}</code>` +
+              `<button class="onb-copy" type="button" title="Copy" data-cmd="${escapeHtml(device.code)}">${ICON.copy}</button>` +
+            `</div>`
+          : `<p class="onb-desc">Open the link to finish signing in.</p>`) +
+        `<a class="onb-action" href="${escapeHtml(device.url)}" target="_blank" rel="noopener noreferrer">Open the sign-in page</a>` +
+        cancel +
+        // Said plainly because the instinct is to come back and press something
+        // else. Nothing else needs pressing.
+        `<p class="onb-desc">Keep this page open &mdash; it finishes on its own.</p>` +
+      `</div>`;
+    }
+
+    if (device && device.status === "starting") {
+      status("Starting sign-in");
+      return `<div class="onb">` +
+        `<p class="onb-heading">Connecting ${escapeHtml(name)}</p>` +
+        `<p class="onb-desc">Asking the ${escapeHtml(name)} CLI for a sign-in code&hellip;</p>` +
+        cancel +
+      `</div>`;
+    }
+
+    if (device && device.status === "done") {
+      status("Connected");
+      return `<div class="onb">` +
+        `<p class="onb-heading">${escapeHtml(name)} connected</p>` +
+        `<p class="onb-desc">You can start a conversation.</p>` +
+      `</div>`;
+    }
+
+    if (device && (device.status === "failed" || device.status === "unavailable")) {
+      const stuck = device.status === "unavailable";
+      status(stuck ? "Sign in at your computer" : "Sign-in failed");
+      // `unavailable` gets no retry button. Offering one for a flow that cannot
+      // work here is how a dead end gets disguised as a loop.
+      return `<div class="onb">` +
+        `<p class="onb-heading">${stuck ? `Connect ${escapeHtml(name)} at your computer` : `Could not connect ${escapeHtml(name)}`}</p>` +
+        `<p class="onb-desc">${escapeHtml(device.message || "")}</p>` +
+        (stuck
+          ? ""
+          : `<button class="onb-action" type="button" data-act="connectRemote" data-provider="${escapeHtml(provider)}">Try again</button>`) +
+      `</div>`;
+    }
+
+    // No flow started yet. `connect-agent` means nothing is connected at all, so
+    // offer each rather than guessing which one the person wants. The client
+    // does not decide which of these can work headlessly — it asks, and the host
+    // answers `unavailable` with a reason for any that cannot.
+    status("Connect an agent");
+    const offer = provider ? [provider] : ["grok", "codex", "claude"];
+    const buttons = offer
+      .map((id) => `<button class="onb-action" type="button" data-act="connectRemote" data-provider="${id}">Connect ${NAMES[id]}</button>`)
+      .join("");
+    return `<div class="onb">` +
+      `<p class="onb-heading">${provider ? `Connect ${escapeHtml(name)}` : "Connect an agent"}</p>` +
+      `<p class="onb-desc">Sign in with your own account. You will open a link and confirm a short code &mdash; no password is typed here, and nothing is stored on this page.</p>` +
+      buttons +
+    `</div>`;
+  }
+
   /** `beforeRender` runs after the mode is set and before markup is built, so a
    *  host-launched terminal can be recorded against the panel it belongs to. */
   function showOnboarding(mode, info, beforeRender) {
@@ -8447,13 +8541,7 @@
     const ver = $("welcome-version");
     if (!onb) return;
     if (IS_REMOTE && (mode === "connect-agent" || mode === "codex-login" || mode === "claude-login" || mode === "auth-required")) {
-      if (ver) setWelcomeStatus("Sign in at the desk", false);
-      const providerName = mode === "codex-login" ? "Codex" : mode === "claude-login" ? "Claude" : mode === "auth-required" ? "Grok" : "an agent";
-      onb.innerHTML =
-        `<div class="onb">` +
-          `<p class="onb-heading">Sign in at the desk</p>` +
-          `<p class="onb-desc">${providerName} accounts can only be connected on the computer running this workspace. Sign in there, then refresh this remote view.</p>` +
-        `</div>`;
+      onb.innerHTML = remoteConnectPanel(mode, info, ver);
       return;
     }
     if (mode === "no-project") {
@@ -16117,7 +16205,7 @@
           // Record the host-launched terminal BEFORE rendering, so the panel is
           // painted with the done mark already on rather than flashing an
           // untouched button first.
-          showOnboarding(msg.state, { platform: msg.platform, reason: msg.reason, provider: msg.provider }, () => {
+          showOnboarding(msg.state, { platform: msg.platform, reason: msg.reason, provider: msg.provider, device: msg.device }, () => {
             if (msg.launched) markOnboardingLaunchedByHost(msg.provider);
           });
         break;
@@ -16824,6 +16912,11 @@
       else if (act === "connectProvider") vscode.postMessage({ type: "runGrokLogin", provider: onbAction.dataset.provider });
       else if (act === "recheckProvider") vscode.postMessage({ type: "recheckConnection", provider: onbAction.dataset.provider });
       else if (act === "retryProvider") vscode.postMessage({ type: "retryProviderSession", provider: onbAction.dataset.provider });
+      // Same message the desk sends. The host, not the client, decides that a
+      // remote request means the headless flow — so there is one capability
+      // here, not two, and nothing new for the policy table to gate.
+      else if (act === "connectRemote") vscode.postMessage({ type: "runGrokLogin", provider: onbAction.dataset.provider });
+      else if (act === "cancelDeviceLogin") vscode.postMessage({ type: "cancelDeviceLogin", provider: onbAction.dataset.provider });
       else if (act === "addProjectFolder") openAddProjectMenu(onbAction);
       return;
     }

@@ -1571,6 +1571,29 @@ body.thinking-hidden .msg.thinking.find-reveal { display: block; }
   color: inherit;
 }
 .onb-action:hover { background: var(--vscode-button-hoverBackground); }
+/* The remote sign-in panel's "Open the sign-in page" is a real link, because on
+   a phone it has to open a real browser tab. It still has to look like the
+   buttons above and below it.
+
+   `color` is repeated here deliberately, not inherited from .onb-action: the
+   global `a { color: var(--vscode-textLink-foreground) }` above wins over the
+   class, and this shipped for one screenshot as link-blue text on the blue
+   button fill — 1.12:1, an effectively blank button that every DOM assertion
+   was happy with. scripts/remote-signin-check.mjs now measures the contrast. */
+a.onb-action {
+  display: block;
+  box-sizing: border-box;
+  color: var(--vscode-button-foreground);
+  text-decoration: none;
+}
+a.onb-action:hover {
+  color: var(--vscode-button-foreground);
+  text-decoration: none;
+}
+a.onb-action.onb-secondary,
+a.onb-action.onb-secondary:hover {
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+}
 .onb-action.onb-secondary {
   background: var(--vscode-button-secondaryBackground, transparent);
   color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
