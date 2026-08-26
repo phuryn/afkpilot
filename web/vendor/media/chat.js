@@ -7434,6 +7434,12 @@
    * alternate agent IS connected, so the one tip a multi-agent user would find
    * silly cannot flash on screen during startup.
    */
+  /** Whatever tip is on screen right now, or "". */
+  function currentWelcomeTipId() {
+    const el = document.getElementById("welcome-tip");
+    return (el && el.dataset && el.dataset.tip) || "";
+  }
+
   function welcomeTipFacts() {
     const host = state.welcomeTips || {};
     const providers = state.providers || [];
@@ -7443,6 +7449,10 @@
     return {
       appPurpose: state.appPurpose === "coding" ? "coding" : "knowledge",
       isRemote: IS_REMOTE,
+      // Mirrors continueChatDestinations(), so the tip is never offered where
+      // the action it links to would be refused.
+      worktreeSupported: state.worktreeSupported !== false,
+      inWorktree: !!state.isWorktree,
       altAgentConnected: !state.providersKnown || altConnected,
       routineCount: host.routineCount,
       connectorCount: host.connectorCount,
@@ -7454,30 +7464,63 @@
       // before the first frame and keeps working if the host never answers.
       dismissed: (Array.isArray(host.dismissed) ? host.dismissed : [])
         .concat(Array.from(welcomeTipsRetiredHere)),
-      shownToday: Array.isArray(host.shownToday) ? host.shownToday : [],
+      shownToday: (Array.isArray(host.shownToday) ? host.shownToday : [])
+        .concat(Array.from(welcomeTipsClosedHere)),
       // The tip on screen is exempt from the once-a-day filter — it joined that
-      // list when it rendered, and a repaint must not blank it mid-read.
-      keepId: (document.getElementById("welcome-tip") || {}).dataset
-        ? document.getElementById("welcome-tip").dataset.tip || ""
-        : "",
+      // list when it rendered, and a repaint must not blank it mid-read. Closing
+      // it with the X is exactly the act of releasing that pin.
+      keepId: welcomeTipsClosedHere.has(currentWelcomeTipId())
+        ? ""
+        : currentWelcomeTipId(),
     };
   }
 
-  /** Record that a tip has had its turn today, once. */
-  function noteWelcomeTipShown(id) {
+  /**
+   * Record that a tip has had its turn today, once per client.
+   *
+   * Deliberately NOT conditional on the host frame having arrived — that is the
+   * same mistake the dismiss control made, where an effect that depended on a
+   * frame landing silently did nothing when it had not.
+   */
+  function noteWelcomeTipShown(id, force) {
+    if (!force && welcomeTipsNoted.has(id)) return;
+    welcomeTipsNoted.add(id);
     const host = state.welcomeTips;
-    if (!host || !Array.isArray(host.shownToday)) return;
-    if (host.shownToday.indexOf(id) >= 0) return;
-    host.shownToday = host.shownToday.concat([id]);
+    if (host && Array.isArray(host.shownToday) && host.shownToday.indexOf(id) < 0) {
+      host.shownToday = host.shownToday.concat([id]);
+    }
     vscode.postMessage({ type: "welcomeTipShown", id });
   }
 
-  /** Where a tip's action goes. Every destination is real - a tip whose target
-   *  cannot be opened from an empty screen carries no link at all (worktrees). */
+  /** The X: done with this one for today. */
+  function closeWelcomeTipForToday(id) {
+    welcomeTipsClosedHere.add(id);
+    // `force`, because the render already noted this id and the once-guard
+    // would otherwise swallow the message. That guard exists to stop repaints
+    // rewriting the file all afternoon; a deliberate close is not a repaint,
+    // and if the render's note never reached the host then without this one
+    // tomorrow would look exactly like today. The host is idempotent per day,
+    // so the extra message costs nothing when the first one did arrive.
+    noteWelcomeTipShown(id, true);
+  }
+
+  /**
+   * Where a tip's action goes. Every destination is real and reachable from an
+   * empty screen — that is the bar a tip has to clear to earn a link at all,
+   * and the reason the Plan tip was removed rather than given one: it pointed
+   * at a mode menu, which is a control, not work.
+   */
   function runWelcomeTipTarget(target) {
     if (typeof target !== "string") return;
     if (target.indexOf("settings:") === 0) {
       openSettingsCategory(target.slice("settings:".length));
+      return;
+    }
+    if (target === "worktree") {
+      // No confirm step: the host refuses a non-git folder and a nested
+      // worktree with a message of its own, and on an empty screen the only
+      // other destination ("use this checkout") is what the screen already is.
+      vscode.postMessage({ type: "newWorktreeSession" });
       return;
     }
     if (target === "mention") {
@@ -7511,6 +7554,20 @@
    * merged with whatever the host reports.
    */
   const welcomeTipsRetiredHere = new Set();
+
+  /**
+   * Tips the reader has closed with the X — NOT TODAY, not for ever.
+   *
+   * Every tip is already recorded as shown for the day the moment it renders,
+   * so closing one does not need to record anything new: it only has to release
+   * the pin that keeps the tip currently on screen exempt from that day filter.
+   * Tomorrow it comes round again.
+   */
+  const welcomeTipsClosedHere = new Set();
+
+  /** Ids this client has already reported as shown, so a repaint cannot post
+   *  the same note over and over. */
+  const welcomeTipsNoted = new Set();
 
   /** Retire a tip - the same message for "took it" and "not interested",
    *  because both mean the reader is done with it. */
@@ -7559,6 +7616,13 @@
     if (!helpers || typeof helpers.welcomeTipsFor !== "function") return drop();
     const status = $("welcome-version");
     if (status && status.classList.contains("welcome-status-busy")) return drop();
+    // BOTH the mode and the node. The node alone is a proxy that is briefly
+    // wrong: showOnboarding sets the mode, reveals the welcome — which stamps
+    // the status line, which re-renders this slot — and only then writes the
+    // card's HTML. In that gap the node is still empty, so a tip rendered over
+    // an empty state that was about to have a call to action in it, and burned
+    // its own once-a-day turn doing so.
+    if (state.onboardingMode) return drop();
     const onb = $("welcome-onboarding");
     if (onb && onb.childNodes.length) return drop();
 
@@ -7624,13 +7688,13 @@
     const close = document.createElement("button");
     close.type = "button";
     close.className = "welcome-tip-dismiss";
-    close.title = "Not interested";
-    close.setAttribute("aria-label", "Dismiss this tip");
+    close.title = "Not today";
+    close.setAttribute("aria-label", "Hide this tip until tomorrow");
     close.textContent = "\u00d7";
     close.onclick = (e) => {
       e.preventDefault();
       e.stopPropagation();
-      retireWelcomeTip(tip.id);
+      closeWelcomeTipForToday(tip.id);
       renderWelcomeTip();
     };
     el.appendChild(close);

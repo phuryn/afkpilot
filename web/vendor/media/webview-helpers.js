@@ -1975,13 +1975,18 @@
     },
     {
       id: "worktrees",
-      // No target: starting a worktree needs a conversation to continue FROM,
-      // and this tip is only ever shown on an empty screen. Emphasis without a
-      // link is honest; a link that opens nothing is not.
-      copy: "Keep your checkout clean — let the agent work in {its own worktree}.",
-      target: null,
+      // It DOES have an action, which the first version of this tip missed:
+      // `newWorktreeSession` takes no source conversation — it cuts from the
+      // current project — so it works perfectly well from an empty screen. The
+      // copy names what the click does rather than describing a menu path
+      // nobody remembers ("… > Continue in a new chat > Use a new worktree").
+      copy: "Trying something risky? {Start it in a worktree} — your checkout stays untouched.",
+      target: "worktree",
       deskOnly: true,
-      eligible: (f) => f.appPurpose === "coding",
+      // Every condition the destination list itself applies, so the link can
+      // never fire something the host would refuse: coding mode, a CLI that
+      // supports worktrees, and not already inside one (they do not nest).
+      eligible: (f) => f.appPurpose === "coding" && f.worktreeSupported && !f.inWorktree,
     },
   ];
 
@@ -2020,6 +2025,11 @@
       connectorCount: typeof f.connectorCount === "number" ? f.connectorCount : -1,
       readRepliesAloud: !!f.readRepliesAloud,
       voiceConfigured: !!f.voiceConfigured,
+      // Opt-OUT, matching the client's own default: a CLI is assumed to support
+      // worktrees until a create says otherwise, and reading absence as "no"
+      // here would have hidden the tip on every host that never mentions it.
+      worktreeSupported: f.worktreeSupported !== false,
+      inWorktree: !!f.inWorktree,
       remoteLinked: f.remoteLinked === true ? true : f.remoteLinked === false ? false : null,
     };
     return WELCOME_TIPS.filter((tip) => {
