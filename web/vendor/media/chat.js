@@ -8449,6 +8449,20 @@
     const NAMES = { grok: "Grok", codex: "Codex", claude: "Claude" };
     const name = NAMES[provider] || "an agent";
     const status = (text) => { if (ver) setWelcomeStatus(text, false); };
+
+    // The relay serves this page, so it is always as new as the last deploy
+    // while the host is whatever the user installed. A host built before remote
+    // sign-in existed classifies `runGrokLogin` as host-local and DROPS it
+    // silently — so offering Connect there would be a button that does nothing,
+    // which is worse than the honest dead end it replaced. Capability, never a
+    // version check.
+    if (!(state.hostCaps && state.hostCaps.remoteAgentSignIn)) {
+      status("Sign in at the desk");
+      return `<div class="onb">` +
+        `<p class="onb-heading">Sign in at the desk</p>` +
+        `<p class="onb-desc">${escapeHtml(name === "an agent" ? "Agent" : name)} accounts can only be connected on the computer running this workspace. Sign in there, then refresh this remote view.</p>` +
+      `</div>`;
+    }
     const cancel = `<button class="onb-action onb-secondary" type="button" data-act="cancelDeviceLogin" `
       + `data-provider="${escapeHtml(provider)}">Cancel</button>`;
 

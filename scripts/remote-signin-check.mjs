@@ -80,6 +80,9 @@ try {
   const snapshot = (clientId, msgs) => uplink.send(JSON.stringify({ t: "snapshot", clientId, msgs }));
   const host = (clientId, msg) => uplink.send(JSON.stringify({ t: "host-to", clientIds: [clientId], msg }));
   let clientId = "";
+  // Flipped for the last leg, which re-attaches a browser to a host that does
+  // not advertise remote sign-in.
+  let legacyHost = false;
   /** Everything the browser sent us. The assertions read this. */
   const fromClient = [];
 
@@ -92,7 +95,10 @@ try {
         {
           type: "initialState", version: "signin", cwd: CWD, extVersion: "3.18.0",
           hostKind: "desktop", hostName: "Pawel-Desk",
-          capabilities: { uploadFile: true },
+          // `remoteAgentSignIn` is what makes the panel offer anything. A host
+          // that omits it — every build before this shipped — must get the old
+          // desk-only guidance instead, and that case is asserted at the end.
+          capabilities: { uploadFile: true, ...(legacyHost ? {} : { remoteAgentSignIn: true }) },
         },
         {
           type: "repos",
@@ -272,6 +278,25 @@ try {
   );
   await page.screenshot({ path: join(OUT, "signin", "6-done.png") });
   log("success is confirmed");
+
+  // 7. THE COMPATIBILITY CONTRACT. The relay serves this page, so the moment it
+  //    deploys, every user still on an older extension is running this client
+  //    against a host that classifies `runGrokLogin` as host-local and drops it
+  //    without a word. Offering Connect there is a button that does nothing —
+  //    strictly worse than the honest dead end it replaced.
+  legacyHost = true;
+  await page.reload({ waitUntil: "load" });
+  await page.locator("#welcome-onboarding").waitFor({ state: "visible", timeout: 15000 });
+  await waitFor(
+    async () => (await page.locator("#welcome-onboarding").innerText()).includes("only be connected on the computer"),
+    "the older-host fallback",
+  );
+  assert.equal(
+    await page.locator('[data-act="connectRemote"]').count(), 0,
+    "a host that does not advertise remoteAgentSignIn must not be offered Connect",
+  );
+  await page.screenshot({ path: join(OUT, "signin", "7-legacy-host.png") });
+  log("an older host gets the honest fallback, not a dead button");
 
   assert.deepEqual(pageErrors, [], "the page must throw nothing");
   log(`screens in ${join(OUT, "signin")}`);
