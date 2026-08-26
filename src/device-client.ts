@@ -6,7 +6,12 @@
 // invented. Invalid values are refused (not coerced) so a typo cannot become
 // a stored label.
 
-export const DEVICE_PLATFORMS = ["win", "mac", "linux", "unknown"] as const;
+// "cloud" is not an operating system, and that is the point: an AFK Pilot cloud
+// environment runs on Linux, but saying so tells the owner nothing they can act
+// on and invites them to reason about a machine they do not administer. It is a
+// DEVICE KIND sitting in the platform slot, which is what the picker actually
+// renders.
+export const DEVICE_PLATFORMS = ["win", "mac", "linux", "cloud", "unknown"] as const;
 export type DevicePlatform = (typeof DEVICE_PLATFORMS)[number];
 
 export const DEVICE_CLIENT_LABEL_MAX = 64;
