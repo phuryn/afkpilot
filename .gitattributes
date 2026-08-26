@@ -16,3 +16,9 @@ web/vendor/** -text
 # Windows working tree and looks like a corrupt dependency rather than an EOL.
 # Cost us a long hunt on scripts/lifecycle-e2e.mjs.
 *.mjs text eol=lf
+
+# Shell scripts run INSIDE a Linux container. CRLF makes the shebang line read
+# as `/usr/bin/env bash`, which does not exist, and the container dies with a
+# "bad interpreter" that names a binary you can see is installed. Invisible on
+# the machine that wrote the file; certain on every fresh clone.
+*.sh text eol=lf
