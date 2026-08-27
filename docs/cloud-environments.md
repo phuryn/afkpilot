@@ -54,20 +54,53 @@ vocabularies, and collapsing them would make one of them lie.
 
 ## Sleeping, and the rule that matters
 
-An environment is allowed to sleep when **no client is watching it AND no agent
-turn is in flight**.
+An environment sleeps when **its machine has been quiet for ninety seconds**,
+and stays awake for as long as it is working. Somebody who closes their laptop
+while an agent works for twenty minutes is not idle — they are the reason this
+exists.
 
-The second half is the product. Someone who closes their laptop while an agent
-works for twenty minutes is not idle — they are the reason this exists. A rule
-that counted only attached clients would stop the work the moment the person
-walked away.
+### Suspended means frozen, which is why this needed solving at all
 
-The first half is client-side, because the relay cannot see a person — an open
-socket is exactly what a forgotten tab looks like. Your browser reports that
-somebody is present (pointer, keyboard, tab visibility) every thirty seconds. Go
-quiet for five minutes, or send the tab to the background, and it stops
-reporting; the hold lapses and the machine sleeps. You are never shown any of
-this, and none of it can interrupt work already running.
+Measured 2026-08-27, because the answer decides the design. A sprite suspends
+about a minute after the last **external** interaction, and a suspended machine
+is not merely idle:
+
+    a service writing a timestamp every 5s
+    samples: 12   first 23:04:18Z   last 23:05:13Z   then silence
+
+It stopped dead the moment the machine went `warm`. Its own output bought it
+nothing, so a long turn did not survive the phone being put down.
+
+A poke does not fix it either: an instantaneous command every thirty seconds
+held the machine at `warm` — awake enough to answer, still frozen between calls.
+What holds it in `running` is an exec **session that stays open**. So that is
+what the relay does, and letting go of it is what lets the machine sleep.
+
+### What counts as working
+
+Traffic on the uplink, and nothing more. The relay does not read frames to
+decide this — it counts their arrival, which is what keeps the feature
+consistent with the relay being policy-free: it can tell that work is happening
+without knowing what the work is.
+
+Ordinary streamed output is enough on its own, and that is what protects an
+extension too old to know about any of this. But a turn spends most of its life
+waiting on a tool with nothing to say — four minutes of a test run streams
+nothing — so a current extension also sends a `working` frame every thirty
+seconds while a turn is in flight. It carries no payload and produces no side
+effect; its whole job is to arrive.
+
+Billing follows the same line: a machine is kept running exactly while it is
+earning its keep, and is allowed to fall asleep the moment it is not. You are
+never shown any of this, and none of it can interrupt work already running.
+
+### Waking is not the same as staying awake
+
+Resuming takes about a second. A host noticing its socket died and dialling back
+takes longer than the minute the hypervisor waits before suspending it again —
+so a wake on its own would be undone before anybody could use it. A woken
+machine is therefore HELD running while its uplink finds its way back, and the
+hold lapses by itself if it never does.
 
 ## Routines still run
 
@@ -211,6 +244,8 @@ ordinary way when it sleeps. That distinction is the whole column.
 - [`src/environments.ts`](../src/environments.ts) — the decisions, pure
 - [`src/environment-store.ts`](../src/environment-store.ts) — persistence seam
 - [`src/environment-waker.ts`](../src/environment-waker.ts) — waking, de-duplicated
+- [`src/environment-keepalive.ts`](../src/environment-keepalive.ts) — holding a
+  machine running while it works, and letting go when it stops
 - [`src/wake-scheduler.ts`](../src/wake-scheduler.ts) — the scheduled-wake sweep
 - [`src/environment-pool.ts`](../src/environment-pool.ts) — shelf arithmetic, pure
 - [`src/environment-pool-store.ts`](../src/environment-pool-store.ts) — the shelf

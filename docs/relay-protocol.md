@@ -129,6 +129,7 @@ Frames **extension → relay** (`UplinkFrame`):
 | host | `{t:"host", msg:<HostMsg>}` | device-wide state only: broadcast to every browser client of this device |
 | host-to | `{t:"host-to", clientIds:[...], msg:<HostMsg>}` | session/view state for exactly the listed browser clients; unknown/departed ids are ignored |
 | snapshot | `{t:"snapshot", clientId, msgs:[<HostMsg>...]}` | ordered catch-up for ONE client (answering client-ready) |
+| working | `{t:"working"}` | "a turn is in flight", sent about every 30s. Carries no payload, is routed nowhere, and produces no side effect — its only job is to ARRIVE, because a cloud machine is held awake by traffic on its uplink and a turn spends most of its life waiting on a tool with nothing to say. Additive — a relay that predates it drops the frame silently, so it is safe to send unconditionally, and do not bump `REMOTE_PROTO_VERSION` |
 
 Frames **relay → extension** (`RelayFrame`):
 
