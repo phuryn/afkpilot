@@ -1,0 +1,191 @@
+// The device picker with a cloud environment in it — in a real browser.
+//
+// WHY THIS EXISTS. The unit suites prove `deviceAvailability` returns "ready"
+// for a sleeping environment. They cannot prove that a person looking at the
+// page sees a usable row: happy-dom has no layout, and the difference between
+// "ready" and "offline" here is a live link versus a dead grey one. That is a
+// rendered fact, and the only way to check it is to render it.
+//
+// It also pins the thing most likely to be "simplified" back into a bug: a
+// sleeping environment must NOT be labelled asleep, and its button must NOT be
+// disabled. Opening it is what wakes it.
+//
+// Run: npm run e2e:cloud
+import { spawn } from "node:child_process";
+import assert from "node:assert/strict";
+import { mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { chromium } from "playwright";
+
+const PORT = Number(process.env.CLOUD_PICKER_PORT || 8803);
+const BASE = `http://127.0.0.1:${PORT}`;
+const OUT = join(process.env.SCREENS_DIR || ".screens", "cloud-picker");
+const log = (m) => console.log(`[cloud-picker] ${m}`);
+const browserExecutable = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+
+rmSync(OUT, { recursive: true, force: true });
+mkdirSync(OUT, { recursive: true });
+
+const relay = spawn(process.execPath, ["dist/main.js"], {
+  env: {
+    ...process.env,
+    RELAY_PORT: String(PORT),
+    CLERK_SECRET_KEY: "", CLERK_PUBLISHABLE_KEY: "", SUPABASE_URL: "", SUPABASE_SECRET_KEY: "",
+  },
+  stdio: ["ignore", "pipe", "pipe"],
+});
+relay.stdout.on("data", () => {});
+let relayErr = "";
+relay.stderr.on("data", (d) => { relayErr += String(d); });
+
+const waitFor = async (fn, what, ms = 15000) => {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 150));
+  }
+};
+
+/**
+ * The picker is driven from a STUBBED /api/devices rather than a real hosted
+ * machine: the states worth photographing include "a wake just failed", which
+ * cannot be produced on demand against a live provider. What is real is the
+ * page — its markup, CSS and JavaScript are the shipped ones.
+ */
+const DEVICES = {
+  devices: [
+    {
+      deviceId: "d-cloud-sleeping",
+      name: "Cloud — Pawel",
+      createdAt: Date.now() - 86_400_000,
+      online: false,
+      clients: 0,
+      clientLabel: "by afkpilot.com",
+      platform: "cloud",
+      osLabel: null,
+      availability: "ready",
+      environment: { provider: "sprite" },
+    },
+    {
+      deviceId: "d-cloud-waking",
+      name: "Cloud — build box",
+      createdAt: Date.now() - 86_400_000,
+      online: false,
+      clients: 0,
+      clientLabel: "by afkpilot.com",
+      platform: "cloud",
+      osLabel: null,
+      availability: "waking",
+      environment: { provider: "sprite" },
+    },
+    {
+      deviceId: "d-cloud-broken",
+      name: "Cloud — over limit",
+      createdAt: Date.now() - 86_400_000,
+      online: false,
+      clients: 0,
+      clientLabel: "by afkpilot.com",
+      platform: "cloud",
+      osLabel: null,
+      availability: "offline",
+      environment: { provider: "sprite" },
+    },
+    {
+      deviceId: "d-laptop",
+      name: "DESKTOP-RHFLCK3",
+      createdAt: Date.now() - 86_400_000,
+      online: false,
+      clients: 0,
+      clientLabel: "VS Code extension",
+      platform: "win",
+      osLabel: "Windows 11",
+      availability: "offline",
+      environment: null,
+    },
+  ],
+};
+
+let browser;
+try {
+  await waitFor(async () => {
+    try { return (await fetch(`${BASE}/api/health`)).ok; } catch { return false; }
+  }, "the relay to listen");
+  if (relay.exitCode !== null) {
+    throw new Error(`relay exited (${relay.exitCode}) — port ${PORT} taken?\n${relayErr.slice(0, 400)}`);
+  }
+
+  browser = await chromium.launch(browserExecutable ? { executablePath: browserExecutable } : {});
+  for (const [tag, viewport, isMobile] of [
+    ["desk", { width: 1280, height: 900 }, false],
+    ["phone", { width: 390, height: 844 }, true],
+  ]) {
+    const ctx = await browser.newContext({ viewport, isMobile, hasTouch: isMobile, deviceScaleFactor: 2 });
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on("pageerror", (e) => errors.push(String(e?.stack || e)));
+    await page.route("**/api/devices", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(DEVICES) }));
+    await page.goto(BASE, { waitUntil: "load" });
+    await page.locator(".device-row").first().waitFor({ state: "visible", timeout: 15000 });
+
+    const row = (id) => page.locator(`.device-row:has(.device-remove[data-device-id="${id}"])`);
+
+    // 1. A SLEEPING environment must look usable. This is the whole model.
+    const sleeping = row("d-cloud-sleeping");
+    const sleepText = (await sleeping.innerText()).replace(/\s+/g, " ");
+    assert.ok(!/asleep|paused|warm|cold|hibernat/i.test(sleepText),
+      `a sleeping environment must not be described as asleep: ${sleepText}`);
+    assert.ok(!/\boffline\b/i.test(sleepText),
+      `a wakeable environment must not say offline: ${sleepText}`);
+    const startHref = await sleeping.locator("a.device-start").getAttribute("href");
+    assert.ok(startHref && startHref.includes("d-cloud-sleeping"),
+      "a sleeping environment must offer a LIVE link — opening it is what wakes it");
+    assert.equal(await sleeping.locator(".device-start.is-disabled").count(), 0,
+      "a sleeping environment's button must not be disabled");
+
+    // 2. It must not claim to run Linux or be a desktop app.
+    assert.ok(!/linux|desktop app/i.test(sleepText),
+      `a cloud row must not describe its operating system: ${sleepText}`);
+    assert.ok(/afkpilot\.com/i.test(sleepText), `a cloud row should say who runs it: ${sleepText}`);
+
+    // 3. A cloud icon, drawn and sized — not a collapsed empty box.
+    const iconBox = await sleeping.locator(".device-os-icon svg").boundingBox();
+    assert.ok(iconBox && iconBox.width >= 10 && iconBox.height >= 10,
+      `the cloud icon is not rendered: ${JSON.stringify(iconBox)}`);
+
+    // 4. An UNWAKEABLE environment is offline, with a dead button and a message
+    //    that does not send someone to VS Code they never installed.
+    const broken = row("d-cloud-broken");
+    assert.ok(/offline/i.test(await broken.innerText()), "an unwakeable environment reads offline");
+    assert.equal(await broken.locator("a.device-start").count(), 0,
+      "an unwakeable environment must not offer a live link");
+    const brokenTitle = await broken.locator(".device-start").getAttribute("title");
+    assert.ok(brokenTitle && !/VS Code/i.test(brokenTitle),
+      `an environment must not be explained as a VS Code problem: ${brokenTitle}`);
+
+    // 5. An ordinary offline laptop is unchanged — still offline, still told to
+    //    open VS Code. "We added a feature and nothing else moved."
+    const laptop = row("d-laptop");
+    assert.ok(/offline/i.test(await laptop.innerText()));
+    const laptopTitle = await laptop.locator(".device-start").getAttribute("title");
+    assert.ok(laptopTitle && /VS Code/i.test(laptopTitle),
+      `a laptop keeps its old guidance: ${laptopTitle}`);
+
+    // 6. Nothing hangs off the side of a phone.
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    assert.ok(overflow <= 1, `the picker overflows by ${overflow}px at ${viewport.width}px`);
+
+    assert.deepEqual(errors, [], "the page must throw nothing");
+    await page.screenshot({ path: join(OUT, `${tag}.png`), fullPage: true });
+    log(`${tag}: sleeping reads usable, unwakeable reads offline, laptop unchanged`);
+    await ctx.close();
+  }
+
+  log(`screens in ${OUT}`);
+  log("ALL CHECKS PASSED");
+} finally {
+  try { await browser?.close(); } catch { /* */ }
+  relay.kill();
+}

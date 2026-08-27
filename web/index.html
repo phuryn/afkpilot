@@ -1422,7 +1422,16 @@
       const display = window.deviceDisplay.resolveDeviceDisplay(d);
       const li = document.createElement("li");
       li.className = "device-row";
-      li.dataset.online = d.online ? "true" : "false";
+      // `availability` is what a reader should see; `online` is the socket. For
+      // an ordinary machine they agree. For a hosted one they deliberately do
+      // not: a sleeping environment is `ready`, because tapping it works.
+      //
+      // Older relays send no `availability`, so it falls back to `online` and
+      // this page behaves exactly as it did — field presence, never a version.
+      const availability = d.availability || (d.online ? "ready" : "offline");
+      const usable = availability !== "offline";
+      li.dataset.online = usable ? "true" : "false";
+      li.dataset.availability = availability;
 
       const body = document.createElement("div");
       body.className = "device-body";
@@ -1454,6 +1463,14 @@
       badge.className = "device-badge";
       if (d.online) {
         badge.textContent = d.clients + " viewer" + (d.clients === 1 ? "" : "s");
+      } else if (availability === "waking") {
+        // Only ever seen if a wake is genuinely slow. Sub-second is the norm.
+        badge.textContent = "starting";
+      } else if (availability === "ready") {
+        // A hosted machine that is asleep. NOT labelled "asleep": the reader
+        // has no action attached to that, and saying it invites them to reason
+        // about a machine they do not administer. The row simply works.
+        badge.textContent = "ready";
       } else {
         badge.classList.add("is-offline");
         badge.textContent = "offline";
@@ -1461,7 +1478,10 @@
       head.appendChild(badge);
       body.appendChild(head);
 
-      if (d.online) {
+      if (usable) {
+        // A sleeping environment gets a live link, not a disabled one. Opening
+        // it IS what wakes it: the relay starts the machine when a client
+        // attaches, and the wait is well under a second.
         const start = document.createElement("a");
         start.className = "btn btn-primary device-start";
         start.href = chatTarget(d.deviceId);
@@ -1473,7 +1493,12 @@
         const start = document.createElement("span");
         start.className = "btn btn-primary device-start is-disabled";
         start.setAttribute("aria-disabled", "true");
-        start.title = "Offline — open VS Code on that machine to reconnect";
+        // A hosted machine that cannot be woken is a different problem from a
+        // laptop that is switched off, and pointing someone at VS Code they
+        // never installed would be nonsense.
+        start.title = d.environment
+          ? "Couldn't start this environment. Try again."
+          : "Offline — open VS Code on that machine to reconnect";
         start.textContent = "Start remote session";
         body.appendChild(start);
       }
