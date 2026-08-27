@@ -40,7 +40,17 @@
     var parsed = parseLegacyDeviceName(name);
     var bits = [];
     if (device.clientLabel) bits.push(String(device.clientLabel));
-    if (device.osLabel) bits.push(String(device.osLabel));
+    // A cloud environment never shows an operating system, whatever is stored.
+    //
+    // Fixed HERE rather than on the wire because the relay's updateClient is a
+    // PATCH: a host that omits osLabel leaves the previous value alone, which is
+    // right for everyone else (an older host must not wipe fields it does not
+    // know about) and wrong for a device that became a cloud environment after
+    // it first linked. Those rows keep a stale "Linux" for ever, and only the
+    // reader can be fixed retroactively.
+    if (storedPlatform === "cloud") {
+      // nothing: who runs it is the whole parenthetical
+    } else if (device.osLabel) bits.push(String(device.osLabel));
     else if (parsed.parenthetical) bits.push(parsed.parenthetical);
     var platform = storedPlatform
       || (device.osLabel ? platformFromText(device.osLabel) : parsed.platform);

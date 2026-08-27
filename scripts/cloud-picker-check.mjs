@@ -63,8 +63,12 @@ const DEVICES = {
       online: false,
       clients: 0,
       clientLabel: "by afkpilot.com",
+      // A STALE os label, exactly as the owner's real row carries. The relay's
+      // updateClient is a patch, so a device that became a cloud environment
+      // after it first linked keeps whatever OS it reported back then — and
+      // "Cloud — Pawel (by afkpilot.com, Linux)" is what he actually saw.
+      osLabel: "Linux",
       platform: "cloud",
-      osLabel: null,
       availability: "ready",
       environment: { provider: "sprite" },
     },
@@ -147,7 +151,8 @@ try {
 
     // 2. It must not claim to run Linux or be a desktop app.
     assert.ok(!/linux|desktop app/i.test(sleepText),
-      `a cloud row must not describe its operating system: ${sleepText}`);
+      `a cloud row must not describe its operating system, even a stale one `
+      + `stored before it became an environment: ${sleepText}`);
     assert.ok(/afkpilot\.com/i.test(sleepText), `a cloud row should say who runs it: ${sleepText}`);
 
     // 3. A cloud icon, drawn and sized — not a collapsed empty box.
