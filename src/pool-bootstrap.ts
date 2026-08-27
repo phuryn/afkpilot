@@ -86,9 +86,15 @@ if [ ! -f "$STAMP" ]; then
   # Preferred: a published Linux build. Downloading 110 MB and unpacking it is
   # seconds; building the same thing from source was measured at 25 minutes,
   # nearly all of it npm ci thrashing the VM's writable overlay.
+  # Matched on the EXTENSION alone, not on an architecture string.
+  # electron-builder names AppImages "-linux-x86_64.AppImage", not "-linux-x64"
+  # like every other target — and a pattern that assumed otherwise matched
+  # nothing, silently fell through to the source build, and cost 25 minutes per
+  # machine while looking like it was working as designed. There is only ever
+  # one AppImage in a release, so the extension is the whole identity needed.
   step "install: looking for a published Linux build"
   ASSET=$(curl -fsSL https://api.github.com/repos/phuryn/grok-build-vscode/releases/latest \\
-    | grep -o '"browser_download_url": *"[^"]*-linux-x64\\.AppImage"' \\
+    | grep -o '"browser_download_url": *"[^"]*\\.AppImage"' \\
     | head -1 | sed 's/.*"\\(https[^"]*\\)"/\\1/')
 
   if [ -n "\${ASSET:-}" ]; then
