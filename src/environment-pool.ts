@@ -33,13 +33,17 @@ export const DEFAULT_POOL_SIZE = 20;
 /**
  * How many builds to start in one sweep.
  *
- * A cold start with an empty table wants twenty machines at once, which is
- * twenty simultaneous `POST /v1/sprites` calls followed by twenty simultaneous
- * `npm ci` runs against the same registry. Spreading them over sweeps costs
- * nothing — the pool is being filled ahead of demand, so it has time — and
- * keeps a burst of failures small enough to notice before it is twenty.
+ * This was 3, and sequential, on the reasoning that a cold start would mean
+ * twenty simultaneous `npm ci` runs against one registry. That cost is gone:
+ * a machine now downloads a published AppImage and is ready in **50 seconds**
+ * (measured), so the throttle was buying nothing and costing minutes — filling
+ * ten took four sweeps when it could take one.
+ *
+ * Ten at once is a handful of creates and ten CDN downloads. The cap survives
+ * only as a blast radius: if something is systematically broken, it is better
+ * to discover it having made ten machines than fifty.
  */
-export const MAX_BUILDS_PER_SWEEP = 3;
+export const MAX_BUILDS_PER_SWEEP = 10;
 
 /**
  * When a build is presumed dead.

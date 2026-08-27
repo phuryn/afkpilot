@@ -22,6 +22,7 @@ export interface PoolEntry {
   state: "building" | "ready" | "claimed" | "failed";
   createdAt: number;
   readyAt: number | null;
+  note?: string;
 }
 
 export interface EnvironmentPoolStore {
@@ -48,8 +49,19 @@ export interface EnvironmentPoolStore {
   claim(): Promise<{ externalId: string; provider: "sprite" } | null>;
   /** Forget a row — after its environment row is written, or after a scrap. */
   remove(externalId: string): Promise<boolean>;
-  /** Mark builds that are past believing in. Returns how many. */
-  failStale(now: number, timeoutMs?: number): Promise<number>;
+  /**
+   * Builds past believing in. READ ONLY — it names them, it does not bury them.
+   *
+   * Split from marking on purpose. A scrapped build still has a machine behind
+   * it, and a row marked `failed` before that machine is destroyed is a sprite
+   * nothing will ever look at again: the row no longer counts toward the target,
+   * so no sweep revisits it, and the bill runs forever. Naming and burying are
+   * separate so the sweep can destroy FIRST and mark only on success — and
+   * retry the whole thing next time if the provider was having a bad minute.
+   */
+  staleBuilds(now: number, timeoutMs?: number): Promise<string[]>;
+  /** Bury one, once its machine is actually gone. */
+  markFailed(externalId: string, note: string): Promise<boolean>;
 }
 
 export class InMemoryEnvironmentPoolStore implements EnvironmentPoolStore {
@@ -101,15 +113,18 @@ export class InMemoryEnvironmentPoolStore implements EnvironmentPoolStore {
     return this.rows.delete(externalId);
   }
 
-  async failStale(now: number, timeoutMs = BUILD_TIMEOUT_MS): Promise<number> {
-    let n = 0;
-    for (const r of this.rows.values()) {
-      if (r.state === "building" && now - r.createdAt >= timeoutMs) {
-        r.state = "failed";
-        n += 1;
-      }
-    }
-    return n;
+  async staleBuilds(now: number, timeoutMs = BUILD_TIMEOUT_MS): Promise<string[]> {
+    return [...this.rows.values()]
+      .filter((r) => r.state === "building" && now - r.createdAt >= timeoutMs)
+      .map((r) => r.externalId);
+  }
+
+  async markFailed(externalId: string, note: string): Promise<boolean> {
+    const row = this.rows.get(externalId);
+    if (!row || row.state !== "building") return false;
+    row.state = "failed";
+    row.note = note;
+    return true;
   }
 }
 
@@ -174,15 +189,24 @@ export class SupabaseEnvironmentPoolStore implements EnvironmentPoolStore {
     return !error;
   }
 
-  async failStale(now: number, timeoutMs = BUILD_TIMEOUT_MS): Promise<number> {
+  async staleBuilds(now: number, timeoutMs = BUILD_TIMEOUT_MS): Promise<string[]> {
     const cutoff = new Date(now - timeoutMs).toISOString();
     const { data, error } = await this.db
       .from("environment_pool")
-      .update({ state: "failed", note: "build never reported ready" })
+      .select("external_id")
       .eq("state", "building")
-      .lte("created_at", cutoff)
+      .lte("created_at", cutoff);
+    if (error || !data) return [];
+    return (data as unknown as { external_id: string }[]).map((r) => r.external_id);
+  }
+
+  async markFailed(externalId: string, note: string): Promise<boolean> {
+    const { data, error } = await this.db
+      .from("environment_pool")
+      .update({ state: "failed", note })
+      .eq("external_id", externalId)
+      .eq("state", "building")
       .select("external_id");
-    if (error || !data) return 0;
-    return data.length;
+    return !error && !!data && data.length > 0;
   }
 }

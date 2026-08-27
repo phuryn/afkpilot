@@ -71,7 +71,7 @@ describe("a sprite reporting itself ready", () => {
   });
 
   it("refuses one without it", async () => {
-    // The relay cannot watch a build from outside — exec returns no output — so
+    // A ~25-minute install is not something the relay sits and watches, so
     // `ready` is a claim the machine makes. Without the secret, guessing a name
     // would put a half-built box in front of a user.
     const s = store();
@@ -121,23 +121,41 @@ describe("counting", () => {
 });
 
 describe("scrapping stale builds", () => {
-  it("marks them failed so the slot can be refilled", async () => {
+  it("NAMES them without burying them", async () => {
+    // Naming and burying are separate because a scrapped build still has a
+    // machine behind it. Marking the row first means no later sweep ever looks
+    // at it again — the row counts toward nothing — and the bill runs forever.
     const s = store(() => 0);
     await s.add("afkpilot-pool-b", SECRET);
-    expect(await s.failStale(BUILD_TIMEOUT_MS)).toBe(1);
-    expect((await s.counts(BUILD_TIMEOUT_MS)).building).toBe(0);
+    expect(await s.staleBuilds(BUILD_TIMEOUT_MS)).toEqual(["afkpilot-pool-b"]);
+    // Still building until somebody buries it.
+    expect((await s.counts(BUILD_TIMEOUT_MS - 1)).building).toBe(1);
+  });
+
+  it("buries one on request", async () => {
+    const s = store(() => 0);
+    await s.add("afkpilot-pool-b", SECRET);
+    expect(await s.markFailed("afkpilot-pool-b", "gone")).toBe(true);
+    expect((await s.counts(0)).building).toBe(0);
+  });
+
+  it("will not bury a machine somebody is already using", async () => {
+    const s = store(() => 0);
+    await readyOne(s, "afkpilot-pool-a", 0);
+    await s.claim();
+    expect(await s.markFailed("afkpilot-pool-a", "gone")).toBe(false);
   });
 
   it("leaves a build that is merely slow alone", async () => {
     const s = store(() => 0);
     await s.add("afkpilot-pool-b", SECRET);
-    expect(await s.failStale(BUILD_TIMEOUT_MS - 1)).toBe(0);
+    expect(await s.staleBuilds(BUILD_TIMEOUT_MS - 1)).toEqual([]);
   });
 
   it("does not touch one that already reported ready", async () => {
     const s = store(() => 0);
     await readyOne(s, "afkpilot-pool-a", 0);
-    expect(await s.failStale(BUILD_TIMEOUT_MS)).toBe(0);
+    expect(await s.staleBuilds(BUILD_TIMEOUT_MS)).toEqual([]);
     expect((await s.counts(BUILD_TIMEOUT_MS)).ready).toBe(1);
   });
 });

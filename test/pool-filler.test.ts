@@ -43,7 +43,7 @@ function deps(over: Partial<PoolFillerDeps> = {}): PoolFillerDeps & {
 }
 
 describe("filling", () => {
-  it("creates, records, and starts a build — in that order", async () => {
+  it("reserves a row, creates the machine, then starts its build", async () => {
     const d = deps({ target: 1 });
     const out = await sweepPool(d);
     expect(out.started).toBe(1);
@@ -78,26 +78,44 @@ describe("filling", () => {
 });
 
 describe("when things go wrong", () => {
-  it("destroys a machine it could not record, rather than orphaning it", async () => {
-    // A sprite with no row is a bill with no owner: the name was the only
-    // handle on it and it just went out of scope.
+  it("never creates a machine it has not already reserved a row for", async () => {
+    // A sprite with no row is a bill with no owner: the name is its only handle
+    // and it goes out of scope. Reserving first makes that unreachable rather
+    // than merely handled — if the row cannot be written, nothing is bought.
     const d = deps({ target: 1 });
     d.pool.add = async () => false;
     const out = await sweepPool(d);
     expect(out.started).toBe(0);
-    expect(d.destroyed).toEqual(d.created);
+    expect(d.created).toEqual([]);
+  });
+
+  it("gives the slot back when the machine cannot be created", async () => {
+    // Otherwise the shelf reads as fuller than it is for the whole stale
+    // window, and the slot is refilled an hour late.
+    const d = deps({
+      target: 1,
+      provisioner: {
+        createNamed: async () => ({ ok: false as const, kind: "unavailable" as const }),
+        destroy: async () => true,
+      },
+    });
+    const out = await sweepPool(d);
+    expect(out.started).toBe(0);
+    expect(await d.pool.counts(0)).toEqual({ ready: 0, building: 0 });
   });
 
   it("keeps the row when the build command does not go out", async () => {
-    // The machine exists and is paid for either way. `failStale` is a better
-    // place to decide it is hopeless than a catch that cannot know whether the
-    // command half-ran.
+    // The machine exists and is paid for either way. The stale sweep is a
+    // better place to decide it is hopeless than a catch that cannot know
+    // whether the command half-ran.
     const d = deps({ target: 1, startBuild: async () => false });
     expect((await sweepPool(d)).started).toBe(1);
     expect((await d.pool.counts(0)).building).toBe(1);
   });
 
-  it("stops the sweep when the provider refuses, instead of collecting refusals", async () => {
+  it("buys nothing when the provider refuses every request", async () => {
+    // Each build releases its own reservation, so a refusing provider costs a
+    // sweep and leaves the shelf exactly as it was.
     const d = deps({
       target: 20,
       provisioner: {
@@ -110,8 +128,68 @@ describe("when things go wrong", () => {
 
   it("survives the store being unreachable", async () => {
     const d = deps({ target: 5 });
+    d.pool.staleBuilds = async () => [];
     d.pool.counts = async () => { throw new Error("db down"); };
     await expect(sweepPool(d)).resolves.toEqual({ started: 0, scrapped: 0 });
+  });
+});
+
+describe("filling in parallel", () => {
+  it("starts them together, not one after another", async () => {
+    // A machine is ready 50 seconds after it is created. Ten sequential creates
+    // turned that into minutes for no benefit — they are independent.
+    let inFlight = 0;
+    let peak = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const d = deps({
+      target: 5,
+      provisioner: {
+        createNamed: async (name: string) => {
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          await gate;
+          inFlight -= 1;
+          return { ok: true as const, externalId: name };
+        },
+        destroy: async () => true,
+      },
+    });
+    const sweep = sweepPool(d);
+    await Promise.resolve();
+    release();
+    expect((await sweep).started).toBe(5);
+    expect(peak).toBe(5);
+  });
+
+  it("reserves every row BEFORE buying any machine", async () => {
+    // The property that makes parallel safe, and the one that lets a second
+    // relay instance count honestly: a slot is visible as taken the moment it
+    // is claimed, not once its machine finishes being created.
+    const order: string[] = [];
+    const d = deps({ target: 3 });
+    const add = d.pool.add.bind(d.pool);
+    d.pool.add = async (id: string, secret: string) => {
+      order.push(`reserve:${id}`);
+      return add(id, secret);
+    };
+    d.provisioner.createNamed = async (name: string) => {
+      order.push(`create:${name}`);
+      return { ok: true as const, externalId: name };
+    };
+    await sweepPool(d);
+    // Every reservation lands before the first machine is bought.
+    const firstCreate = order.findIndex((o) => o.startsWith("create:"));
+    expect(order.slice(0, firstCreate).every((o) => o.startsWith("reserve:"))).toBe(true);
+    expect(order.filter((o) => o.startsWith("reserve:")).length).toBe(3);
+  });
+
+  it("does not overshoot the target when the shelf is partly full", async () => {
+    const d = deps({ target: 5 });
+    await d.pool.add("afkpilot-pool-existing", "s");
+    const out = await sweepPool(d);
+    expect(out.started).toBe(4);
+    expect((await d.pool.counts(0)).building).toBe(5);
   });
 });
 
@@ -126,6 +204,33 @@ describe("scrapping dead builds", () => {
     const out = await sweepPool(d);
     expect(out.scrapped).toBe(1);
     expect(out.started).toBe(1);
+  });
+
+  it("DESTROYS the machine, not just the row", async () => {
+    // Two of these were found running with nothing to show for them. A row
+    // marked failed counts toward nothing, so no sweep revisits it and the
+    // machine is never seen again by anything except the invoice.
+    const d = deps({ target: 0, now: () => BUILD_TIMEOUT_MS });
+    await d.pool.add("afkpilot-pool-dead", "s");
+    await sweepPool(d);
+    expect(d.destroyed).toEqual(["afkpilot-pool-dead"]);
+  });
+
+  it("leaves the row alone when the machine will not die, and retries", async () => {
+    // Marking it failed here would strand the machine permanently: nothing
+    // revisits a failed row. Left as `building`, the next sweep tries again.
+    const d = deps({
+      target: 0,
+      now: () => BUILD_TIMEOUT_MS,
+      provisioner: {
+        createNamed: async (name: string) => ({ ok: true as const, externalId: name }),
+        destroy: async () => false,
+      },
+    });
+    await d.pool.add("afkpilot-pool-stubborn", "s");
+    const out = await sweepPool(d);
+    expect(out.scrapped).toBe(0);
+    expect(await d.pool.staleBuilds(BUILD_TIMEOUT_MS)).toEqual(["afkpilot-pool-stubborn"]);
   });
 
   it("leaves a build that is merely slow", async () => {
