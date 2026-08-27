@@ -133,6 +133,17 @@ describe("what it is told, and what it is not", () => {
     expect(cmd.join(" ")).not.toContain("--args");
   });
 
+  it("sets APPDIR before running the extracted AppImage", () => {
+    // Without it AppRun looks for its binary at the filesystem root and the
+    // host silently never starts. A machine that installs perfectly and then
+    // does nothing is the worst shape a failure can take, so this is pinned.
+    const i = script.indexOf("export APPDIR=");
+    const j = script.indexOf('AppRun" --no-sandbox');
+    expect(i).toBeGreaterThan(-1);
+    expect(j).toBeGreaterThan(i);
+    expect(script).toContain('export APPDIR="$APP/squashfs-root"');
+  });
+
   it("waits to be claimed instead of exiting", () => {
     // A pooled machine boots before anyone owns it. Exiting would let the
     // service supervisor treat a healthy spare as a crash loop.

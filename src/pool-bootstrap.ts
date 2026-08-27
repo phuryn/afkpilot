@@ -160,7 +160,13 @@ for _ in $(seq 1 50); do [ -e /tmp/.X11-unix/X99 ] && break; sleep 0.2; done
 
 step "display up; starting host"
 if [ "$(cat "$APP/.afkpilot-kind" 2>/dev/null)" = "appimage" ]; then
-  exec "$APP/squashfs-root/AppRun" --no-sandbox
+  # APPDIR, explicitly. AppRun derives it from $0 when it is unset, and for an
+  # EXTRACTED AppImage exec'd from a service that derivation came out empty --
+  # so BIN resolved to "/grok-build-desktop", the host never started, and the
+  # only trace was one line in a log nobody was reading. The machine installed
+  # perfectly and then did nothing, which is the worst shape a failure can take.
+  export APPDIR="$APP/squashfs-root"
+  exec "$APPDIR/AppRun" --no-sandbox
 fi
 exec node scripts/run-desktop.cjs --relay-dev --no-sandbox
 `;
