@@ -19,6 +19,11 @@ import {
 } from "./environment-store.js";
 import { WakeCoordinator, spriteWaker } from "./environment-waker.js";
 import { ProvisionCoordinator, parseSpriteLabels, spritesProvisioner } from "./environment-provisioner.js";
+import { parsePoolSize } from "./environment-pool.js";
+import { InMemoryEnvironmentPoolStore, SupabaseEnvironmentPoolStore, type EnvironmentPoolStore } from "./environment-pool-store.js";
+import { HandoverCodes } from "./environment-handover.js";
+import { poolBuildCommand } from "./pool-bootstrap.js";
+import { startPoolFiller } from "./pool-filler.js";
 import { startWakeScheduler } from "./wake-scheduler.js";
 
 const log = (line: string) => console.log(line);
@@ -122,6 +127,10 @@ let environments: EnvironmentStore | undefined;
 let waker: WakeCoordinator | undefined;
 let provisioner: ProvisionCoordinator | undefined;
 let stopWakeScheduler: (() => void) | undefined;
+let pool: EnvironmentPoolStore | undefined;
+let handover: HandoverCodes | undefined;
+let publicUrl: string | undefined;
+let stopPoolFiller: (() => void) | undefined;
 const spritesToken = process.env.SPRITES_TOKEN;
 const cloudFeature = process.env.RELAY_CLOUD_FEATURE || undefined;
 if (spritesToken) {
@@ -160,6 +169,45 @@ if (spritesToken) {
     isOnline: (deviceId) => hub.uplinkConnected(deviceId),
     log,
   });
+  // THE SHELF. A machine is created in a second and made useful in twenty-five
+  // minutes; the pool pays that cost before anybody is waiting. Off unless a
+  // size is set, because turning it on buys real machines — see parsePoolSize.
+  const poolSize = parsePoolSize(process.env.CLOUD_POOL_SIZE);
+  // Where a pooled machine phones home. It reaches us over the internet, not
+  // over the socket a host uses, so it has to be told — and a machine that is
+  // told the wrong address is a machine that builds perfectly and never links.
+  // A const, so its narrowing survives into the branch below. `publicUrl` is a
+  // module-level `let` the server call reads, and TypeScript will not carry a
+  // narrowing across that.
+  const relayPublicUrl = process.env.RELAY_PUBLIC_URL || undefined;
+  publicUrl = relayPublicUrl;
+  handover = new HandoverCodes(Date.now, () => randomUUID());
+  if (poolSize > 0 && !publicUrl) {
+    // Refused rather than defaulted. A guess here produces a shelf of machines
+    // that cost money and can never report in, and the symptom — everything
+    // building forever — looks nothing like the cause.
+    log("[relay] cloud pool: DISABLED — CLOUD_POOL_SIZE is set but RELAY_PUBLIC_URL is not");
+  } else if (poolSize > 0 && relayPublicUrl) {
+    pool = supabaseUrl && supabaseSecretKey
+      ? new SupabaseEnvironmentPoolStore(createDb(supabaseUrl, supabaseSecretKey))
+      : new InMemoryEnvironmentPoolStore();
+    const relayHttpUrl = relayPublicUrl;
+    stopPoolFiller = startPoolFiller({
+      pool,
+      provisioner,
+      startBuild: (externalId, claimSecret) => provisioner!.exec(
+        externalId,
+        poolBuildCommand({ relayHttpUrl, name: externalId, claimSecret }),
+      ),
+      target: poolSize,
+      now: Date.now,
+      randomId: () => randomUUID(),
+      log,
+    });
+    log(`[relay] cloud pool: keeping ${poolSize} machine(s) ready`);
+  } else {
+    log("[relay] cloud pool: off (set CLOUD_POOL_SIZE to build machines ahead of demand)");
+  }
   log(`[relay] cloud environments: enabled (${supabaseUrl ? "Supabase" : "in-memory"})`);
   // Unset = open to everyone, the same convention RELAY_REQUIRED_FEATURE uses.
   // A launch window therefore needs no timer and no code: the feature is simply
@@ -169,9 +217,9 @@ if (spritesToken) {
     : "[relay] cloud access: OPEN to every account (set RELAY_CLOUD_FEATURE to gate it)");
   // Referenced so the stop handle is not dead code to a linter, and so a future
   // graceful-shutdown path has an obvious place to call it.
-  process.once("SIGTERM", () => stopWakeScheduler?.());
+  process.once("SIGTERM", () => { stopWakeScheduler?.(); stopPoolFiller?.(); });
 } else {
   log("[relay] cloud environments: disabled (set SPRITES_TOKEN to serve hosted machines)");
 }
 
-createRelayServer({ host, port, webRoot, store, devices, sessions, requiredFeature, freeTier, messageRate, clerkPublishableKey, hub, environments, waker, provisioner, cloudFeature, log });
+createRelayServer({ host, port, webRoot, store, devices, sessions, requiredFeature, freeTier, messageRate, clerkPublishableKey, hub, environments, waker, provisioner, pool, handover, publicUrl, cloudFeature, log });

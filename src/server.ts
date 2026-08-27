@@ -40,6 +40,10 @@ import {
   shouldWakeOnAttach,
 } from "./environments.js";
 import type { ProvisionCoordinator } from "./environment-provisioner.js";
+import type { EnvironmentPoolStore } from "./environment-pool-store.js";
+import { claimOutcome } from "./environment-pool.js";
+import { HandoverCodes, handoverCommand, handoverEnvFile, redactCode } from "./environment-handover.js";
+import { poolBootstrapScript } from "./pool-bootstrap.js";
 import { PRESENCE_TYPE, PresenceTracker } from "./presence.js";
 import type { EnvironmentStore } from "./environment-store.js";
 import type { WakeCoordinator } from "./environment-waker.js";
@@ -98,6 +102,18 @@ export interface RelayServerOptions {
   /** Creates and destroys environments. Required alongside `environments` for
    *  lazy provisioning; without it, environments must be created by hand. */
   provisioner?: ProvisionCoordinator;
+  /** The shelf of pre-built machines. Absent = every open builds on demand,
+   *  which is what happened before a pool existed and still works. */
+  pool?: EnvironmentPoolStore;
+  /** Single-use codes a claimed machine redeems for its device token. */
+  handover?: HandoverCodes;
+  /**
+   * This relay's own public https URL.
+   *
+   * A pooled machine has to be told where to phone home, and it cannot work it
+   * out: it reaches us over the internet, not over the socket the host uses.
+   */
+  publicUrl?: string;
   /** Clerk feature gating CLOUD specifically — separate from `requiredFeature`,
    *  which gates driving your own machine. Unset = open to everyone, which is
    *  how a launch window needs no timer. */
@@ -230,6 +246,39 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
   res.end(JSON.stringify(body));
 }
 
+/**
+ * The websocket form of this relay's public URL.
+ *
+ * The machine is told where to dial, and it dials a socket, not a page. Derived
+ * rather than configured twice: two URLs that must agree are two URLs that will
+ * eventually disagree.
+ */
+function relayWsUrl(httpUrl: string): string {
+  return httpUrl.replace(/\/+$/, "").replace(/^http:/i, "ws:").replace(/^https:/i, "wss:");
+}
+
+/**
+ * A plain-text response.
+ *
+ * Two callers, both talking to a machine rather than a browser: the install
+ * script a pooled sprite fetches, and the env file a claimed one collects.
+ * `nosniff` because both are served as text and neither should ever be
+ * interpreted as anything else by something that fetched them by accident.
+ */
+function sendText(
+  res: http.ServerResponse,
+  status: number,
+  body: string,
+  contentType = "text/plain",
+): void {
+  res.writeHead(status, {
+    "content-type": `${contentType}; charset=utf-8`,
+    "x-content-type-options": "nosniff",
+    "cache-control": "no-store",
+  });
+  res.end(body);
+}
+
 export interface RelayServer {
   server: http.Server;
   /** The actually-bound port (options.port 0 = ephemeral, for tests). */
@@ -355,7 +404,7 @@ export function injectWebAppVersion(html: string, version: string): string {
 
 export function createRelayServer(opts: RelayServerOptions): RelayServer {
   const { store, devices, sessions, requiredFeature, freeTier, messageRate, hub, log } = opts;
-  const { environments, waker, provisioner, cloudFeature } = opts;
+  const { environments, waker, provisioner, cloudFeature, pool, handover, publicUrl } = opts;
   // Who is actually watching. Client-asserted, because the relay cannot tell a
   // person reading from a tab forgotten last night — both are an open socket.
   const presence = opts.presence ?? new PresenceTracker();
@@ -676,6 +725,54 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         const body = await readJsonBody(req);
         return sendJson(res, 200, store.poll(typeof body?.code === "string" ? body.code : ""));
       }
+      if (req.method === "GET" && p === "/api/environment/pool-bootstrap.sh") {
+        // The install script a pooled machine fetches. PUBLIC and secret-free
+        // on purpose: exec takes no stdin and returns no output, so a URL is
+        // the only thing that fits in the command line, and serving it means a
+        // broken build step is fixed by a deploy rather than by rebuilding a
+        // shelf of machines.
+        if (!pool || !publicUrl) return sendText(res, 404, "not found");
+        return sendText(res, 200, poolBootstrapScript({ relayHttpUrl: publicUrl }), "text/x-shellscript");
+      }
+      if (req.method === "POST" && p === "/api/environment/pool/ready") {
+        // A machine saying its install finished.
+        //
+        // Unauthenticated in the session sense — there is no user here, and
+        // will not be until somebody claims it. The per-row secret is what
+        // makes it safe: without it, guessing a name would put a half-built box
+        // in front of the next person who opens a cloud environment.
+        if (!pool) return sendJson(res, 404, { ok: false, error: "not-supported" });
+        const body = await readJsonBody(req).catch(() => null) as { name?: string; secret?: string } | null;
+        if (!body?.name || !body?.secret) return sendJson(res, 400, { ok: false, error: "bad-request" });
+        const ok = await pool.markReady(body.name, body.secret, Date.now()).catch(() => false);
+        if (!ok) {
+          // Deliberately the same answer for a wrong secret, an unknown name
+          // and a machine somebody already has: a caller who is guessing
+          // learns nothing from any of them.
+          log(`[relay] pool readiness refused for ${body.name}`);
+          return sendJson(res, 403, { ok: false, error: "refused" });
+        }
+        log(`[relay] pool: ${body.name} is ready`);
+        return sendJson(res, 200, { ok: true });
+      }
+      if (req.method === "POST" && p === "/api/environment/handover") {
+        // A claimed machine collecting its identity.
+        //
+        // The code is single-use and short-lived, and this is the only place a
+        // device token is ever written to a response body. It goes to the
+        // MACHINE, over TLS, in exchange for something that is worthless a
+        // moment later — which is what lets the token stay out of the command
+        // line, and out of the provider's control-plane record.
+        if (!handover) return sendJson(res, 404, { ok: false, error: "not-supported" });
+        const code = String(req.headers["x-handover-code"] ?? "");
+        const payload = code ? handover.redeem(code) : null;
+        if (!payload) {
+          log(`[relay] handover refused (${code ? redactCode(code) : "no code"})`);
+          return sendJson(res, 403, { ok: false, error: "refused" });
+        }
+        log(`[relay] handover redeemed for ${payload.deviceId}`);
+        return sendText(res, 200, handoverEnvFile(payload), "text/plain");
+      }
       if (req.method === "POST" && p === "/api/cloud/open") {
         // Open my cloud environment, creating it if this is the first time.
         //
@@ -698,9 +795,28 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         const existing = (await environments.listByUser(claims.userId).catch(() => []))[0];
         if (existing) return sendJson(res, 200, { ok: true, deviceId: existing.deviceId });
 
-        const made = await provisioner.create(claims.userId);
-        if (!made.ok) {
-          return sendJson(res, made.kind === "quota" ? 429 : 503, { ok: false, error: made.kind });
+        // THE SHELF FIRST. A pooled machine is already installed, so claiming
+        // one turns a twenty-five-minute build into handing over a token. An
+        // empty shelf is NOT a failure — it is the on-demand path below, which
+        // is what every open did before a pool existed and is therefore the
+        // path that is actually tested.
+        let externalId: string | null = null;
+        let claimedFromPool = false;
+        if (pool) {
+          const outcome = claimOutcome(await pool.claim().catch(() => null));
+          if (outcome.ok) {
+            externalId = outcome.externalId;
+            claimedFromPool = true;
+            log(`[relay] claimed ${outcome.externalId} from the pool for ${claims.userId}`);
+          }
+        }
+
+        if (!externalId) {
+          const made = await provisioner.create(claims.userId);
+          if (!made.ok) {
+            return sendJson(res, made.kind === "quota" ? 429 : 503, { ok: false, error: made.kind });
+          }
+          externalId = made.externalId;
         }
         // The device row and its token come from the SAME registry every other
         // machine uses — a cloud environment is a linked device that happens to
@@ -714,8 +830,31 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
           deviceId: issued.deviceId,
           userId: claims.userId,
           provider: "sprite",
-          externalId: made.externalId,
+          externalId,
         });
+
+        if (claimedFromPool) {
+          // The pool row has done its job; the environments row owns the
+          // machine now. Removed AFTER that row exists, so a crash in between
+          // leaves a `claimed` row an operator can see rather than a sprite
+          // nothing refers to.
+          await pool!.remove(externalId).catch(() => false);
+
+          // Tell the machine whose it is. Fire and forget by necessity — exec
+          // returns no output — so success is observed the only way that
+          // actually means anything: the uplink connects, and `markReady`
+          // flips the row out of "building".
+          if (handover && provisioner && publicUrl) {
+            const code = handover.mint({
+              deviceId: issued.deviceId,
+              token: issued.token,
+              relayUrl: relayWsUrl(publicUrl),
+            });
+            log(`[relay] handover ${redactCode(code)} -> ${externalId}`);
+            void provisioner.exec(externalId, handoverCommand({ relayHttpUrl: publicUrl, code }))
+              .catch((e: unknown) => log(`[relay] handover exec failed: ${(e as Error).message}`));
+          }
+        }
         log(`[relay] provisioned cloud environment for ${claims.userId}`);
         // The token goes to the MACHINE, never to the browser: it is handed to
         // the sprite as a secret when it boots. The page gets an id it may open.
