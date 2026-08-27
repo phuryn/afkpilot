@@ -14,14 +14,14 @@
  * a record of — a bill with no owner and no way to find it, since the name is
  * the only handle and it lived in a variable that has gone out of scope.
  *
- * ## Nothing here reads the sprite
+ * ## Nothing here watches a build
  *
- * `POST /v1/sprites/{name}/exec` over HTTP returns two bytes: no output, no
- * exit code. The filler therefore cannot watch a build. It starts one and
- * forgets it; the machine reports its own readiness later. Everything about
- * this module follows from that — including `failStale`, which exists purely
- * because "still building" and "died twenty minutes ago" look identical from
- * out here.
+ * Starting one is a command whose exit code the filler DOES see — it registers
+ * a service — but the install that service then performs takes ~25 minutes, and
+ * holding a socket open for that is a bet against the network. So the filler
+ * starts a build and forgets it; the machine reports its own readiness later.
+ * `failStale` exists because from out here "still building" and "died twenty
+ * minutes ago" look identical.
  */
 import {
   FILL_INTERVAL_MS,
@@ -37,8 +37,8 @@ export interface PoolFillerDeps {
   /**
    * Start the install on a freshly created machine.
    *
-   * Fire and forget by nature, so a `true` here means "the provider accepted
-   * the command", never "the install worked". The machine says that later.
+   * `true` means the installer was successfully SET UP — never that the install
+   * finished. The machine says that later, when it reports ready.
    */
   startBuild(externalId: string, claimSecret: string): Promise<boolean>;
   target: number;

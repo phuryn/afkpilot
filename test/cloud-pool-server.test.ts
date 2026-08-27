@@ -25,7 +25,7 @@ import { join } from "node:path";
 let handle: RelayServer | undefined;
 let base = "";
 let created: string[] = [];
-let execs: { id: string; command: { cmd: string; args: string[] } }[] = [];
+let execs: { id: string; argv: string[] }[] = [];
 let pool: InMemoryEnvironmentPoolStore;
 let environments: InMemoryEnvironmentStore;
 let handover: HandoverCodes;
@@ -58,7 +58,10 @@ async function boot() {
     provisioner: new ProvisionCoordinator({
       create: async (userId: string) => { created.push(spriteNameFor(userId)); return { ok: true, externalId: spriteNameFor(userId) }; },
       createNamed: async (name: string) => { created.push(name); return { ok: true, externalId: name }; },
-      exec: async (id: string, command) => { execs.push({ id, command }); return true; },
+      exec: async (id: string, argv: readonly string[]) => {
+        execs.push({ id, argv: [...argv] });
+        return { ok: true as const, exitCode: 0, output: "" };
+      },
       destroy: async () => true,
     }),
     pingIntervalMs: 0,
@@ -102,7 +105,7 @@ describe("opening with a stocked shelf", () => {
 
     expect(execs.length).toBe(1);
     expect(execs[0].id).toBe("afkpilot-pool-aaa");
-    const script = execs[0].command.args.join(" ");
+    const script = execs[0].argv.join(" ");
     expect(script).toContain("x-handover-code: code-1");
     // The token is what the code BUYS. It must not also be sitting in the
     // command line, which is where the provider's control-plane record keeps it.
@@ -143,6 +146,39 @@ describe("opening with an empty shelf", () => {
     expect(body.ok).toBe(true);
     expect(body.provisioned).toBe(true);
     expect(created).toEqual([spriteNameFor(MOCK_USER_ID)]);
+  });
+
+  it("INSTALLS on the machine it just made", async () => {
+    // The bug this pins shipped and was found in production. Setup ran only for
+    // a machine taken off the shelf, so opening a cloud environment while the
+    // pool was empty produced a sprite that nothing was ever installed on. It
+    // came up, sat there, and the picker counted "creating" upwards for an hour
+    // and a half because nothing was ever going to link.
+    await post("/api/cloud/open");
+    // Not awaited by the handler — the person gets their response while the
+    // machine takes minutes — so wait for the work it kicked off.
+    for (let i = 0; i < 50 && execs.length < 2; i += 1) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const scripts = execs.map((e) => e.argv.join(" "));
+    expect(scripts.some((s) => s.includes("sprite-env services create afkpilot")))
+      .toBe(true);
+    expect(scripts.some((s) => s.includes("x-handover-code:"))).toBe(true);
+    expect(execs.every((e) => e.id === spriteNameFor(MOCK_USER_ID))).toBe(true);
+  });
+
+  it("does not re-run the installer on a machine off the shelf", async () => {
+    // A pooled machine is already installed. Registering the service again
+    // would restart an install that has already finished.
+    await pool.add("afkpilot-pool-aaa", "s");
+    await pool.markReady("afkpilot-pool-aaa", "s", 1_000);
+    await post("/api/cloud/open");
+    for (let i = 0; i < 25 && execs.length < 1; i += 1) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const scripts = execs.map((e) => e.argv.join(" "));
+    expect(scripts.some((s) => s.includes("services create afkpilot"))).toBe(false);
+    expect(scripts.some((s) => s.includes("x-handover-code:"))).toBe(true);
   });
 });
 

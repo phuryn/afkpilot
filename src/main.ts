@@ -195,10 +195,22 @@ if (spritesToken) {
     stopPoolFiller = startPoolFiller({
       pool,
       provisioner,
-      startBuild: (externalId, claimSecret) => provisioner!.exec(
-        externalId,
-        poolBuildCommand({ relayHttpUrl, name: externalId, claimSecret }),
-      ),
+      // The build command REGISTERS a service; it does not do the install
+      // itself. So a zero exit means "the machine now has something that will
+      // install it", which is exactly what the filler needs to know — and is
+      // knowable at all only because exec runs over a socket that reports one.
+      startBuild: async (externalId, claimSecret) => {
+        const r = await provisioner!.exec(
+          externalId,
+          poolBuildCommand({ relayHttpUrl, name: externalId, claimSecret }),
+        );
+        if (!r.ok || r.exitCode !== 0) {
+          log(`[pool] build command on ${externalId} failed: `
+            + `${r.error ?? `exit ${r.exitCode}`} ${r.output.slice(0, 200)}`);
+          return false;
+        }
+        return true;
+      },
       target: poolSize,
       now: Date.now,
       randomId: () => randomUUID(),

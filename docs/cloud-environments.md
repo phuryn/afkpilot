@@ -148,23 +148,48 @@ one statement. Reading `ready` in one call and writing `claimed` in another is a
 race with a comfortable window, and losing it gives somebody an environment with
 another person's work on it.
 
-### Everything else follows from one measured fact
+### Running a command on a machine
 
-`POST /v1/sprites/{name}/exec` over HTTP is **fire and forget**. A command that
-wrote to stdout and exited 7 came back as two bytes; real stdio needs the
-`control-ws` channel. So:
+**`POST /v1/sprites/{name}/exec` does not do it.** It answers `200` and two
+bytes and runs nothing — a command told to create a file returned success and
+the file did not exist. An earlier version of this relay was built on the
+opposite belief and produced a pool of machines that were created, recorded as
+building, and never touched again. The `sprite-capabilities: control-ws` header
+on that response is the tell.
 
-- The relay cannot watch a build. A machine reports its own readiness, with a
-  per-row secret — without one, guessing a name would put a half-built box in
-  front of the next person who opens a cloud environment.
+The real channel is a WebSocket, and argv is a **repeated `cmd` parameter**:
+
+```
+wss://api.sprites.dev/v1/sprites/{name}/exec?cmd=<argv0>&cmd=<argv1>&…
+Authorization: Bearer <token>
+```
+
+`args`, `arg`, `argv` and a JSON body were each tried and each ran the command
+with no arguments at all. It reports exit codes, which is what makes any of this
+verifiable — see [`src/sprite-exec.ts`](../src/sprite-exec.ts).
+
+What still cannot be watched is a 25-minute install: holding a socket open for
+that is a bet against the network, not a design. So:
+
+- A build is *started* by a command whose exit code the relay does see — it
+  registers a service — and the machine reports its own readiness later, with a
+  per-row secret. Without that secret, guessing a name would put a half-built box
+  in front of the next person who opens a cloud environment.
 - "Still building" and "died twenty minutes ago" look identical from outside,
   which is the only reason `failStale` exists. A dead build that keeps its slot
   is how a pool empties while the numbers say it is full.
-- Nothing can be piped in, so any value has to travel in a command line — and a
-  device token in a command line is a durable credential in the provider's
-  control-plane record. Instead the relay mints a **single-use, two-minute code**
-  and the machine redeems it over TLS for its env file. The code is in argv and
-  that is fine: it is worthless the moment it is used.
+- Nothing can be piped in, so any value has to travel in that command line — and
+  a device token there is a durable credential in the provider's control-plane
+  record. Instead the relay mints a **single-use, two-minute code** and the
+  machine redeems it over TLS for its env file. The code is in argv and that is
+  fine: it is worthless the moment it is used.
+
+### Every machine gets set up, however it was obtained
+
+A pooled machine needs only its identity. One built to order — somebody opened
+their cloud environment while the shelf was empty — needs the installer too.
+That second case was missing once, and the symptom was a row that said
+*creating* for an hour and a half because nothing was ever going to link.
 
 ### Being built is not being offline
 
@@ -192,6 +217,8 @@ ordinary way when it sleeps. That distinction is the whole column.
 - [`src/pool-filler.ts`](../src/pool-filler.ts) — the sweep that keeps it stocked
 - [`src/pool-bootstrap.ts`](../src/pool-bootstrap.ts) — the script a machine runs
   to install itself; served by the relay, secret-free
+- [`src/sprite-exec.ts`](../src/sprite-exec.ts) — the WebSocket that actually
+  runs commands, and the repeated-`cmd` shape nothing documents
 - [`src/environment-handover.ts`](../src/environment-handover.ts) — single-use
   codes, because nothing can be piped into a sprite
 - `supabase/migrations/20260827000000_environments.sql` — one table, one nullable

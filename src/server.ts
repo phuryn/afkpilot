@@ -43,7 +43,7 @@ import type { ProvisionCoordinator } from "./environment-provisioner.js";
 import type { EnvironmentPoolStore } from "./environment-pool-store.js";
 import { claimOutcome } from "./environment-pool.js";
 import { HandoverCodes, handoverCommand, handoverEnvFile, redactCode } from "./environment-handover.js";
-import { poolBootstrapScript } from "./pool-bootstrap.js";
+import { poolBootstrapScript, poolBuildCommand } from "./pool-bootstrap.js";
 import { PRESENCE_TYPE, PresenceTracker } from "./presence.js";
 import type { EnvironmentStore } from "./environment-store.js";
 import type { WakeCoordinator } from "./environment-waker.js";
@@ -839,21 +839,49 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
           // leaves a `claimed` row an operator can see rather than a sprite
           // nothing refers to.
           await pool!.remove(externalId).catch(() => false);
+        }
 
-          // Tell the machine whose it is. Fire and forget by necessity — exec
-          // returns no output — so success is observed the only way that
-          // actually means anything: the uplink connects, and `markReady`
-          // flips the row out of "building".
-          if (handover && provisioner && publicUrl) {
-            const code = handover.mint({
-              deviceId: issued.deviceId,
-              token: issued.token,
-              relayUrl: relayWsUrl(publicUrl),
-            });
-            log(`[relay] handover ${redactCode(code)} -> ${externalId}`);
-            void provisioner.exec(externalId, handoverCommand({ relayHttpUrl: publicUrl, code }))
-              .catch((e: unknown) => log(`[relay] handover exec failed: ${(e as Error).message}`));
-          }
+        // EVERY new machine gets set up, however it was obtained.
+        //
+        // This used to run only for a machine taken off the shelf, and the gap
+        // was not theoretical: opening a cloud environment while the pool was
+        // empty produced a sprite that nothing was ever installed on. It came
+        // up, sat there, and the picker counted "creating" upwards forever
+        // because nothing was ever going to link. A pooled machine needs only
+        // its identity; a made-to-order one needs the installer too.
+        if (handover && provisioner && publicUrl) {
+          const code = handover.mint({
+            deviceId: issued.deviceId,
+            token: issued.token,
+            relayUrl: relayWsUrl(publicUrl),
+          });
+          const relayHttpUrl = publicUrl;
+          const target = externalId;
+          log(`[relay] handover ${redactCode(code)} -> ${target}`);
+          // Not awaited: the person is waiting on a response, and the machine
+          // takes minutes either way. The row says "creating" until its uplink
+          // arrives, which is the honest thing to show and the only signal that
+          // means the setup actually worked.
+          void (async () => {
+            if (!claimedFromPool) {
+              // No shelf row to report against, so no name or secret — the
+              // script skips its readiness report and waits for the env file.
+              const built = await provisioner.exec(
+                target, poolBuildCommand({ relayHttpUrl }),
+              ).catch((e: unknown) => ({ ok: false, exitCode: null, output: "", error: String(e) }));
+              if (!built.ok || built.exitCode !== 0) {
+                log(`[relay] installer setup failed on ${target}: `
+                  + `${built.error ?? `exit ${built.exitCode}`}`);
+              }
+            }
+            const handed = await provisioner.exec(
+              target, handoverCommand({ relayHttpUrl, code }),
+            ).catch((e: unknown) => ({ ok: false, exitCode: null, output: "", error: String(e) }));
+            if (!handed.ok || handed.exitCode !== 0) {
+              log(`[relay] handover failed on ${target}: `
+                + `${handed.error ?? `exit ${handed.exitCode}`}`);
+            }
+          })();
         }
         log(`[relay] provisioned cloud environment for ${claims.userId}`);
         // The token goes to the MACHINE, never to the browser: it is handed to

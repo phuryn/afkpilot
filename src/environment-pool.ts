@@ -5,6 +5,10 @@
  * without a provider, and the calls that cost money live in
  * `environment-provisioner.ts`.
  *
+ * Nothing here watches a build. A machine reports its own readiness, because an
+ * install takes ~25 minutes and holding a connection open for that is a bet
+ * against the network rather than a design.
+ *
  * ## Why a pool at all
  *
  * Creating a sprite takes a second. Making one USEFUL took 25 minutes when
@@ -40,11 +44,12 @@ export const MAX_BUILDS_PER_SWEEP = 3;
 /**
  * When a build is presumed dead.
  *
- * A sprite reports its own readiness, so a build that never reports is
- * indistinguishable from one still going. 25 minutes was the measured happy
- * path; 60 gives it well over double before we stop counting it toward the
- * target. Counting a dead build forever is how a pool quietly empties: every
- * sweep sees "20 building", starts nothing, and hands out nothing.
+ * Nobody is holding the machine's hand through a 25-minute install, so a build
+ * that never reports is indistinguishable from one still going. 25 minutes was
+ * the measured happy path; 60 gives it well over double before we stop counting
+ * it toward the target. Counting a dead build forever is how a pool quietly
+ * empties: every sweep sees "20 building", starts nothing, and hands out
+ * nothing.
  */
 export const BUILD_TIMEOUT_MS = 60 * 60_000;
 

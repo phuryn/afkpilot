@@ -107,16 +107,30 @@ describe("what it is told, and what it is not", () => {
   });
 
   it("registers a service rather than running the install itself", () => {
-    // exec is fire and forget and its child has no supervisor. A service is
-    // restarted on boot, which is the only reason a machine paused for a week
-    // comes back on its own.
+    // An exec's child dies with its connection, and a 25-minute install held
+    // open on a WebSocket is a 25-minute chance for a network to blink. A
+    // service survives both, and is restarted on boot — the only reason a
+    // machine paused for a week comes back on its own.
     const cmd = poolBuildCommand({
       relayHttpUrl: "https://relay.example",
       name: "afkpilot-pool-abc",
       claimSecret: "s3cret",
     });
-    expect(cmd.args.join(" ")).toContain("sprite-env services create afkpilot");
-    expect(cmd.args.join(" ")).toContain("--args 'afkpilot-pool-abc,s3cret'");
+    // argv, because that is what the exec channel carries: cmd[0] is the
+    // binary and the rest are its arguments, each its own `cmd=` parameter.
+    expect(cmd[0]).toBe("sh");
+    expect(cmd.join(" ")).toContain("sprite-env services create afkpilot");
+    expect(cmd.join(" ")).toContain("--args 'afkpilot-pool-abc,s3cret'");
+  });
+
+  it("works for a machine built to order, with no shelf row to report against", () => {
+    // The gap that shipped: this path did not exist, so opening a cloud
+    // environment while the pool was empty produced a sprite nothing was ever
+    // installed on — it came up, sat there, and the picker counted upwards
+    // forever because nothing was going to link.
+    const cmd = poolBuildCommand({ relayHttpUrl: "https://relay.example" });
+    expect(cmd.join(" ")).toContain("sprite-env services create afkpilot");
+    expect(cmd.join(" ")).not.toContain("--args");
   });
 
   it("waits to be claimed instead of exiting", () => {

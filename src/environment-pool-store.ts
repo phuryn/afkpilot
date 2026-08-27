@@ -38,11 +38,10 @@ export interface EnvironmentPoolStore {
   /**
    * The sprite reporting that its install finished.
    *
-   * Takes the secret because the relay cannot see a build from outside — exec
-   * over HTTP returns no output and no exit code, so `ready` is a claim made by
-   * the machine. The secret proves it came from the sprite we built rather than
-   * from someone who guessed a name and would have handed a user a half-built
-   * box.
+   * `ready` is a claim the machine makes, because a ~25-minute install is not
+   * something the relay sits and watches. The secret proves the claim came from
+   * the sprite we built rather than from someone who guessed a name and would
+   * have handed a user a half-built box.
    */
   markReady(externalId: string, claimSecret: string, now: number): Promise<boolean>;
   /** Take one off the shelf, atomically. Null when the shelf is empty. */

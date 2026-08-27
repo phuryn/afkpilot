@@ -5,12 +5,10 @@
  * poolable. Claiming one means handing it a device token, and the awkward part
  * is that there is no private channel to hand it over.
  *
- * `POST /v1/sprites/{name}/exec` over HTTP is FIRE AND FORGET. It returns two
- * bytes and no output: a command writing to stdout and exiting 7 came back as
- * `03 00` (verified 2026-08-27; real stdio needs the `control-ws` channel). It
- * also takes no usable stdin. So the only way to get a value into a sprite over
- * this API is to put it in the command line, and a device token in a command
- * line is a durable credential in the provider's control-plane record.
+ * Exec takes no usable stdin — the command and its arguments travel in a URL
+ * (see `sprite-exec.ts`). So the only way to get a value INTO a sprite is to put
+ * it in that command line, and a device token in a command line is a durable
+ * credential sitting in the provider's control-plane record.
  *
  * So the sprite fetches it instead. The relay mints a SHORT-LIVED, SINGLE-USE
  * code and execs a command that redeems it over TLS. The code is in argv, and
@@ -107,8 +105,8 @@ export function handoverEnvFile(payload: HandoverPayload): string {
 /**
  * The command a claimed sprite runs.
  *
- * One line, fire and forget, because that is all the exec API offers. It
- * fetches the env file, locks it down, and restarts the service that reads it.
+ * One line, because argv is what fits down this channel. It fetches the env
+ * file, locks it down, and restarts the service that reads it.
  *
  * `-f` matters: without it curl writes an error page into the env file and the
  * host reads HTML as its configuration. `&&` matters for the same reason —
@@ -117,7 +115,7 @@ export function handoverEnvFile(payload: HandoverPayload): string {
 export function handoverCommand(input: {
   relayHttpUrl: string;
   code: string;
-}): { cmd: string; args: string[] } {
+}): string[] {
   const url = `${input.relayHttpUrl.replace(/\/+$/, "")}/api/environment/handover`;
   const script = [
     `curl -fsS -X POST -H 'x-handover-code: ${input.code}' ${url} -o "$HOME/.afkpilot.env.new"`,
@@ -125,7 +123,7 @@ export function handoverCommand(input: {
     `chmod 600 "$HOME/.afkpilot.env"`,
     `/.sprite/bin/sprite-env services restart afkpilot --no-stream`,
   ].join(" && ");
-  return { cmd: "sh", args: ["-c", script] };
+  return ["sh", "-c", script];
 }
 
 /**

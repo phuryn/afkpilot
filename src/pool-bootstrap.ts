@@ -2,10 +2,10 @@
  * The script a pooled machine runs to become useful.
  *
  * Served by the relay at `/api/environment/pool-bootstrap.sh` and fetched by
- * the sprite, rather than pushed into it. `POST /v1/sprites/{name}/exec` takes
- * no usable stdin and returns no output, so the only thing that fits in a
- * command line is a URL — and a script that arrives over HTTPS from the relay
- * is also a script that can be fixed without rebuilding a shelf of machines.
+ * the sprite, rather than pushed into it. Exec takes no usable stdin, so the
+ * only thing that fits down that channel is a URL — and a script that arrives
+ * over HTTPS from the relay is also a script that can be fixed without
+ * rebuilding a shelf of machines.
  *
  * It contains NO secrets. The two arguments it takes are the machine's own name
  * and a per-row token whose entire power is "mark this one row ready"; the
@@ -169,24 +169,37 @@ exec node scripts/run-desktop.cjs --relay-dev --no-sandbox
 /**
  * The command that puts a fresh sprite to work.
  *
- * Fetch the script, then register it as a SERVICE rather than running it here:
- * exec is fire and forget and its child has no supervisor, while a service is
- * restarted on every boot — which is the only reason a machine that has been
- * paused for a week comes back on its own.
+ * Fetch the script, then register it as a SERVICE rather than running it here.
+ * Two reasons, and the second is the one that matters: an exec's child has no
+ * supervisor and dies with the connection, and a 25-minute install held open on
+ * a WebSocket is a 25-minute opportunity for a network to blink. A service
+ * survives both, and is restarted on every boot — which is the only reason a
+ * machine paused for a week comes back on its own.
  */
 export function poolBuildCommand(input: {
   relayHttpUrl: string;
-  name: string;
-  claimSecret: string;
-}): { cmd: string; args: string[] } {
+  /**
+   * The shelf row to report against, when there is one.
+   *
+   * Omitted for a machine built TO ORDER — somebody opened their cloud
+   * environment while the shelf was empty, so it belongs to them from the
+   * moment it exists and there is no readiness to report. The script skips its
+   * report when it has no name and secret, which is what makes one script serve
+   * both paths; two scripts would be two things to keep in step, and the
+   * on-demand one would be the one nobody exercised.
+   */
+  name?: string;
+  claimSecret?: string;
+}): string[] {
   const relay = input.relayHttpUrl.replace(/\/+$/, "");
+  const pooled = input.name && input.claimSecret;
   const script = [
     `curl -fsSL ${relay}/api/environment/pool-bootstrap.sh -o "$HOME/afkpilot-boot.sh"`,
     `chmod +x "$HOME/afkpilot-boot.sh"`,
     `/.sprite/bin/sprite-env services create afkpilot`
       + ` --cmd "$HOME/afkpilot-boot.sh"`
-      + ` --args '${input.name},${input.claimSecret}'`
+      + (pooled ? ` --args '${input.name},${input.claimSecret}'` : "")
       + ` --no-stream`,
   ].join(" && ");
-  return { cmd: "sh", args: ["-c", script] };
+  return ["sh", "-c", script];
 }
