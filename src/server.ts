@@ -32,6 +32,7 @@ import { countMachines, isRecognizedInstallId, MinuteRateLimiter, type FreeTier,
 import { usageWindow, resetsInText } from "./usage.js";
 import { Hub } from "./hub.js";
 import { deviceAvailability, parseWakeAt, shouldWakeOnAttach } from "./environments.js";
+import { PRESENCE_TYPE, PresenceTracker } from "./presence.js";
 import type { EnvironmentStore } from "./environment-store.js";
 import type { WakeCoordinator } from "./environment-waker.js";
 import { parseUplinkFrame, REMOTE_PROTO_VERSION, TRANSPORT_PROBE_TYPE } from "./frames.js";
@@ -84,6 +85,8 @@ export interface RelayServerOptions {
   environments?: EnvironmentStore;
   /** Wakes a sleeping environment. Required only alongside `environments`. */
   waker?: WakeCoordinator;
+  /** Who is watching. Injectable so tests can drive its clock. */
+  presence?: PresenceTracker;
   log: (line: string) => void;
   /**
    * GitHub HTTP (releases API + channel-file bytes). Tests inject a stub so
@@ -338,6 +341,9 @@ export function injectWebAppVersion(html: string, version: string): string {
 export function createRelayServer(opts: RelayServerOptions): RelayServer {
   const { store, devices, sessions, requiredFeature, freeTier, messageRate, hub, log } = opts;
   const { environments, waker } = opts;
+  // Who is actually watching. Client-asserted, because the relay cannot tell a
+  // person reading from a tab forgotten last night — both are an open socket.
+  const presence = opts.presence ?? new PresenceTracker();
 
   // Computed once at boot — a fresh process is a fresh deploy.
   const assetVersion = computeAssetVersion(opts.webRoot);
@@ -1219,9 +1225,32 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         hub.fromClient(deviceId, clientId, raw);
         return;
       }
+      // Presence: answered here, never forwarded. The host has no use for it —
+      // whether a person is looking is a fact about the browser, and the only
+      // consumer is the decision about whether a hosted machine may sleep.
+      //
+      // Ahead of frameChain for the same reason as the probe: it must not queue
+      // behind a send that is waiting on the usage store, or a slow quota check
+      // would read as somebody leaving the room.
+      if (type === PRESENCE_TYPE) {
+        let present = true;
+        try {
+          present = (JSON.parse(raw) as { present?: unknown }).present !== false;
+        } catch {
+          /* malformed frame — treat as a plain heartbeat */
+        }
+        if (present) presence.touch(deviceId);
+        else presence.clear(deviceId);
+        return;
+      }
       frameChain = frameChain.then(() => handleFrame(raw, type, authoredText, submissionId)).catch(() => undefined);
     });
-    ws.on("close", () => hub.removeClient(deviceId, clientId));
+    ws.on("close", () => {
+      hub.removeClient(deviceId, clientId);
+      // A socket closing is not by itself proof nobody is there — another tab
+      // may still be open, and two tabs are one person's attention.
+      presence.forgetIfLastClient(deviceId, hub.clientCount(deviceId));
+    });
     ws.on("error", () => ws.close());
   }
 

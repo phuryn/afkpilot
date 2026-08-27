@@ -17,9 +17,15 @@ const abandonSrc = html.slice(
   html.indexOf("function abandonSocketAndRedial"),
   html.indexOf("function onResumeVisible"),
 );
+// Anchored on the registration this slice actually means, not on the first
+// `visibilitychange` listener in the file. It used to be the latter, which made
+// the slice silently depend on nothing else registering one earlier — and the
+// presence heartbeat then did exactly that. A bare marker string that any
+// unrelated addition can invalidate is a trap; naming the handler is free.
+const RESUME_REGISTRATION = 'document.addEventListener("visibilitychange", function () {';
 const onResumeFn = html.slice(
   html.indexOf("function onResumeVisible"),
-  html.indexOf("document.addEventListener(\"visibilitychange\""),
+  html.indexOf(RESUME_REGISTRATION, html.indexOf("function onResumeVisible")),
 );
 const resumeSrc = html.slice(html.indexOf("function onResumeVisible"), html.indexOf("function domReady()"));
 

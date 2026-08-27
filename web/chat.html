@@ -3357,6 +3357,80 @@ window.grokRemoteClient = true;
     if (probeTimer) { clearTimeout(probeTimer); probeTimer = null; }
   }
 
+  // ---------------------------------------------------------------- presence
+  //
+  // Is a human actually here? The relay cannot tell: a person reading and a tab
+  // forgotten last night are the same open socket. Only this page sees a
+  // pointer, a key, or the tab go to the background — so this page says so, and
+  // the relay uses it to decide whether a hosted machine may sleep.
+  //
+  // It is only ONE of the reasons to stay awake. An agent turn keeps an
+  // environment up with nobody watching at all, which is the whole point of the
+  // product; going quiet here never interrupts work in flight.
+  //
+  // Harmless everywhere else: a relay that does not know this frame ignores it,
+  // and a desk machine has no sleeping to be woken from.
+  var PRESENCE_TYPE = "presence";
+  var PRESENCE_INTERVAL_MS = 30000;
+  // How long without a pointer, a key or a keypress before this page stops
+  // claiming anybody is here. Generous because idle is nearly free to hold and
+  // a machine that pauses while someone is reading is not.
+  var PRESENCE_IDLE_MS = 5 * 60 * 1000;
+  var presenceTimer = null;
+  var lastHumanAt = Date.now();
+
+  function sendPresence(present) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify({ type: PRESENCE_TYPE, present: present }));
+    } catch (_) {
+      /* the socket is going; the redial path will resume presence */
+    }
+  }
+
+  function humanIsHere() {
+    lastHumanAt = Date.now();
+  }
+
+  function presenceTick() {
+    // Withdrawn deliberately rather than left to expire: a backgrounded tab can
+    // say so at once, and holding a machine awake because a phone went into a
+    // pocket is pure waste.
+    var visible = typeof document === "undefined" || document.visibilityState !== "hidden";
+    var recent = Date.now() - lastHumanAt < PRESENCE_IDLE_MS;
+    sendPresence(visible && recent);
+  }
+
+  function startPresence() {
+    bindPresenceListeners();
+    if (presenceTimer) return;
+    lastHumanAt = Date.now();
+    presenceTick();
+    presenceTimer = setInterval(presenceTick, PRESENCE_INTERVAL_MS);
+  }
+
+  function stopPresence() {
+    if (!presenceTimer) return;
+    clearInterval(presenceTimer);
+    presenceTimer = null;
+  }
+
+  var presenceListenersBound = false;
+  function bindPresenceListeners() {
+    if (presenceListenersBound) return;
+    if (typeof document === "undefined") return;
+    presenceListenersBound = true;
+    // Passive: this must never cost a frame of scrolling.
+    ["pointerdown", "keydown", "wheel", "touchstart"].forEach(function (evt) {
+      document.addEventListener(evt, humanIsHere, { passive: true });
+    });
+    document.addEventListener("visibilitychange", onPresenceVisibility);
+  }
+  function onPresenceVisibility() {
+    if (document.visibilityState !== "hidden") humanIsHere();
+    presenceTick();
+  }
+
   function connect() {
     // A second dial while this one is CONNECTING or OPEN would create a
     // socket whose predecessor's error/close still mutates the successor,
@@ -3387,6 +3461,10 @@ window.grokRemoteClient = true;
       deviceOffline = false;
       beginIdentityRestore();
       sendReadyToHost(socket); // (re)sync on connect/reconnect; registers the tab token
+      // Presence starts with the socket and stops with it — a claim that a
+      // person is here is only meaningful while there is a connection to
+      // carry it.
+      startPresence();
     });
     socket.addEventListener("message", function (e) {
       if (ws !== socket) return;
@@ -3493,6 +3571,10 @@ window.grokRemoteClient = true;
     });
     socket.addEventListener("close", function (e) {
       if (ws !== socket) return;
+      // AFTER the guard, not before. A superseded socket closing must not stop
+      // presence for the one that replaced it — which is exactly the class of
+      // bug this guard exists for, and exactly what putting it first did.
+      stopPresence();
       clearResumeProbe();
       clearTimeout(identityTimer);
       identityTimer = null;
@@ -3541,6 +3623,10 @@ window.grokRemoteClient = true;
   function onTransportProbeReply() {
     clearResumeProbe();
     probeGeneration++;
+    // A live socket after a resume is the moment to re-assert presence: the
+    // person just came back to the tab.
+    humanIsHere();
+    presenceTick();
   }
 
   function onResumeVisible() {
