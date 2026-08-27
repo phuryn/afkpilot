@@ -8,6 +8,7 @@
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { WakeCoordinator, spriteWaker, type WakeOutcome } from "../src/environment-waker";
+import { spriteExecUrl, type SpriteExecResult } from "../src/sprite-exec";
 import { WAKE_TIMEOUT_MS, type EnvironmentRecord } from "../src/environments";
 
 const env = (over: Partial<EnvironmentRecord> = {}): EnvironmentRecord => ({
@@ -92,61 +93,63 @@ describe("bounding a wake", () => {
 });
 
 describe("the sprite waker", () => {
-  const call = async (status: number) => {
-    const seen: { url: string; init: RequestInit }[] = [];
-    const wake = spriteWaker({
+  /**
+   * A wake runs `true` on the machine over the exec WEBSOCKET and insists on an
+   * exit code. Two earlier versions accepted an answer from something that was
+   * not the machine — a 302 from Fly's auth edge, then a 200 from
+   * `POST /v1/sprites/{name}/exec`, which returns success having run nothing at
+   * all. Both reported every sleeping environment as awake and started none, so
+   * "a command ran and reported its status" is the whole point of this suite.
+   */
+  const wakeWith = (result: Partial<SpriteExecResult>, seen?: { name: string; argv: readonly string[] }[]) =>
+    spriteWaker({
       token: "t",
       apiBase: "https://api.example",
-      fetchImpl: (async (url: string, init: RequestInit) => {
-        seen.push({ url: String(url), init });
-        return { status } as Response;
-      }) as unknown as typeof fetch,
+      execImpl: async (name, argv) => {
+        seen?.push({ name, argv });
+        return { ok: false, exitCode: null, output: "", ...result };
+      },
     });
-    return { outcome: await wake(env()), seen };
-  };
 
-  it("treats ONLY a 2xx as a wake", async () => {
-    // The bug this replaced: a plain GET to a sprite URL returns 302 from Fly's
-    // auth edge in ~577ms WITHOUT waking anything. Accepting "any response that
-    // arrived" reported every sleeping environment as awake and started none.
-    expect((await call(200)).outcome).toEqual({ ok: true });
-    expect((await call(204)).outcome).toEqual({ ok: true });
-    for (const status of [302, 401, 403, 500, 502]) {
-      expect((await call(status)).outcome).toEqual({ ok: false, kind: "unavailable" });
+  it("counts a command that ran as a wake, whatever it exited with", async () => {
+    // A non-zero exit is still proof of life, and life is the only question
+    // being asked here.
+    expect(await wakeWith({ ok: true, exitCode: 0 })(env())).toEqual({ ok: true });
+    expect(await wakeWith({ ok: true, exitCode: 1 })(env())).toEqual({ ok: true });
+  });
+
+  it("refuses to call a connection that never produced an exit code a wake", async () => {
+    // The exact shape of the bug this replaced: something answered, nothing ran.
+    expect(await wakeWith({ ok: false, error: "closed before exit" })(env()))
+      .toEqual({ ok: false, kind: "unavailable" });
+    expect(await wakeWith({ ok: false, error: "timeout" })(env()))
+      .toEqual({ ok: false, kind: "unavailable" });
+    expect(await wakeWith({ ok: true, exitCode: null })(env()))
+      .toEqual({ ok: false, kind: "unavailable" });
+  });
+
+  it("maps only the failures that change what a person can do", async () => {
+    // `gone` unlinks a row; `quota` is worth saying out loud. Everything else
+    // is try-again, and saying more than that would be inventing detail.
+    expect(await wakeWith({ error: "http 404" })(env())).toEqual({ ok: false, kind: "gone" });
+    expect(await wakeWith({ error: "http 410" })(env())).toEqual({ ok: false, kind: "gone" });
+    expect(await wakeWith({ error: "http 402" })(env())).toEqual({ ok: false, kind: "quota" });
+    expect(await wakeWith({ error: "http 429" })(env())).toEqual({ ok: false, kind: "quota" });
+    for (const e of ["http 401", "http 500", "http 502", "ECONNREFUSED"]) {
+      expect(await wakeWith({ error: e })(env())).toEqual({ ok: false, kind: "unavailable" });
     }
   });
 
-  it("maps only the statuses that change what a person can do", async () => {
-    expect((await call(404)).outcome).toEqual({ ok: false, kind: "gone" });
-    expect((await call(410)).outcome).toEqual({ ok: false, kind: "gone" });
-    expect((await call(402)).outcome).toEqual({ ok: false, kind: "quota" });
-    expect((await call(429)).outcome).toEqual({ ok: false, kind: "quota" });
+  it("runs the cheapest command there is, on the named machine", async () => {
+    const seen: { name: string; argv: readonly string[] }[] = [];
+    await wakeWith({ ok: true, exitCode: 0 }, seen)(env());
+    expect(seen).toEqual([{ name: "afkpilot-abc", argv: ["true"] }]);
   });
 
-  it("reports a network failure as try-again", async () => {
-    const wake = spriteWaker({
-      token: "t",
-      fetchImpl: (async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch,
-    });
-    expect(await wake(env())).toEqual({ ok: false, kind: "unavailable" });
-  });
-
-  it("posts the cheapest possible command to the authenticated exec endpoint", async () => {
-    const { seen } = await call(200);
-    expect(seen[0].url).toBe("https://api.example/v1/sprites/afkpilot-abc/exec");
-    expect(seen[0].init.method).toBe("POST");
-    expect(seen[0].init.headers).toMatchObject({ authorization: "Bearer t" });
-    expect(JSON.parse(String(seen[0].init.body))).toEqual({ cmd: "true" });
-  });
-
-  it("escapes a sprite name into the path", async () => {
-    const seen: string[] = [];
-    const wake = spriteWaker({
-      token: "t",
-      apiBase: "https://api.example/",
-      fetchImpl: (async (url: string) => { seen.push(String(url)); return { status: 200 } as Response; }) as unknown as typeof fetch,
-    });
-    await wake({ ...env(), externalId: "a b/c" });
-    expect(seen[0]).toBe("https://api.example/v1/sprites/a%20b%2Fc/exec");
+  it("builds an exec URL that escapes the sprite name", async () => {
+    // The name reaches the wire through spriteExecUrl; this pins that a wake
+    // uses that path rather than pasting a name into a URL itself.
+    expect(spriteExecUrl({ apiBase: "https://api.example/", name: "a b/c", argv: ["true"] }))
+      .toBe("wss://api.example/v1/sprites/a%20b%2Fc/exec?cmd=true");
   });
 });

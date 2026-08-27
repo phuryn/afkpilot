@@ -6,12 +6,25 @@
  * not. `server.ts` holds a `WakeCoordinator`; what actually pokes Fly lives at
  * the bottom of this file and is one function.
  *
- * ## The wake is an authenticated API call
+ * ## The wake is a command that actually runs on the machine
  *
- * Not anything over the uplink — the uplink is the thing that died. And NOT a
- * plain request to the sprite public URL either, which was the first design and
- * was wrong: that returns 302 from an auth edge without reaching the machine.
- * See {@link spriteWaker} for what was measured.
+ * Not anything over the uplink — the uplink is the thing that died. Two earlier
+ * designs were wrong in the same way, each accepting an answer from something
+ * that was not the machine: a plain request to the sprite's public URL returns
+ * 302 from an auth edge, and `POST /v1/sprites/{name}/exec` returns 200 having
+ * run nothing at all. Both reported every wake as a success, including the ones
+ * where nothing woke.
+ *
+ * So a wake now runs `true` over the exec WEBSOCKET and insists on an exit
+ * code. See `sprite-exec.ts` for why that is the only channel that executes.
+ *
+ * ## Waking is not the same as staying awake
+ *
+ * Resuming a machine takes about a second; a host noticing its socket died and
+ * reconnecting takes longer, and the hypervisor suspends an untouched machine
+ * about a minute after the last interaction. So `server.ts` also HOLDS a woken
+ * machine running (see `environment-keepalive.ts`) for as long as it takes the
+ * uplink to come back — a wake that is instantly re-frozen is not a wake.
  *
  * ## De-duplication is the point of this class
  *
@@ -24,6 +37,15 @@ import {
   type EnvironmentRecord,
   type WakeFailure,
 } from "./environments.js";
+import { spriteExec, type SpriteExecResult } from "./sprite-exec.js";
+
+/**
+ * A wake is one trivial command. It either runs in a couple of seconds or the
+ * machine is not coming back on this attempt, and a person staring at a device
+ * picker should be told that rather than watched to wait out an install-sized
+ * timeout.
+ */
+export const WAKE_EXEC_TIMEOUT_MS = 20_000;
 
 export type WakeOutcome = { ok: true } | { ok: false; kind: WakeFailure };
 
@@ -135,30 +157,20 @@ export class WakeCoordinator {
 export function spriteWaker(opts: {
   token: string;
   apiBase?: string;
-  fetchImpl?: typeof fetch;
+  /** Injected in tests, so no suite opens a socket. */
+  execImpl?: (name: string, argv: readonly string[]) => Promise<SpriteExecResult>;
 }): WakeFn {
-  const fetchImpl = opts.fetchImpl ?? fetch;
-  const base = (opts.apiBase ?? "https://api.sprites.dev").replace(/\/+$/, "");
+  const exec = opts.execImpl
+    ?? spriteExec({ token: opts.token, apiBase: opts.apiBase, timeoutMs: WAKE_EXEC_TIMEOUT_MS });
   return async (environment) => {
-    const res = await fetchImpl(
-      `${base}/v1/sprites/${encodeURIComponent(environment.externalId)}/exec`,
-      {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${opts.token}`,
-          "content-type": "application/json",
-        },
-        // The cheapest command that exists. We want the machine up, not output.
-        body: JSON.stringify({ cmd: "true" }),
-      },
-    ).catch(() => null);
-    if (!res) return { ok: false, kind: "unavailable" };
-    if (res.status === 404 || res.status === 410) return { ok: false, kind: "gone" };
-    if (res.status === 402 || res.status === 429) return { ok: false, kind: "quota" };
-    // Only a 2xx means the command ran, which is the only proof the machine is
-    // up. A 3xx here would be an edge answering on the sprite's behalf — the
-    // exact failure this function was rewritten to stop treating as success.
-    if (res.status >= 200 && res.status < 300) return { ok: true };
+    const result = await exec(environment.externalId, ["true"]);
+    // An exit code is the proof. `ok` here means a command ran on the machine
+    // and said so, which is the only evidence that the machine is up — the
+    // shape of failure that motivated this was a 200 that meant nothing.
+    if (result.ok && result.exitCode !== null) return { ok: true };
+    const e = result.error ?? "";
+    if (/http (404|410)/.test(e)) return { ok: false, kind: "gone" };
+    if (/http (402|429)/.test(e)) return { ok: false, kind: "quota" };
     return { ok: false, kind: "unavailable" };
   };
 }
