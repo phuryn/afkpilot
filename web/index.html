@@ -1553,7 +1553,13 @@
       // machine exists yet and opening it makes one; "upgrade" means the plan
       // does not include it — the row is still here, because everyone has one.
       const cloudState = d.environment && d.environment.state;
-      const isCloud = !!d.environment;
+      // A row is cloud if the relay says so (an environment record) OR if the
+      // machine reports itself as one. Both matter, and the second is why:
+      // a device linked before the relay knew about environments has no record,
+      // so keying only on that gave it an unlink ✕ — and unlinking one is never
+      // what somebody wants. It leaves the machine running, unreachable, with
+      // no way back to it from the picker.
+      const isCloud = !!d.environment || d.platform === "cloud";
       const usable = availability !== "offline" && cloudState !== "upgrade";
       li.dataset.online = usable ? "true" : "false";
       li.dataset.availability = availability;

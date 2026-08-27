@@ -96,7 +96,9 @@ const DEVICES = {
       osLabel: "Linux",
       platform: "cloud",
       availability: "ready",
-      environment: { provider: "sprite" },
+      // NO environment record — exactly the owner's row: a cloud machine linked
+      // by hand before the relay knew what one was.
+      environment: null,
     },
     {
       deviceId: "d-cloud-waking",
@@ -220,6 +222,11 @@ try {
     // 7. NO ✕ ON A CLOUD ROW, ever. Unlinking one would leave an account
     //    without a product it cannot get back, and a gap in a list that
     //    promises everyone has one.
+    // Including a cloud machine the relay has NO record for — the owner had one
+    // of those, unlinked it, and lost every route back to a sprite that was
+    // still running.
+    assert.equal(await sleeping.locator(".device-remove:not(.device-menu-btn)").count(), 0,
+      "a cloud row must never offer an unlink, even without an environment record");
     for (const state of ["not-provisioned", "upgrade"]) {
       const r = page.locator(`.device-row[data-cloud-state="${state}"]`).first();
       assert.equal(await r.locator(".device-remove:not(.device-menu-btn)").count(), 0,

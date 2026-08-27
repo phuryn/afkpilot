@@ -18,7 +18,7 @@ import {
   type EnvironmentStore,
 } from "./environment-store.js";
 import { WakeCoordinator, spriteWaker } from "./environment-waker.js";
-import { ProvisionCoordinator, spritesProvisioner } from "./environment-provisioner.js";
+import { ProvisionCoordinator, parseSpriteLabels, spritesProvisioner } from "./environment-provisioner.js";
 import { startWakeScheduler } from "./wake-scheduler.js";
 
 const log = (line: string) => console.log(line);
@@ -139,11 +139,18 @@ if (spritesToken) {
     }),
     log,
   });
+  // SPRITES_LABELS: comma separated, trimmed. Applied at creation and not
+  // changeable afterwards without a second call, so an unlabelled sprite stays
+  // unlabelled — and a console full of `afkpilot-u-<hash>` names is
+  // unattributable, because the hash is deliberately not reversible.
+  const spriteLabels = parseSpriteLabels(process.env.SPRITES_LABELS);
   provisioner = new ProvisionCoordinator(spritesProvisioner({
     token: spritesToken,
     apiBase: process.env.SPRITES_API_BASE || undefined,
+    labels: spriteLabels,
     log,
   }));
+  if (spriteLabels.length) log(`[relay] sprite labels: ${spriteLabels.join(", ")}`);
   // Scheduled wakes: the sweep that makes routines fire ON TIME on a machine
   // that sleeps. Without it routines still run — catch-up is arithmetic — but
   // only whenever somebody next opens the environment.

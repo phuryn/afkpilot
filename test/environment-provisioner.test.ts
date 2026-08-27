@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ProvisionCoordinator,
+  parseSpriteLabels,
   spriteNameFor,
   spritesProvisioner,
   type ProvisionOutcome,
@@ -41,9 +42,9 @@ describe("naming a sprite", () => {
     expect(name).toMatch(/^afkpilot-u-[0-9a-f]{12}$/);
   });
 
-  it("changes with a salt, which is what makes Reset safe", () => {
-    // A new sprite must not collide with the tombstone of the one being torn
-    // down.
+  it("changes with a salt", () => {
+    // Nothing passes one today. Pinned because the day a name must dodge a
+    // sprite still being torn down, this is the seam that does it.
     expect(spriteNameFor("user_abc", "2")).not.toBe(spriteNameFor("user_abc"));
   });
 });
@@ -148,5 +149,39 @@ describe("one provision at a time", () => {
     await c.create("u");
     await c.create("u");
     expect(calls).toBe(2);
+  });
+});
+
+describe("labels", () => {
+  it("splits, trims and drops empties", () => {
+    expect(parseSpriteLabels(" afkpilot , env:dev ,, ")).toEqual(["afkpilot", "env:dev"]);
+  });
+
+  it("is empty for unset or blank", () => {
+    expect(parseSpriteLabels(undefined)).toEqual([]);
+    expect(parseSpriteLabels("")).toEqual([]);
+    expect(parseSpriteLabels("  , ,")).toEqual([]);
+  });
+
+  it("keeps order and drops duplicates, so a deploy produces a stable set", () => {
+    // A label list that reshuffles between deploys makes diffing two sprites
+    // harder than it needs to be.
+    expect(parseSpriteLabels("b,a,b")).toEqual(["b", "a"]);
+  });
+
+  it("sends them on create", async () => {
+    const { impl, calls } = fakeFetch(() => ({ status: 200 }));
+    const p = spritesProvisioner({ token: "t", labels: ["afkpilot", "env:dev"], fetchImpl: impl });
+    await p.create("u");
+    expect(JSON.parse(String(calls[0].init.body)).labels).toEqual(["afkpilot", "env:dev"]);
+  });
+
+  it("omits the field entirely when there are none", () => {
+    // Not an empty array: a provider is entitled to treat "set to nothing"
+    // differently from "not mentioned".
+    const { impl, calls } = fakeFetch(() => ({ status: 200 }));
+    return spritesProvisioner({ token: "t", fetchImpl: impl }).create("u").then(() => {
+      expect("labels" in JSON.parse(String(calls[0].init.body))).toBe(false);
+    });
   });
 });

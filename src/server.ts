@@ -743,8 +743,11 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         await environments.remove(existing.deviceId).catch(() => false);
         await devices.revoke(existing.deviceId).catch(() => false);
         log(`[relay] reset cloud environment for ${claims.userId}`);
-        // Not re-provisioned here. The next open does it, which is the same path
-        // as a first-time user and therefore the one that is actually tested.
+        // Not re-provisioned here. The ROW never goes away — every account has
+        // one whether or not a machine backs it — so the person is never left
+        // without a way in, and the machine itself waits for the next open. That
+        // is the same path a first-time user takes, and therefore the one that
+        // is actually tested.
         return sendJson(res, 200, { ok: true, reset: true });
       }
       if (req.method === "POST" && p === "/api/environment/wake-at") {
