@@ -233,3 +233,45 @@ describe("a relay with no environments configured", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("a cloud environment cannot be removed out from under its machine", () => {
+  // The picker offers Reset and no Remove, and /api/cloud/reset explains why:
+  // the row never goes away, only the machine behind it does. The API has to
+  // say the same thing. Revoking a cloud device's row without destroying the
+  // sprite leaves a machine that is still running and still billing with
+  // nothing pointing at it — no row, no name in any list, and no way for its
+  // owner or for us to find it again.
+  const del = (deviceId: string) =>
+    fetch(`${base}/api/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
+
+  it("refuses DELETE for a device that has one", async () => {
+    const d = await makeDevice();
+    await h.environments.create({
+      deviceId: d.deviceId, userId: MOCK_USER_ID, provider: "sprite", externalId: "s1",
+    });
+    const res = await del(d.deviceId);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ ok: false, error: "cloud-environment" });
+    // Still there, still theirs.
+    expect(await rowFor(d.deviceId)).toBeTruthy();
+  });
+
+  it("refuses the device-token unlink too", async () => {
+    // The extension calls this on local sign-out. A cloud machine's identity
+    // was handed TO it by the relay and is not the host's to give up.
+    const d = await makeDevice();
+    await h.environments.create({
+      deviceId: d.deviceId, userId: MOCK_USER_ID, provider: "sprite", externalId: "s1",
+    });
+    const res = await post("/api/device/unlink", {}, d.token);
+    expect(res.status).toBe(409);
+    expect(await rowFor(d.deviceId)).toBeTruthy();
+  });
+
+  it("still removes an ordinary laptop", async () => {
+    // The guard must not cost everybody else the operation they do have.
+    const d = await makeDevice("Laptop");
+    expect((await del(d.deviceId)).status).toBe(200);
+    expect(await rowFor(d.deviceId)).toBeUndefined();
+  });
+});

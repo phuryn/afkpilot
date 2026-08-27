@@ -630,6 +630,138 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     }
   }
 
+  /**
+   * Opening a cloud environment, at most once per person at a time.
+   *
+   * Two taps on a phone, or two tabs, both arrive before either has written a
+   * row — and both then take a machine off the shelf. The account ends up with
+   * two, only one of which anything points at afterwards, and the other runs
+   * and bills until somebody notices. Reset destroys "the first one", which by
+   * then is a coin toss.
+   *
+   * So callers share one attempt. The second gets the first one's answer, which
+   * is also the answer they wanted.
+   */
+  const cloudOpens = new Map<string, Promise<{ status: number; body: Record<string, unknown> }>>();
+
+  async function openCloudEnvironment(
+    req: http.IncomingMessage,
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
+    // Open my cloud environment, creating it if this is the first time.
+    //
+    // LAZY: an account that never taps the row costs nothing at all. Most
+    // never will, and provisioning at signup would buy a machine for every
+    // one of them.
+    //
+    // Returns the deviceId to open, so the browser can navigate straight to
+    // /chat. Attaching there is what WAKES it; this only makes sure there is
+    // something to attach to.
+    if (!environments || !provisioner) return { status: 404, body: { ok: false, error: "not-supported" } };
+    const claims = await sessions.verify(sessionTokenFromRequest(authHeaders(req)));
+    if (!claims) return { status: 401, body: { ok: false, error: "auth" } };
+    if (!mayUseCloud(claims.features, cloudFeature)) {
+      // Named separately from every other refusal because it is the one the
+      // person can act on, and the page turns it into an upgrade rather
+      // than an error.
+      return { status: 403, body: { ok: false, error: "upgrade" } };
+    }
+    const existing = (await environments.listByUser(claims.userId).catch(() => []))[0];
+    if (existing) return { status: 200, body: { ok: true, deviceId: existing.deviceId } };
+
+    // THE SHELF FIRST. A pooled machine is already installed, so claiming
+    // one turns a twenty-five-minute build into handing over a token. An
+    // empty shelf is NOT a failure — it is the on-demand path below, which
+    // is what every open did before a pool existed and is therefore the
+    // path that is actually tested.
+    let externalId: string | null = null;
+    let claimedFromPool = false;
+    if (pool) {
+      const outcome = claimOutcome(await pool.claim().catch(() => null));
+      if (outcome.ok) {
+        externalId = outcome.externalId;
+        claimedFromPool = true;
+        log(`[relay] claimed ${outcome.externalId} from the pool for ${claims.userId}`);
+      }
+    }
+
+    if (!externalId) {
+      const made = await provisioner.create(claims.userId);
+      if (!made.ok) {
+        return { status: made.kind === "quota" ? 429 : 503, body: { ok: false, error: made.kind } };
+      }
+      externalId = made.externalId;
+    }
+    // The device row and its token come from the SAME registry every other
+    // machine uses — a cloud environment is a linked device that happens to
+    // be ours, and giving it a private path would mean two things to keep
+    // in step.
+    const issued = await devices.issue("Cloud", claims.userId, undefined, {
+      clientLabel: "by afkpilot.com",
+      platform: "cloud",
+    });
+    await environments.create({
+      deviceId: issued.deviceId,
+      userId: claims.userId,
+      provider: "sprite",
+      externalId,
+    });
+
+    if (claimedFromPool) {
+      // The pool row has done its job; the environments row owns the
+      // machine now. Removed AFTER that row exists, so a crash in between
+      // leaves a `claimed` row an operator can see rather than a sprite
+      // nothing refers to.
+      await pool!.remove(externalId).catch(() => false);
+    }
+
+    // EVERY new machine gets set up, however it was obtained.
+    //
+    // This used to run only for a machine taken off the shelf, and the gap
+    // was not theoretical: opening a cloud environment while the pool was
+    // empty produced a sprite that nothing was ever installed on. It came
+    // up, sat there, and the picker counted "creating" upwards forever
+    // because nothing was ever going to link. A pooled machine needs only
+    // its identity; a made-to-order one needs the installer too.
+    if (handover && provisioner && publicUrl) {
+      const code = handover.mint({
+        deviceId: issued.deviceId,
+        token: issued.token,
+        relayUrl: relayWsUrl(publicUrl),
+      });
+      const relayHttpUrl = publicUrl;
+      const target = externalId;
+      log(`[relay] handover ${redactCode(code)} -> ${target}`);
+      // Not awaited: the person is waiting on a response, and the machine
+      // takes minutes either way. The row says "creating" until its uplink
+      // arrives, which is the honest thing to show and the only signal that
+      // means the setup actually worked.
+      void (async () => {
+        if (!claimedFromPool) {
+          // No shelf row to report against, so no name or secret — the
+          // script skips its readiness report and waits for the env file.
+          const built = await provisioner.exec(
+            target, poolBuildCommand({ relayHttpUrl }),
+          ).catch((e: unknown) => ({ ok: false, exitCode: null, output: "", error: String(e) }));
+          if (!built.ok || built.exitCode !== 0) {
+            log(`[relay] installer setup failed on ${target}: `
+              + `${built.error ?? `exit ${built.exitCode}`}`);
+          }
+        }
+        const handed = await provisioner.exec(
+          target, handoverCommand({ relayHttpUrl, code }),
+        ).catch((e: unknown) => ({ ok: false, exitCode: null, output: "", error: String(e) }));
+        if (!handed.ok || handed.exitCode !== 0) {
+          log(`[relay] handover failed on ${target}: `
+            + `${handed.error ?? `exit ${handed.exitCode}`}`);
+        }
+      })();
+    }
+    log(`[relay] provisioned cloud environment for ${claims.userId}`);
+    // The token goes to the MACHINE, never to the browser: it is handed to
+    // the sprite as a secret when it boots. The page gets an id it may open.
+    return { status: 200, body: { ok: true, deviceId: issued.deviceId, provisioned: true } };
+  }
+
   const server = http.createServer((req, res) => {
     void handleHttp(req, res);
   });
@@ -786,119 +918,18 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         return sendText(res, 200, handoverEnvFile(payload), "text/plain");
       }
       if (req.method === "POST" && p === "/api/cloud/open") {
-        // Open my cloud environment, creating it if this is the first time.
-        //
-        // LAZY: an account that never taps the row costs nothing at all. Most
-        // never will, and provisioning at signup would buy a machine for every
-        // one of them.
-        //
-        // Returns the deviceId to open, so the browser can navigate straight to
-        // /chat. Attaching there is what WAKES it; this only makes sure there is
-        // something to attach to.
-        if (!environments || !provisioner) return sendJson(res, 404, { ok: false, error: "not-supported" });
         const claims = await sessions.verify(sessionTokenFromRequest(authHeaders(req)));
-        if (!claims) return sendJson(res, 401, { ok: false, error: "auth" });
-        if (!mayUseCloud(claims.features, cloudFeature)) {
-          // Named separately from every other refusal because it is the one the
-          // person can act on, and the page turns it into an upgrade rather
-          // than an error.
-          return sendJson(res, 403, { ok: false, error: "upgrade" });
+        const userId = claims?.userId;
+        if (!userId) return sendJson(res, 401, { ok: false, error: "auth" });
+        // One attempt per person. A second tap joins the first rather than
+        // buying a second machine — see openCloudEnvironment.
+        let attempt = cloudOpens.get(userId);
+        if (!attempt) {
+          attempt = openCloudEnvironment(req).finally(() => { cloudOpens.delete(userId); });
+          cloudOpens.set(userId, attempt);
         }
-        const existing = (await environments.listByUser(claims.userId).catch(() => []))[0];
-        if (existing) return sendJson(res, 200, { ok: true, deviceId: existing.deviceId });
-
-        // THE SHELF FIRST. A pooled machine is already installed, so claiming
-        // one turns a twenty-five-minute build into handing over a token. An
-        // empty shelf is NOT a failure — it is the on-demand path below, which
-        // is what every open did before a pool existed and is therefore the
-        // path that is actually tested.
-        let externalId: string | null = null;
-        let claimedFromPool = false;
-        if (pool) {
-          const outcome = claimOutcome(await pool.claim().catch(() => null));
-          if (outcome.ok) {
-            externalId = outcome.externalId;
-            claimedFromPool = true;
-            log(`[relay] claimed ${outcome.externalId} from the pool for ${claims.userId}`);
-          }
-        }
-
-        if (!externalId) {
-          const made = await provisioner.create(claims.userId);
-          if (!made.ok) {
-            return sendJson(res, made.kind === "quota" ? 429 : 503, { ok: false, error: made.kind });
-          }
-          externalId = made.externalId;
-        }
-        // The device row and its token come from the SAME registry every other
-        // machine uses — a cloud environment is a linked device that happens to
-        // be ours, and giving it a private path would mean two things to keep
-        // in step.
-        const issued = await devices.issue("Cloud", claims.userId, undefined, {
-          clientLabel: "by afkpilot.com",
-          platform: "cloud",
-        });
-        await environments.create({
-          deviceId: issued.deviceId,
-          userId: claims.userId,
-          provider: "sprite",
-          externalId,
-        });
-
-        if (claimedFromPool) {
-          // The pool row has done its job; the environments row owns the
-          // machine now. Removed AFTER that row exists, so a crash in between
-          // leaves a `claimed` row an operator can see rather than a sprite
-          // nothing refers to.
-          await pool!.remove(externalId).catch(() => false);
-        }
-
-        // EVERY new machine gets set up, however it was obtained.
-        //
-        // This used to run only for a machine taken off the shelf, and the gap
-        // was not theoretical: opening a cloud environment while the pool was
-        // empty produced a sprite that nothing was ever installed on. It came
-        // up, sat there, and the picker counted "creating" upwards forever
-        // because nothing was ever going to link. A pooled machine needs only
-        // its identity; a made-to-order one needs the installer too.
-        if (handover && provisioner && publicUrl) {
-          const code = handover.mint({
-            deviceId: issued.deviceId,
-            token: issued.token,
-            relayUrl: relayWsUrl(publicUrl),
-          });
-          const relayHttpUrl = publicUrl;
-          const target = externalId;
-          log(`[relay] handover ${redactCode(code)} -> ${target}`);
-          // Not awaited: the person is waiting on a response, and the machine
-          // takes minutes either way. The row says "creating" until its uplink
-          // arrives, which is the honest thing to show and the only signal that
-          // means the setup actually worked.
-          void (async () => {
-            if (!claimedFromPool) {
-              // No shelf row to report against, so no name or secret — the
-              // script skips its readiness report and waits for the env file.
-              const built = await provisioner.exec(
-                target, poolBuildCommand({ relayHttpUrl }),
-              ).catch((e: unknown) => ({ ok: false, exitCode: null, output: "", error: String(e) }));
-              if (!built.ok || built.exitCode !== 0) {
-                log(`[relay] installer setup failed on ${target}: `
-                  + `${built.error ?? `exit ${built.exitCode}`}`);
-              }
-            }
-            const handed = await provisioner.exec(
-              target, handoverCommand({ relayHttpUrl, code }),
-            ).catch((e: unknown) => ({ ok: false, exitCode: null, output: "", error: String(e) }));
-            if (!handed.ok || handed.exitCode !== 0) {
-              log(`[relay] handover failed on ${target}: `
-                + `${handed.error ?? `exit ${handed.exitCode}`}`);
-            }
-          })();
-        }
-        log(`[relay] provisioned cloud environment for ${claims.userId}`);
-        // The token goes to the MACHINE, never to the browser: it is handed to
-        // the sprite as a secret when it boots. The page gets an id it may open.
-        return sendJson(res, 200, { ok: true, deviceId: issued.deviceId, provisioned: true });
+        const out = await attempt.catch(() => ({ status: 503, body: { ok: false, error: "unavailable" } }));
+        return sendJson(res, out.status, out.body);
       }
       if (req.method === "POST" && p === "/api/cloud/reset") {
         // Reset my Cloud — destroy everything and start again.
@@ -1068,6 +1099,16 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         const deviceId = decodeURIComponent(p.slice("/api/devices/".length));
         const owned = (await devices.findOwned(deviceId, claims.userId)) !== null;
         if (!owned) return sendJson(res, 404, { ok: false, error: "unknown" });
+        // A CLOUD environment has no remove, by design — see /api/cloud/reset.
+        // Revoking its device row here would not touch the machine, so the
+        // sprite would go on running and billing with nothing left pointing at
+        // it: no row, no name in any list, and no way for its owner or for us
+        // to find it again. The picker never offers this for a cloud row; this
+        // is the API saying the same thing, because a bill with no owner is not
+        // something to leave to the UI.
+        if (environments && await environments.find(deviceId).catch(() => null)) {
+          return sendJson(res, 409, { ok: false, error: "cloud-environment" });
+        }
         await revokeDevice(deviceId);
         log(`[relay] device ${deviceId} removed by ${claims.userId}`);
         return sendJson(res, 200, { ok: true });
@@ -1078,6 +1119,12 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         const token = sessionTokenFromRequest({ authorization: req.headers.authorization });
         const device = await devices.verify(token);
         if (!device) return sendJson(res, 401, { ok: false, error: "token" });
+        // Same reason as the DELETE above: a cloud machine's identity was handed
+        // TO it by the relay and is not the host's to give up. Discarding it
+        // would strand the machine — still running, still billing, unreachable.
+        if (environments && await environments.find(device.deviceId).catch(() => null)) {
+          return sendJson(res, 409, { ok: false, error: "cloud-environment" });
+        }
         await revokeDevice(device.deviceId);
         log(`[relay] device ${device.deviceId} unlinked by device token`);
         return sendJson(res, 200, { ok: true });
@@ -1434,6 +1481,28 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       ws.close(4003, "unknown device");
       return;
     }
+    // A CLOUD machine is gated separately from an ordinary one, and the gate has
+    // to be here as well as on /api/cloud/open. Otherwise a saved /chat link is
+    // the whole bypass: somebody whose cloud plan has lapsed keeps their own
+    // deviceId, skips the picker, and drives a machine we pay for — and because
+    // attaching WAKES it, arriving at that URL is itself what starts the meter.
+    // `remote` gates driving your own laptop; this gates a machine that is ours.
+    if (environments && cloudFeature && !mayUseCloud(claims.features, cloudFeature)) {
+      let isCloud = false;
+      try {
+        isCloud = (await environments.find(deviceId)) !== null;
+      } catch {
+        // The store is down. Refusing everybody's cloud on a database blip is
+        // worse than the lapsed plan this catches, so fall through — the picker
+        // and /api/cloud/open still hold the line.
+      }
+      if (isCloud) {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.close(CLOSE_ENTITLEMENT_REQUIRED, "subscription required");
+        return;
+      }
+    }
+    if (ws.readyState !== WebSocket.OPEN) return;
     const clientId = hub.addClient(deviceId, ws);
     log(`[relay] client ${clientId} joined device ${deviceId}`);
 

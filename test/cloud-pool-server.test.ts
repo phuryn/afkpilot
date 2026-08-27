@@ -254,3 +254,51 @@ describe("the bootstrap script", () => {
     expect(script).not.toMatch(/sk-device-|SPRITES_TOKEN|SUPABASE|Bearer /);
   });
 });
+
+describe("two taps, one machine", () => {
+  it("gives simultaneous opens the same environment", async () => {
+    // A phone double-tap, or two tabs. Both arrive before either has written a
+    // row, and without a lock both take a machine off the shelf: the account
+    // ends up with two, only one of which anything points at afterwards, and
+    // the other runs and bills until somebody notices. Reset then destroys
+    // "the first one", which by that point is a coin toss.
+    await pool.add("afkpilot-pool-aaa", "s");
+    await pool.markReady("afkpilot-pool-aaa", "s", 1_000);
+    await pool.add("afkpilot-pool-bbb", "s");
+    await pool.markReady("afkpilot-pool-bbb", "s", 1_000);
+
+    // Real I/O is what makes the race possible: against in-memory stores every
+    // await settles as a microtask, so one request runs to completion before
+    // the next is even parsed and NOTHING overlaps. Supabase is a network hop.
+    // This puts one back, so the three requests genuinely overlap the way they
+    // do in production.
+    const realList = environments.listByUser.bind(environments);
+    environments.listByUser = async (userId: string) => {
+      const out = await realList(userId);
+      await new Promise((r) => setTimeout(r, 25));
+      return out;
+    };
+
+    const [a, b, c] = await Promise.all([
+      post("/api/cloud/open").then((r) => r.json()),
+      post("/api/cloud/open").then((r) => r.json()),
+      post("/api/cloud/open").then((r) => r.json()),
+    ]) as { ok: boolean; deviceId: string }[];
+
+    expect(a.deviceId).toBe(b.deviceId);
+    expect(b.deviceId).toBe(c.deviceId);
+    expect(await environments.listByUser(MOCK_USER_ID)).toHaveLength(1);
+    // And the second machine is still on the shelf for whoever asks next.
+    expect((await pool.counts(1_000)).ready).toBe(1);
+  });
+
+  it("still opens normally once the first attempt has finished", async () => {
+    // The lock is per attempt, not a latch — an account that opens, resets and
+    // opens again must not be stuck on the first answer for ever.
+    await pool.add("afkpilot-pool-aaa", "s");
+    await pool.markReady("afkpilot-pool-aaa", "s", 1_000);
+    const first = await (await post("/api/cloud/open")).json() as { deviceId: string };
+    const again = await (await post("/api/cloud/open")).json() as { deviceId: string };
+    expect(again.deviceId).toBe(first.deviceId);
+  });
+});
