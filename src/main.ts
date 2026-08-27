@@ -126,14 +126,13 @@ if (spritesToken) {
     ? new SupabaseEnvironmentStore(createDb(supabaseUrl, supabaseSecretKey))
     : new InMemoryEnvironmentStore();
   waker = new WakeCoordinator({
-    // A sprite's public hostname carries a per-sprite suffix, so it cannot be
-    // derived from the name. SPRITES_URL_TEMPLATE holds the shape with `{name}`
-    // where the sprite goes; without it the default guess is right for some
-    // orgs and wrong for others, which is why it is configurable rather than
-    // assumed.
+    // The API, not the sprite's public URL: a plain request to that returns 302
+    // from an auth edge and never reaches the machine. SPRITES_API_BASE exists
+    // for a self-hosted or staging control plane, not because the default is a
+    // guess.
     wake: spriteWaker({
       token: spritesToken,
-      urlFor: (id) => (process.env.SPRITES_URL_TEMPLATE || "https://{name}.sprites.app/").replace("{name}", id),
+      apiBase: process.env.SPRITES_API_BASE || undefined,
     }),
     log,
   });

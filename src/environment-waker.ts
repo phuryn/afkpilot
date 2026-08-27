@@ -6,12 +6,12 @@
  * not. `server.ts` holds a `WakeCoordinator`; what actually pokes Fly lives at
  * the bottom of this file and is one function.
  *
- * ## The wake is an inbound HTTP request
+ * ## The wake is an authenticated API call
  *
- * Not an API call to a control plane, and not anything over the uplink — the
- * uplink is the thing that died. A sprite has its own authenticated URL, and a
- * request to it wakes the machine. That is the entire mechanism: the response
- * does not matter, the arrival does.
+ * Not anything over the uplink — the uplink is the thing that died. And NOT a
+ * plain request to the sprite public URL either, which was the first design and
+ * was wrong: that returns 302 from an auth edge without reaching the machine.
+ * See {@link spriteWaker} for what was measured.
  *
  * ## De-duplication is the point of this class
  *
@@ -110,33 +110,55 @@ export class WakeCoordinator {
 }
 
 /**
- * The real thing: an authenticated request to the sprite's own URL.
+ * The real thing: an authenticated call to the provider's API.
+ *
+ * MEASURED, and the obvious approach was wrong. A plain GET to a sprite's public
+ * URL returns **302 in ~577 ms and does not wake it** — that redirect comes from
+ * Fly's auth edge, which answers without the request ever reaching the machine.
+ * An earlier version of this function treated "any response that arrived" as a
+ * wake and would have reported every sleeping environment as awake while never
+ * starting one.
+ *
+ * `POST /v1/sprites/{name}/exec` is authenticated, reaches the machine, and is
+ * what the CLI itself uses — timing a `sprite exec` against a COLD sprite gave
+ * 1775 ms versus a 1120 ms warm baseline, so the wake is real and costs about
+ * 650 ms. `/wake`, `/start` and `/resume` do not exist (404, all three).
+ *
+ * Running a command to wake something reads as odd, and `true` is the cheapest
+ * possible one. The alternative — an authenticated request to the sprite's own
+ * URL — may also work, but its auth story is not established and this one is.
  *
  * Status codes are mapped, not forwarded. A person is never shown a provider
- * error (see `wakeFailureText`), so the only distinctions worth preserving are
- * the ones that change what they can do: gone, over a limit, or try again.
+ * error (see `wakeFailureText`), so the only distinctions preserved are the ones
+ * that change what they can do: gone, over a limit, or try again.
  */
 export function spriteWaker(opts: {
   token: string;
-  urlFor?: (externalId: string) => string;
+  apiBase?: string;
   fetchImpl?: typeof fetch;
 }): WakeFn {
   const fetchImpl = opts.fetchImpl ?? fetch;
-  // Sprite URLs carry a per-sprite suffix, so the caller supplies the mapping
-  // rather than this guessing a hostname from a name.
-  const urlFor = opts.urlFor ?? ((id: string) => `https://${id}.sprites.app/`);
+  const base = (opts.apiBase ?? "https://api.sprites.dev").replace(/\/+$/, "");
   return async (environment) => {
-    const res = await fetchImpl(urlFor(environment.externalId), {
-      method: "GET",
-      headers: { authorization: `Bearer ${opts.token}` },
-      redirect: "manual",
-    }).catch(() => null);
+    const res = await fetchImpl(
+      `${base}/v1/sprites/${encodeURIComponent(environment.externalId)}/exec`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${opts.token}`,
+          "content-type": "application/json",
+        },
+        // The cheapest command that exists. We want the machine up, not output.
+        body: JSON.stringify({ cmd: "true" }),
+      },
+    ).catch(() => null);
     if (!res) return { ok: false, kind: "unavailable" };
     if (res.status === 404 || res.status === 410) return { ok: false, kind: "gone" };
     if (res.status === 402 || res.status === 429) return { ok: false, kind: "quota" };
-    // Anything else that ARRIVED woke it. A 401 or a 500 from the sprite's own
-    // app still means the machine is up, which is all a wake is for — and
-    // treating those as failure would show `offline` for a running box.
-    return { ok: true };
+    // Only a 2xx means the command ran, which is the only proof the machine is
+    // up. A 3xx here would be an edge answering on the sprite's behalf — the
+    // exact failure this function was rewritten to stop treating as success.
+    if (res.status >= 200 && res.status < 300) return { ok: true };
+    return { ok: false, kind: "unavailable" };
   };
 }

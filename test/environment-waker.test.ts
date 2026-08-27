@@ -93,24 +93,26 @@ describe("bounding a wake", () => {
 
 describe("the sprite waker", () => {
   const call = async (status: number) => {
-    const seen: { url: string; headers: unknown }[] = [];
+    const seen: { url: string; init: RequestInit }[] = [];
     const wake = spriteWaker({
       token: "t",
-      urlFor: (id) => `https://${id}.example/`,
+      apiBase: "https://api.example",
       fetchImpl: (async (url: string, init: RequestInit) => {
-        seen.push({ url: String(url), headers: init.headers });
+        seen.push({ url: String(url), init });
         return { status } as Response;
       }) as unknown as typeof fetch,
     });
     return { outcome: await wake(env()), seen };
   };
 
-  it("treats any response that ARRIVED as a wake", async () => {
-    // The machine is up — that is the whole job. A 401 or a 500 from whatever
-    // is listening still means it woke, and calling that offline would report a
-    // running box as dead.
-    for (const status of [200, 204, 401, 500, 502]) {
-      expect((await call(status)).outcome).toEqual({ ok: true });
+  it("treats ONLY a 2xx as a wake", async () => {
+    // The bug this replaced: a plain GET to a sprite URL returns 302 from Fly's
+    // auth edge in ~577ms WITHOUT waking anything. Accepting "any response that
+    // arrived" reported every sleeping environment as awake and started none.
+    expect((await call(200)).outcome).toEqual({ ok: true });
+    expect((await call(204)).outcome).toEqual({ ok: true });
+    for (const status of [302, 401, 403, 500, 502]) {
+      expect((await call(status)).outcome).toEqual({ ok: false, kind: "unavailable" });
     }
   });
 
@@ -129,9 +131,22 @@ describe("the sprite waker", () => {
     expect(await wake(env())).toEqual({ ok: false, kind: "unavailable" });
   });
 
-  it("addresses the sprite by name and authenticates", async () => {
+  it("posts the cheapest possible command to the authenticated exec endpoint", async () => {
     const { seen } = await call(200);
-    expect(seen[0].url).toBe("https://afkpilot-abc.example/");
-    expect(seen[0].headers).toMatchObject({ authorization: "Bearer t" });
+    expect(seen[0].url).toBe("https://api.example/v1/sprites/afkpilot-abc/exec");
+    expect(seen[0].init.method).toBe("POST");
+    expect(seen[0].init.headers).toMatchObject({ authorization: "Bearer t" });
+    expect(JSON.parse(String(seen[0].init.body))).toEqual({ cmd: "true" });
+  });
+
+  it("escapes a sprite name into the path", async () => {
+    const seen: string[] = [];
+    const wake = spriteWaker({
+      token: "t",
+      apiBase: "https://api.example/",
+      fetchImpl: (async (url: string) => { seen.push(String(url)); return { status: 200 } as Response; }) as unknown as typeof fetch,
+    });
+    await wake({ ...env(), externalId: "a b/c" });
+    expect(seen[0]).toBe("https://api.example/v1/sprites/a%20b%2Fc/exec");
   });
 });
