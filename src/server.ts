@@ -32,6 +32,7 @@ import { countMachines, isRecognizedInstallId, MinuteRateLimiter, type FreeTier,
 import { usageWindow, resetsInText } from "./usage.js";
 import { Hub } from "./hub.js";
 import {
+  buildElapsedMs,
   cloudRowState,
   deviceAvailability,
   mayUseCloud,
@@ -802,11 +803,18 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
               entitled: mayUseCloud(claims.features, cloudFeature),
               environment,
             });
-            if (state === "ready" && environment) return null; // it is a real device row below
+            // A real device row exists from the moment the machine is
+            // provisioned, not from the moment it works. The synthetic row is
+            // for accounts with NOTHING — anything else, including a machine
+            // that is still being built, is that device's own row saying what
+            // is happening to it.
+            if (environment) return null;
             return {
               deviceId: null,
               name: "Cloud",
-              createdAt: environment?.createdAt ?? null,
+              // Nothing exists to have been created. The branch above returned
+              // for every case where something does.
+              createdAt: null,
               online: false,
               clients: 0,
               clientLabel: "by afkpilot.com",
@@ -833,16 +841,40 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
             // reads it changes. `availability` is the field a picker should
             // render: for a hosted machine, asleep-but-wakeable reads as ready,
             // because to the person tapping it, it is.
-            availability: deviceAvailability({
-              online,
-              environment,
-              waking: waker?.waking(d.deviceId) ?? false,
-              unwakeable: !!waker?.failure(d.deviceId),
-            }),
+            availability: environment && environment.readyAt === null
+              // Under construction. Not offline, not wakeable, not an error —
+              // there is simply nothing on the other end YET, and the row says
+              // so with a clock rather than with a word that means "switched
+              // off at the wall".
+              ? "building"
+              : deviceAvailability({
+                online,
+                environment,
+                waking: waker?.waking(d.deviceId) ?? false,
+                unwakeable: !!waker?.failure(d.deviceId),
+              }),
             // Presence of this object is how a client knows the row is a hosted
             // machine at all. Deliberately carries no provider identity: the
             // sprite's name is ours, not the reader's.
-            environment: environment ? { provider: environment.provider } : null,
+            //
+            // `state` and `buildingForMs` are what let a picker say "being
+            // made, 4:12 so far" instead of "offline" — see EnvironmentRecord
+            // .readyAt for why those are different things. Elapsed rather than
+            // remaining: a pool claim is seconds and a cold build is twenty-five
+            // minutes, so any estimate spanning both would be a lie in one
+            // direction. A number that only counts up is true either way.
+            environment: environment
+              ? {
+                provider: environment.provider,
+                state: cloudRowState({
+                  entitled: mayUseCloud(claims.features, cloudFeature),
+                  environment,
+                }),
+                buildingForMs: environment.readyAt === null
+                  ? buildElapsedMs({ environment, now: Date.now() })
+                  : null,
+              }
+              : null,
           };
         });
         // The cloud row leads: it is the one machine a person did not have to
@@ -1096,6 +1128,20 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     }
     log(`[relay] uplink attached: ${device.name} (${device.deviceId})`);
     uplinkSockets.set(device.deviceId, ws);
+    // A cloud environment linking for the FIRST time stops being "building".
+    //
+    // Observed here rather than reported by the machine, because the relay
+    // already watches exactly this event for every device it serves, and an
+    // observation beats a claim. Not awaited: a database write must never sit
+    // between a host connecting and its traffic flowing, and the store's own
+    // `is null` guard makes a repeat harmless.
+    if (environments) {
+      void environments.markReady(device.deviceId, Date.now())
+        .then((first) => {
+          if (first) log(`[relay] cloud environment ready: ${device.deviceId}`);
+        })
+        .catch(() => {});
+    }
     admit((raw) => {
       const result = hub.fromUplink(device.deviceId, raw);
       if (result.kind === "accepted") backfillDeviceClient(device, raw);

@@ -525,6 +525,21 @@
     white-space: nowrap;
   }
   .device-badge.is-offline { color: var(--faint); text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.7rem; }
+  /* Building reads as ACTIVITY, not as a fault: full-strength text and a slow
+     pulse, where offline is faint and uppercase. Somebody watching a machine
+     being made should see something happening, and the mono font means the
+     clock does not reflow the row every second. */
+  .device-badge.is-building { color: var(--text); animation: device-building-pulse 2s ease-in-out infinite; }
+  @keyframes device-building-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+  @media (prefers-reduced-motion: reduce) {
+    .device-badge.is-building { animation: none; }
+  }
+  .device-building-note {
+    margin: 0.35rem 0 0 calc(1.35rem + 0.7rem);
+    font-size: 0.85rem;
+    color: var(--muted);
+    max-width: 46ch;
+  }
   .device-start {
     align-self: flex-start;
     margin-left: calc(1.35rem + 0.7rem);
@@ -1511,10 +1526,27 @@
     refresh();
   }
 
-  function chatTarget(deviceId) {
+  // `isCloud` rides along because /chat has no device list — it is handed a
+  // device id in the query string and connects. Without this it cannot tell a
+  // laptop that is switched off from a hosted machine that failed to wake, and
+  // tells everybody to go and open VS Code. A query parameter rather than a
+  // protocol frame on purpose: the picker and /chat ship in the same deploy and
+  // are never out of step with each other, which is not true of the extension.
+  // m:ss, counting up. Anything under a second reads as 0:00 rather than as
+  // blank, so the row never looks like it is waiting for a number that never
+  // arrives.
+  function clockText(ms) {
+    const total = Math.max(0, Math.floor((ms || 0) / 1000));
+    const mins = Math.floor(total / 60);
+    const secs = total % 60;
+    return mins + ":" + (secs < 10 ? "0" : "") + secs;
+  }
+
+  function chatTarget(deviceId, isCloud) {
     const incoming = new URLSearchParams(location.search);
     const target = new URLSearchParams();
     target.set("device", deviceId);
+    if (isCloud) target.set("cloud", "1");
     for (const key of ["remoteHint", "linked"]) {
       if (incoming.get(key) === "1") target.set(key, "1");
     }
@@ -1607,6 +1639,18 @@
         // Deliberately NOT "not created" or "inactive". Nothing has happened
         // yet and nothing needs to: opening it is the whole setup.
         badge.textContent = "ready";
+      } else if (cloudState === "building") {
+        // A machine that is being MADE. The clock is the message: a first build
+        // can take twenty-five minutes, and a row that said "offline" for all
+        // of it read as broken to the one person who had every reason to expect
+        // it to work — they had just asked for it.
+        //
+        // Elapsed, never remaining. Taking one off the pool is seconds and
+        // building a fresh one is minutes; an estimate spanning both would be
+        // wrong in one direction, and a number that counts up is true either
+        // way.
+        badge.classList.add("is-building");
+        badge.textContent = "creating " + clockText(d.environment && d.environment.buildingForMs);
       } else if (availability === "waking") {
         // Only ever seen if a wake is genuinely slow. Sub-second is the norm.
         badge.textContent = "starting";
@@ -1622,7 +1666,15 @@
       head.appendChild(badge);
       body.appendChild(head);
 
-      if (cloudState === "upgrade") {
+      if (cloudState === "building") {
+        // No button. There is nothing to open and nothing the reader can do to
+        // make it faster — offering a disabled "Start" invites them to keep
+        // pressing it and to conclude it is broken when nothing happens.
+        const note = document.createElement("p");
+        note.className = "device-building-note";
+        note.textContent = "Setting up your cloud environment. You can close this page — it keeps going.";
+        body.appendChild(note);
+      } else if (cloudState === "upgrade") {
         // An offer, not an error. The row exists precisely so this is
         // discoverable.
         const up = document.createElement("a");
@@ -1644,7 +1696,7 @@
           start.textContent = "Starting…";
           apiPost("/api/cloud/open").then(function (body) {
             if (body && body.ok && body.deviceId) {
-              window.open(chatTarget(body.deviceId), "_blank", "noopener");
+              window.open(chatTarget(body.deviceId, true), "_blank", "noopener");
               refresh();
               return;
             }
@@ -1665,7 +1717,7 @@
         // attaches, and the wait is well under a second.
         const start = document.createElement("a");
         start.className = "btn btn-primary device-start";
-        start.href = chatTarget(d.deviceId);
+        start.href = chatTarget(d.deviceId, isCloud);
         start.target = "_blank";
         start.rel = "noopener";
         start.textContent = "Start remote session";
@@ -1677,7 +1729,7 @@
         // A hosted machine that cannot be woken is a different problem from a
         // laptop that is switched off, and pointing someone at VS Code they
         // never installed would be nonsense.
-        start.title = d.environment
+        start.title = isCloud
           ? "Couldn't start this environment. Try again."
           : "Offline — open VS Code on that machine to reconnect";
         start.textContent = "Start remote session";
@@ -1774,7 +1826,7 @@
     // Exactly one device: that IS the answer — go, without ever painting the
     // picker. Any other count needs a human choice, so drop the waypoint.
     if (devices.length !== 1) { stopForwarding(); return false; }
-    location.replace(chatTarget(devices[0].deviceId));
+    location.replace(chatTarget(devices[0].deviceId, devices[0].platform === "cloud" || !!devices[0].environment));
     return true;
   }
 

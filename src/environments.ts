@@ -53,6 +53,17 @@ export interface EnvironmentRecord {
   /** Next scheduled wake, epoch ms, or null when nothing is due. Written by
    *  the host from its own routine schedule; the relay never computes it. */
   wakeAt: number | null;
+  /**
+   * When this machine first linked, or null if it never has.
+   *
+   * NOT the same as "offline". An environment that has linked once and is now
+   * paused has a timestamp here, and the picker says "offline" about it in the
+   * ordinary way. Null means the machine is still being BUILT — a state that
+   * lasted up to twenty-five minutes and, before this existed, was shown to
+   * people as "offline", which reads as broken to somebody who has just asked
+   * for a machine to be made.
+   */
+  readyAt: number | null;
   createdAt: number;
 }
 
@@ -255,6 +266,8 @@ export function mayUseCloud(
 export type CloudRowState =
   /** Provisioned and usable. */
   | "ready"
+  /** A machine exists and is being built. Never linked yet. */
+  | "building"
   /** No sprite yet. Opening it makes one. */
   | "not-provisioned"
   /** Visible, and locked behind the plan. */
@@ -269,7 +282,29 @@ export function cloudRowState(input: {
   // plan lapse keeps the row and the data — and does not get the machine woken.
   // Cold storage is pennies; compute is not.
   if (!input.entitled) return "upgrade";
-  return input.environment ? "ready" : "not-provisioned";
+  if (!input.environment) return "not-provisioned";
+  // Never linked: it is being made. Distinguished from "offline" deliberately —
+  // see EnvironmentRecord.readyAt. A pool makes this rare, not impossible: when
+  // the shelf is empty somebody waits for a real build, and that person is
+  // exactly the one who must not be told their machine is switched off.
+  if (input.environment.readyAt === null) return "building";
+  return "ready";
+}
+
+/**
+ * How long a build has been going, in ms.
+ *
+ * The picker turns this into a running clock. It is elapsed time and nothing
+ * more — deliberately NOT a prediction. A first build was measured at 25
+ * minutes and a pool claim is seconds; a progress bar spanning both would be
+ * a lie in one direction or the other, and a number that only counts up is
+ * true whatever happens.
+ */
+export function buildElapsedMs(input: {
+  environment: EnvironmentRecord;
+  now: number;
+}): number {
+  return Math.max(0, input.now - input.environment.createdAt);
 }
 
 /** The one sprite an account may have. Singular by design: no naming, no

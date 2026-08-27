@@ -109,10 +109,45 @@ describe("what the picker is told", () => {
     await h.environments.create({
       deviceId: d.deviceId, userId: MOCK_USER_ID, provider: "sprite", externalId: "s1",
     });
+    // It has linked before — which is what makes "offline" mean asleep here,
+    // rather than still being built. A machine that has NEVER linked is a
+    // different row with a different word on it; see the build tests below.
+    await h.environments.markReady(d.deviceId, 1_000);
     const row = await rowFor(d.deviceId);
     expect(row.online).toBe(false);
     expect(row.availability).toBe("ready");
-    expect(row.environment).toEqual({ provider: "sprite" });
+    expect(row.environment).toEqual({ provider: "sprite", state: "ready", buildingForMs: null });
+  });
+
+  it("reports a machine that has never linked as being built, not as offline", async () => {
+    // The twenty-five-minute case. Saying "offline" to somebody who has just
+    // asked for a machine to be MADE reads as broken, and they would be right
+    // to think so — nothing was going to change by waiting for a wake that has
+    // nothing to wake.
+    const d = await makeDevice();
+    await h.environments.create({
+      deviceId: d.deviceId, userId: MOCK_USER_ID, provider: "sprite", externalId: "s1",
+    });
+    const row = await rowFor(d.deviceId);
+    expect(row.availability).toBe("building");
+    expect(row.environment.state).toBe("building");
+    expect(row.environment.buildingForMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("shows only ONE cloud row while a machine is being built", async () => {
+    // The synthetic row and the real device row are both cloud rows. Before the
+    // build state existed the synthetic one stepped aside only once a machine
+    // WORKED, so a build painted the picker twice.
+    const d = await makeDevice();
+    await h.environments.create({
+      deviceId: d.deviceId, userId: MOCK_USER_ID, provider: "sprite", externalId: "s1",
+    });
+    const rows = (await devicesJson()).devices;
+    // Counted the way the picker counts them: a row is a cloud row if it
+    // carries an environment, or if it is the synthetic one that stands in
+    // before any machine exists.
+    const cloudRows = rows.filter((r) => r.environment !== null || r.platform === "cloud");
+    expect(cloudRows.length).toBe(1);
   });
 
   it("never puts the provider's identity on the wire", async () => {

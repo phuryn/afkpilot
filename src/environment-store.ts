@@ -35,6 +35,14 @@ export interface EnvironmentStore {
   setWakeAt(deviceId: string, userId: string, wakeAt: number | null): Promise<boolean>;
   /** Environments whose scheduled wake has passed. */
   dueForWake(now: number, limit: number): Promise<EnvironmentRecord[]>;
+  /**
+   * Record that this machine has linked for the first time.
+   *
+   * Idempotent and one-way: it is set when the uplink first connects and never
+   * cleared, because the question it answers is "has this ever worked", not
+   * "is it up now". The second question is what `online` already answers.
+   */
+  markReady(deviceId: string, now: number): Promise<boolean>;
   remove(deviceId: string): Promise<boolean>;
 }
 
@@ -67,6 +75,7 @@ export class InMemoryEnvironmentStore implements EnvironmentStore {
       provider: input.provider,
       externalId: input.externalId,
       wakeAt: existing?.wakeAt ?? null,
+      readyAt: existing?.readyAt ?? null,
       createdAt: existing?.createdAt ?? this.now(),
     };
     this.byDevice.set(input.deviceId, rec);
@@ -87,6 +96,13 @@ export class InMemoryEnvironmentStore implements EnvironmentStore {
       .slice(0, limit);
   }
 
+  async markReady(deviceId: string, now: number): Promise<boolean> {
+    const rec = this.byDevice.get(deviceId);
+    if (!rec || rec.readyAt !== null) return false;
+    rec.readyAt = now;
+    return true;
+  }
+
   async remove(deviceId: string): Promise<boolean> {
     return this.byDevice.delete(deviceId);
   }
@@ -98,10 +114,11 @@ interface EnvironmentRow {
   provider: string;
   external_id: string;
   wake_at: string | null;
+  ready_at: string | null;
   created_at: string;
 }
 
-const COLS = "device_id, user_id, provider, external_id, wake_at, created_at";
+const COLS = "device_id, user_id, provider, external_id, wake_at, ready_at, created_at";
 
 const toRecord = (r: EnvironmentRow): EnvironmentRecord => ({
   deviceId: r.device_id,
@@ -113,6 +130,7 @@ const toRecord = (r: EnvironmentRow): EnvironmentRecord => ({
   provider: "sprite",
   externalId: r.external_id,
   wakeAt: r.wake_at ? Date.parse(r.wake_at) : null,
+  readyAt: r.ready_at ? Date.parse(r.ready_at) : null,
   createdAt: Date.parse(r.created_at),
 });
 
@@ -174,6 +192,19 @@ export class SupabaseEnvironmentStore implements EnvironmentStore {
       .limit(limit);
     if (error || !data) return [];
     return (data as unknown as EnvironmentRow[]).map(toRecord);
+  }
+
+  async markReady(deviceId: string, now: number): Promise<boolean> {
+    // `is null` guards the write as well as saving one: a machine that links
+    // fifty times a day must not rewrite this row fifty times, and the first
+    // link is the only one that means anything.
+    const { data, error } = await this.db
+      .from("environments")
+      .update({ ready_at: new Date(now).toISOString(), updated_at: new Date().toISOString() })
+      .eq("device_id", deviceId)
+      .is("ready_at", null)
+      .select("device_id");
+    return !error && !!data && data.length > 0;
   }
 
   async remove(deviceId: string): Promise<boolean> {

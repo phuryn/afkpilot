@@ -725,6 +725,10 @@ body.has-rail #reconnecting-indicator { padding-inline: max(10px, calc((100% - 8
 window.grokRemoteClient = true;
 (function () {
   var device = new URLSearchParams(location.search).get("device") || "";
+  // Set by the picker for a cloud environment. Only ever changes wording: there
+  // is no machine to walk up to and no VS Code to open, so the advice that is
+  // right for a laptop is nonsense here.
+  var isCloudDevice = new URLSearchParams(location.search).get("cloud") === "1";
   var ws, queue = [], saved = {};
   var pendingRepoOpen = null;
   var pendingRepoOpenAt = 0;
@@ -3107,11 +3111,15 @@ window.grokRemoteClient = true;
     if (stoppedCapture) return;
     flushPendingAuthoredRecovery();
     var held = mournableQueueCount();
+    var reconnects = isCloudDevice ? "your cloud environment is back" : "VS Code reconnects";
     var queuedNote = !held ? "" : held === 1
-      ? " Your unsent message is saved and will be sent when VS Code reconnects."
-      : " Your unsent messages are saved and will be sent when VS Code reconnects.";
+      ? " Your unsent message is saved and will be sent when " + reconnects + "."
+      : " Your unsent messages are saved and will be sent when " + reconnects + ".";
+    var offlineText = isCloudDevice
+      ? "Your cloud environment isn't responding. It should come back on its own — this page will connect when it does."
+      : "Device offline — open VS Code on that machine and this page will connect by itself.";
     window.dispatchEvent(new MessageEvent("message", {
-      data: { type: "error", text: "Device offline — open VS Code on that machine and this page will connect by itself." + queuedNote },
+      data: { type: "error", text: offlineText + queuedNote },
     }));
   }
 

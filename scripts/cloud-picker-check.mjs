@@ -101,6 +101,22 @@ const DEVICES = {
       environment: null,
     },
     {
+      // BEING BUILT. The pool makes this rare rather than impossible: when the
+      // shelf is empty somebody waits for a real build, measured at 25 minutes,
+      // and for all of it this row used to say "offline" — which reads as
+      // broken to the one person who had just asked for the machine to be made.
+      deviceId: "d-cloud-building",
+      name: "Cloud",
+      createdAt: Date.now() - 254_000,
+      online: false,
+      clients: 0,
+      clientLabel: "by afkpilot.com",
+      platform: "cloud",
+      osLabel: null,
+      availability: "building",
+      environment: { provider: "sprite", state: "building", buildingForMs: 254_000 },
+    },
+    {
       deviceId: "d-cloud-waking",
       name: "Cloud — build box",
       createdAt: Date.now() - 86_400_000,
@@ -273,7 +289,26 @@ try {
     await page.keyboard.press("Escape").catch(() => {});
     await page.mouse.click(5, 5);
 
-    // 8. An ordinary offline laptop is unchanged — still offline, still told to
+    // 8. A machine being BUILT says so, with a clock, and offers nothing to
+    //    press. This is the twenty-five-minute case: the row used to say
+    //    "offline", which is the word for a laptop switched off at the wall and
+    //    is exactly wrong for a machine that is being made right now.
+    const building = row("d-cloud-building");
+    const buildingText = (await building.innerText()).trim();
+    assert.ok(/creating/i.test(buildingText),
+      `a building row says it is being created: ${JSON.stringify(buildingText)}`);
+    assert.ok(/4:14/.test(buildingText),
+      `a building row shows elapsed time as a clock: ${JSON.stringify(buildingText)}`);
+    assert.ok(!/offline/i.test(buildingText),
+      `a building row must never say offline: ${JSON.stringify(buildingText)}`);
+    // No button at all, disabled or otherwise. A disabled "Start" invites
+    // somebody to keep pressing it and conclude the product is broken.
+    assert.equal(await building.locator(".device-start").count(), 0,
+      "a building row offers nothing to press");
+    assert.equal(await building.locator(".device-remove:not(.device-menu-btn)").count(), 0,
+      "a building row is still a cloud row: no ✕");
+
+    // 8b. An ordinary offline laptop is unchanged — still offline, still told to
     //    open VS Code. "We added a feature and nothing else moved."
     const laptop = row("d-laptop");
     assert.ok(/offline/i.test(await laptop.innerText()));
