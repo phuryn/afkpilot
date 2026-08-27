@@ -80,8 +80,14 @@ const post = (path: string, body: unknown, token?: string) =>
   });
 
 const devicesJson = async () => (await (await fetch(`${base}/api/devices`)).json()) as {
-  devices: { deviceId: string; availability: string; environment: unknown; online: boolean }[];
+  devices: { deviceId: string | null; availability: string; environment: unknown; online: boolean }[];
 };
+
+/** The row for a real device. Indexing by 0 stopped working when every account
+ *  gained a synthetic cloud row at the top — and a test that asserts on
+ *  whichever row happens to be first is asserting on the wrong thing anyway. */
+const rowFor = async (deviceId: string) =>
+  (await devicesJson()).devices.find((d) => d.deviceId === deviceId)!;
 
 beforeEach(async () => { await boot(); });
 afterEach(async () => { await handle?.close(); handle = undefined; });
@@ -92,10 +98,10 @@ async function makeDevice(name = "Cloud — test") {
 
 describe("what the picker is told", () => {
   it("reports an offline ordinary machine as offline", async () => {
-    await makeDevice("Laptop");
-    const { devices } = await devicesJson();
-    expect(devices[0].availability).toBe("offline");
-    expect(devices[0].environment).toBeNull();
+    const d = await makeDevice("Laptop");
+    const row = await rowFor(d.deviceId);
+    expect(row.availability).toBe("offline");
+    expect(row.environment).toBeNull();
   });
 
   it("reports an offline ENVIRONMENT as ready, because it can be woken", async () => {
@@ -103,10 +109,10 @@ describe("what the picker is told", () => {
     await h.environments.create({
       deviceId: d.deviceId, userId: MOCK_USER_ID, provider: "sprite", externalId: "s1",
     });
-    const { devices } = await devicesJson();
-    expect(devices[0].online).toBe(false);
-    expect(devices[0].availability).toBe("ready");
-    expect(devices[0].environment).toEqual({ provider: "sprite" });
+    const row = await rowFor(d.deviceId);
+    expect(row.online).toBe(false);
+    expect(row.availability).toBe("ready");
+    expect(row.environment).toEqual({ provider: "sprite" });
   });
 
   it("never puts the provider's identity on the wire", async () => {
@@ -126,7 +132,7 @@ describe("what the picker is told", () => {
     await h.environments.create({
       deviceId: d.deviceId, userId: MOCK_USER_ID, provider: "sprite", externalId: "s1",
     });
-    expect((await devicesJson()).devices[0].online).toBe(false);
+    expect((await rowFor(d.deviceId)).online).toBe(false);
   });
 });
 
@@ -185,9 +191,9 @@ describe("a relay with no environments configured", () => {
     await handle?.close();
     await boot({ withEnvironments: false });
     const d = await makeDevice("Laptop");
-    const { devices } = await devicesJson();
-    expect(devices[0].availability).toBe("offline");
-    expect(devices[0].environment).toBeNull();
+    const row = await rowFor(d.deviceId);
+    expect(row.availability).toBe("offline");
+    expect(row.environment).toBeNull();
     const res = await post("/api/environment/wake-at", { wakeAt: Date.now() + 60_000 }, d.token);
     expect(res.status).toBe(404);
   });

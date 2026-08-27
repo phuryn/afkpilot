@@ -31,7 +31,14 @@ import { hasDeviceClientInfo, parseDeviceClientFields } from "./device-client.js
 import { countMachines, isRecognizedInstallId, MinuteRateLimiter, type FreeTier, type MessageRate } from "./limits.js";
 import { usageWindow, resetsInText } from "./usage.js";
 import { Hub } from "./hub.js";
-import { deviceAvailability, parseWakeAt, shouldWakeOnAttach } from "./environments.js";
+import {
+  cloudRowState,
+  deviceAvailability,
+  mayUseCloud,
+  parseWakeAt,
+  shouldWakeOnAttach,
+} from "./environments.js";
+import type { ProvisionCoordinator } from "./environment-provisioner.js";
 import { PRESENCE_TYPE, PresenceTracker } from "./presence.js";
 import type { EnvironmentStore } from "./environment-store.js";
 import type { WakeCoordinator } from "./environment-waker.js";
@@ -87,6 +94,13 @@ export interface RelayServerOptions {
   waker?: WakeCoordinator;
   /** Who is watching. Injectable so tests can drive its clock. */
   presence?: PresenceTracker;
+  /** Creates and destroys environments. Required alongside `environments` for
+   *  lazy provisioning; without it, environments must be created by hand. */
+  provisioner?: ProvisionCoordinator;
+  /** Clerk feature gating CLOUD specifically — separate from `requiredFeature`,
+   *  which gates driving your own machine. Unset = open to everyone, which is
+   *  how a launch window needs no timer. */
+  cloudFeature?: string;
   log: (line: string) => void;
   /**
    * GitHub HTTP (releases API + channel-file bytes). Tests inject a stub so
@@ -340,7 +354,7 @@ export function injectWebAppVersion(html: string, version: string): string {
 
 export function createRelayServer(opts: RelayServerOptions): RelayServer {
   const { store, devices, sessions, requiredFeature, freeTier, messageRate, hub, log } = opts;
-  const { environments, waker } = opts;
+  const { environments, waker, provisioner, cloudFeature } = opts;
   // Who is actually watching. Client-asserted, because the relay cannot tell a
   // person reading from a tab forgotten last night — both are an open socket.
   const presence = opts.presence ?? new PresenceTracker();
@@ -630,7 +644,20 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         if (!entitled(claims, requiredFeature)) {
           if (!freeTier) return sendJson(res, 403, { ok: false, error: "entitlement" });
           const ownedDevices = await devices.listByUser(claims.userId);
-          const owned = countMachines([...ownedDevices, { installId: info.installId }]);
+          // A cloud environment does not count against the device limit. It is
+          // a machine WE run, offered to every account including free ones, and
+          // charging it against the one laptop a free user is allowed would
+          // mean the offer takes something away.
+          //
+          // Excluded by the ENVIRONMENTS table, not by `platform === "cloud"`.
+          // The platform field is self-reported by the host at link time, so a
+          // client that simply claimed to be a cloud environment could mint
+          // unlimited free devices. Only the relay writes environments.
+          const cloudDeviceIds = environments
+            ? new Set((await environments.listByUser(claims.userId).catch(() => [])).map((e) => e.deviceId))
+            : new Set<string>();
+          const countable = ownedDevices.filter((d) => !cloudDeviceIds.has(d.deviceId));
+          const owned = countMachines([...countable, { installId: info.installId }]);
           if (owned > freeTier.devices) {
             return sendJson(res, 403, { ok: false, error: "entitlement", reason: "device-limit", limit: freeTier.devices });
           }
@@ -647,6 +674,78 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       if (req.method === "POST" && p === "/api/link/poll") {
         const body = await readJsonBody(req);
         return sendJson(res, 200, store.poll(typeof body?.code === "string" ? body.code : ""));
+      }
+      if (req.method === "POST" && p === "/api/cloud/open") {
+        // Open my cloud environment, creating it if this is the first time.
+        //
+        // LAZY: an account that never taps the row costs nothing at all. Most
+        // never will, and provisioning at signup would buy a machine for every
+        // one of them.
+        //
+        // Returns the deviceId to open, so the browser can navigate straight to
+        // /chat. Attaching there is what WAKES it; this only makes sure there is
+        // something to attach to.
+        if (!environments || !provisioner) return sendJson(res, 404, { ok: false, error: "not-supported" });
+        const claims = await sessions.verify(sessionTokenFromRequest(authHeaders(req)));
+        if (!claims) return sendJson(res, 401, { ok: false, error: "auth" });
+        if (!mayUseCloud(claims.features, cloudFeature)) {
+          // Named separately from every other refusal because it is the one the
+          // person can act on, and the page turns it into an upgrade rather
+          // than an error.
+          return sendJson(res, 403, { ok: false, error: "upgrade" });
+        }
+        const existing = (await environments.listByUser(claims.userId).catch(() => []))[0];
+        if (existing) return sendJson(res, 200, { ok: true, deviceId: existing.deviceId });
+
+        const made = await provisioner.create(claims.userId);
+        if (!made.ok) {
+          return sendJson(res, made.kind === "quota" ? 429 : 503, { ok: false, error: made.kind });
+        }
+        // The device row and its token come from the SAME registry every other
+        // machine uses — a cloud environment is a linked device that happens to
+        // be ours, and giving it a private path would mean two things to keep
+        // in step.
+        const issued = await devices.issue("Cloud", claims.userId, undefined, {
+          clientLabel: "by afkpilot.com",
+          platform: "cloud",
+        });
+        await environments.create({
+          deviceId: issued.deviceId,
+          userId: claims.userId,
+          provider: "sprite",
+          externalId: made.externalId,
+        });
+        log(`[relay] provisioned cloud environment for ${claims.userId}`);
+        // The token goes to the MACHINE, never to the browser: it is handed to
+        // the sprite as a secret when it boots. The page gets an id it may open.
+        return sendJson(res, 200, { ok: true, deviceId: issued.deviceId, provisioned: true });
+      }
+      if (req.method === "POST" && p === "/api/cloud/reset") {
+        // Reset my Cloud — destroy everything and start again.
+        //
+        // There is deliberately no "remove" for a cloud environment. Removing it
+        // would leave an account with a product it cannot get back without
+        // support, and the row would vanish from a picker that promises everyone
+        // has one. Reset is the honest operation: same account, same row, new
+        // machine, nothing kept.
+        if (!environments || !provisioner) return sendJson(res, 404, { ok: false, error: "not-supported" });
+        const claims = await sessions.verify(sessionTokenFromRequest(authHeaders(req)));
+        if (!claims) return sendJson(res, 401, { ok: false, error: "auth" });
+        const existing = (await environments.listByUser(claims.userId).catch(() => []))[0];
+        // Nothing to reset is a success, not an error: the end state the caller
+        // asked for is the end state they have.
+        if (!existing) return sendJson(res, 200, { ok: true, reset: false });
+
+        const gone = await provisioner.destroy(existing.externalId);
+        if (!gone) return sendJson(res, 503, { ok: false, error: "unavailable" });
+        // Bookkeeping AFTER the machine is actually gone. The other order leaves
+        // a sprite nobody has a record of, which is a bill with no owner.
+        await environments.remove(existing.deviceId).catch(() => false);
+        await devices.revoke(existing.deviceId).catch(() => false);
+        log(`[relay] reset cloud environment for ${claims.userId}`);
+        // Not re-provisioned here. The next open does it, which is the same path
+        // as a first-time user and therefore the one that is actually tested.
+        return sendJson(res, 200, { ok: true, reset: true });
       }
       if (req.method === "POST" && p === "/api/environment/wake-at") {
         // The host tells the relay when to wake it next. ONE timestamp.
@@ -686,6 +785,35 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         // One query for the caller's environments, not one per device.
         const envs = environments ? await environments.listByUser(claims.userId) : [];
         const envByDevice = new Map(envs.map((e) => [e.deviceId, e]));
+        // EVERY account gets a cloud row, entitled or not, provisioned or not.
+        // A machine that only appears once you have paid for it is a product
+        // nobody discovers; one that appears with an upgrade on it is an offer.
+        //
+        // `deviceId` is null until a sprite exists, which is what makes the row
+        // synthetic: there is nothing in the registry to point at yet, and
+        // opening it is what creates one.
+        const cloudRow = environments
+          ? (() => {
+            const environment = envs[0] ?? null;
+            const state = cloudRowState({
+              entitled: mayUseCloud(claims.features, cloudFeature),
+              environment,
+            });
+            if (state === "ready" && environment) return null; // it is a real device row below
+            return {
+              deviceId: null,
+              name: "Cloud",
+              createdAt: environment?.createdAt ?? null,
+              online: false,
+              clients: 0,
+              clientLabel: "by afkpilot.com",
+              platform: "cloud",
+              osLabel: null,
+              availability: state === "upgrade" ? "upgrade" : "ready",
+              environment: { provider: "sprite", state },
+            };
+          })()
+          : null;
         const list = owned.map((d) => {
           const environment = envByDevice.get(d.deviceId) ?? null;
           const online = hub.uplinkConnected(d.deviceId);
@@ -714,7 +842,9 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
             environment: environment ? { provider: environment.provider } : null,
           };
         });
-        return sendJson(res, 200, { devices: list });
+        // The cloud row leads: it is the one machine a person did not have to
+        // set up, so it is the one they are most likely to want.
+        return sendJson(res, 200, { devices: cloudRow ? [cloudRow, ...list] : list });
       }
       if (req.method === "DELETE" && p.startsWith("/api/devices/")) {
         // Remove a device: owner-checked revoke; a live uplink is closed with

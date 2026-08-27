@@ -18,6 +18,7 @@ import {
   type EnvironmentStore,
 } from "./environment-store.js";
 import { WakeCoordinator, spriteWaker } from "./environment-waker.js";
+import { ProvisionCoordinator, spritesProvisioner } from "./environment-provisioner.js";
 import { startWakeScheduler } from "./wake-scheduler.js";
 
 const log = (line: string) => console.log(line);
@@ -119,8 +120,10 @@ const hub = new Hub(log);
 // in-memory otherwise, so the whole flow can be developed with no account.
 let environments: EnvironmentStore | undefined;
 let waker: WakeCoordinator | undefined;
+let provisioner: ProvisionCoordinator | undefined;
 let stopWakeScheduler: (() => void) | undefined;
 const spritesToken = process.env.SPRITES_TOKEN;
+const cloudFeature = process.env.RELAY_CLOUD_FEATURE || undefined;
 if (spritesToken) {
   environments = supabaseUrl && supabaseSecretKey
     ? new SupabaseEnvironmentStore(createDb(supabaseUrl, supabaseSecretKey))
@@ -136,6 +139,11 @@ if (spritesToken) {
     }),
     log,
   });
+  provisioner = new ProvisionCoordinator(spritesProvisioner({
+    token: spritesToken,
+    apiBase: process.env.SPRITES_API_BASE || undefined,
+    log,
+  }));
   // Scheduled wakes: the sweep that makes routines fire ON TIME on a machine
   // that sleeps. Without it routines still run — catch-up is arithmetic — but
   // only whenever somebody next opens the environment.
@@ -146,6 +154,12 @@ if (spritesToken) {
     log,
   });
   log(`[relay] cloud environments: enabled (${supabaseUrl ? "Supabase" : "in-memory"})`);
+  // Unset = open to everyone, the same convention RELAY_REQUIRED_FEATURE uses.
+  // A launch window therefore needs no timer and no code: the feature is simply
+  // not configured yet, and setting it later closes the gate.
+  log(cloudFeature
+    ? `[relay] cloud access: requires feature "${cloudFeature}"`
+    : "[relay] cloud access: OPEN to every account (set RELAY_CLOUD_FEATURE to gate it)");
   // Referenced so the stop handle is not dead code to a linter, and so a future
   // graceful-shutdown path has an obvious place to call it.
   process.once("SIGTERM", () => stopWakeScheduler?.());
@@ -153,4 +167,4 @@ if (spritesToken) {
   log("[relay] cloud environments: disabled (set SPRITES_TOKEN to serve hosted machines)");
 }
 
-createRelayServer({ host, port, webRoot, store, devices, sessions, requiredFeature, freeTier, messageRate, clerkPublishableKey, hub, environments, waker, log });
+createRelayServer({ host, port, webRoot, store, devices, sessions, requiredFeature, freeTier, messageRate, clerkPublishableKey, hub, environments, waker, provisioner, cloudFeature, log });

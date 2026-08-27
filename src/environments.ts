@@ -220,3 +220,58 @@ export function wakeFailureText(kind: WakeFailure): string {
       return "Couldn't start this environment. Try again.";
   }
 }
+
+/* --------------------------------------------------------------- access */
+
+/**
+ * May this account use a cloud environment?
+ *
+ * Separate from the relay's main entitlement on purpose. `remote` gates driving
+ * your OWN machine from a phone; this gates a machine we run and pay for. They
+ * are different products with different costs and they will not always have the
+ * same answer.
+ *
+ * An UNSET feature leaves the gate open, the same convention
+ * `RELAY_REQUIRED_FEATURE` already uses — which is how "everyone gets this for
+ * the first 48 hours" needs no timer, no flag flip and no code: the feature is
+ * simply not configured yet.
+ */
+export function mayUseCloud(
+  features: readonly string[],
+  requiredFeature: string | undefined,
+): boolean {
+  if (!requiredFeature) return true;
+  return features.includes("*") || features.includes(requiredFeature);
+}
+
+/**
+ * What a person sees in the picker for a cloud environment they do not have.
+ *
+ * EVERY account gets a row, entitled or not. A cloud environment that only
+ * appears once you have paid for it is a product nobody discovers; one that
+ * appears with an upgrade on it is an offer. The row is real, the machine is
+ * not — until somebody opens it.
+ */
+export type CloudRowState =
+  /** Provisioned and usable. */
+  | "ready"
+  /** No sprite yet. Opening it makes one. */
+  | "not-provisioned"
+  /** Visible, and locked behind the plan. */
+  | "upgrade";
+
+export function cloudRowState(input: {
+  entitled: boolean;
+  environment?: EnvironmentRecord | null;
+}): CloudRowState {
+  // Entitlement is checked FIRST, and it is checked even when a sprite already
+  // exists. Somebody who provisioned while the gate was open and then let their
+  // plan lapse keeps the row and the data — and does not get the machine woken.
+  // Cold storage is pennies; compute is not.
+  if (!input.entitled) return "upgrade";
+  return input.environment ? "ready" : "not-provisioned";
+}
+
+/** The one sprite an account may have. Singular by design: no naming, no
+ *  listing, no picking, and nothing to explain. */
+export const CLOUD_ENVIRONMENTS_PER_USER = 1;
