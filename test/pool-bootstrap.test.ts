@@ -87,6 +87,26 @@ describe("finding the published build", () => {
     expect(script).toContain("no published build; building from source");
   });
 
+  it("survives a slow or stalled download instead of hanging until the sweep", () => {
+    // Measured 2026-08-27: the filler started ten machines at once, all asking
+    // GitHub for the same 110 MB file in the same second. Five stuck
+    // mid-download and were marked failed an hour later — neither working nor
+    // failing, just occupying a slot.
+    expect(script).toContain("--retry 4");
+    expect(script).toContain("--continue-at -");        // resume, not restart
+    expect(script).toContain("--speed-limit 51200");    // stalled => retry
+    expect(script).toContain("--max-time 900");         // a ceiling, always
+    // And spread the herd, so they are not all asking at once to begin with.
+    expect(script).toMatch(/sleep \$\(\( \(RANDOM % 25\) \+ 1 \)\)/);
+  });
+
+  it("discards a download that did not unpack, rather than reporting ready", () => {
+    // A truncated file extracts to nothing. Reporting ready then hands somebody
+    // a machine that installed cleanly and cannot start.
+    expect(script).toContain("did not unpack");
+    expect(script).toContain('[ -x "$APP/squashfs-root/AppRun" ]');
+  });
+
   it("keeps the fallback able to produce a working machine", () => {
     // npm ci can report success and still leave a broken Electron; the first
     // sign is a stack trace at startup, 25 minutes in.

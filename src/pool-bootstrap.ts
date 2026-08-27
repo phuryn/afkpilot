@@ -129,15 +129,45 @@ if [ ! -f "$STAMP" ]; then
     | head -1 | sed 's/.*"\\(https[^"]*\\)"/\\1/')
 
   if [ -n "\${ASSET:-}" ]; then
-    step "install: downloading $ASSET"
     rm -rf "$APP"; mkdir -p "$APP"
-    if curl -fsSL "$ASSET" -o "$APP/afkpilot.AppImage"; then
+
+    # Jitter before a 110 MB download.
+    #
+    # The filler starts a whole shelf at once, so without this every machine
+    # asks GitHub for the same large file in the same second. Measured
+    # 2026-08-27: ten simultaneous builds, five stuck mid-download and marked
+    # failed an hour later. A few seconds of spread costs nothing on a shelf
+    # being filled ahead of demand.
+    sleep $(( (RANDOM % 25) + 1 ))
+
+    step "install: downloading $ASSET"
+    # --retry with resume, and a CEILING. A stalled download used to hang until
+    # the stale sweep gave up 60 minutes later; --speed-limit turns "stopped
+    # making progress" into a retry rather than a machine that is neither
+    # working nor failed.
+    curl -fL "$ASSET" -o "$APP/afkpilot.AppImage" \\
+      --retry 4 --retry-delay 5 --retry-all-errors --continue-at - \\
+      --speed-limit 51200 --speed-time 60 --max-time 900 \\
+      --silent --show-error 2>>"$LOG"
+
+    if [ -s "$APP/afkpilot.AppImage" ]; then
       chmod +x "$APP/afkpilot.AppImage"
       # Extracted rather than run directly: --appimage-extract needs no FUSE at
       # runtime, so a kernel without it does not turn into a machine that
       # installed cleanly and cannot start.
-      (cd "$APP" && ./afkpilot.AppImage --appimage-extract >/dev/null 2>&1) \\
-        && echo appimage > "$APP/.afkpilot-kind"
+      if (cd "$APP" && ./afkpilot.AppImage --appimage-extract >/dev/null 2>&1) \\
+         && [ -x "$APP/squashfs-root/AppRun" ]; then
+        echo appimage > "$APP/.afkpilot-kind"
+        step "install: unpacked"
+      else
+        # A truncated or corrupt download extracts to nothing. Say so, and let
+        # the source build below produce a working machine rather than leaving
+        # a half-installed one that reports ready and cannot start.
+        step "install: AppImage did not unpack; discarding it"
+        rm -rf "$APP/squashfs-root" "$APP/afkpilot.AppImage"
+      fi
+    else
+      step "install: download produced nothing"
     fi
   fi
 
