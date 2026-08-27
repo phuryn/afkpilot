@@ -11,9 +11,11 @@ OS wake lock for precisely that reason, and
 says in its own comments that a standing wake lock drains laptops. A hosted
 environment is the version where closing the lid is fine.
 
-> **Status: the relay is ready to serve these; provisioning is not built yet.**
-> Everything below describes machinery that exists and is tested. What no user
-> can do yet is *create* one — that arrives with the plan it belongs to.
+> **Status: built and tested; not switched on.** Provisioning, the pool, the
+> claim and the token handover all exist and are covered by the suite. The pool
+> stays off until `CLOUD_POOL_SIZE` and `RELAY_PUBLIC_URL` are set, and cloud
+> access is open to every account until `RELAY_CLOUD_FEATURE` names the plan it
+> belongs to.
 
 ## What it is, from the relay's side
 
@@ -122,12 +124,81 @@ will, exactly as it would on your laptop. Guarding against that would be
 paternalism with an obvious bypass. What matters instead is that it is
 recoverable and that the damage is confined to your own machine.
 
+## Where the machines come from
+
+Creating one takes a second. Making one *useful* took **25 minutes**, measured
+end to end on 2026-08-27: `apt` 58s (a stock sprite has no display server and
+none of Chromium's libraries), clone 77s, `npm ci` 20 minutes — I/O-bound on the
+VM's writable overlay, which is pathological for `node_modules` — and compile 4.6
+minutes.
+
+That is not a wait to shrink. It is a wait to **move**. The relay keeps a shelf
+of `CLOUD_POOL_SIZE` machines built ahead of demand; the first open takes one off
+the shelf and only has to hand it a device token. Somebody waits for a real build
+only when the shelf is empty — which is the on-demand path every open used before
+a pool existed, and therefore the one that stays tested.
+
+Parked machines are close to free. Cold storage is $0.02/GB-month against ~2.3 GB
+of writable overlay per built machine, so 50 spares is roughly $2.30/month. The
+builds would have happened anyway; the pool only changes who is watching.
+
+**Two people must never be handed the same machine.** Claiming is a SQL function
+using `FOR UPDATE SKIP LOCKED`, so selecting a row and marking it taken happen in
+one statement. Reading `ready` in one call and writing `claimed` in another is a
+race with a comfortable window, and losing it gives somebody an environment with
+another person's work on it.
+
+### Everything else follows from one measured fact
+
+`POST /v1/sprites/{name}/exec` over HTTP is **fire and forget**. A command that
+wrote to stdout and exited 7 came back as two bytes; real stdio needs the
+`control-ws` channel. So:
+
+- The relay cannot watch a build. A machine reports its own readiness, with a
+  per-row secret — without one, guessing a name would put a half-built box in
+  front of the next person who opens a cloud environment.
+- "Still building" and "died twenty minutes ago" look identical from outside,
+  which is the only reason `failStale` exists. A dead build that keeps its slot
+  is how a pool empties while the numbers say it is full.
+- Nothing can be piped in, so any value has to travel in a command line — and a
+  device token in a command line is a durable credential in the provider's
+  control-plane record. Instead the relay mints a **single-use, two-minute code**
+  and the machine redeems it over TLS for its env file. The code is in argv and
+  that is fine: it is worthless the moment it is used.
+
+### Being built is not being offline
+
+Between provisioning and the first uplink there is nothing on the other end, and
+for a cold build that is up to 25 minutes. `environments.ready_at` records when a
+machine first linked; NULL means it never has. The picker turns that into a
+running clock — *creating 4:14* — with no button, because a disabled one invites
+somebody to keep pressing it and conclude the product is broken.
+
+Elapsed, never remaining: a pool claim is seconds and a cold build is minutes, so
+any estimate spanning both is wrong in one direction. A number that counts up is
+true either way.
+
+A machine that has linked once keeps its timestamp and is *offline* in the
+ordinary way when it sleeps. That distinction is the whole column.
+
 ## For maintainers
 
 - [`src/environments.ts`](../src/environments.ts) — the decisions, pure
 - [`src/environment-store.ts`](../src/environment-store.ts) — persistence seam
 - [`src/environment-waker.ts`](../src/environment-waker.ts) — waking, de-duplicated
 - [`src/wake-scheduler.ts`](../src/wake-scheduler.ts) — the scheduled-wake sweep
+- [`src/environment-pool.ts`](../src/environment-pool.ts) — shelf arithmetic, pure
+- [`src/environment-pool-store.ts`](../src/environment-pool-store.ts) — the shelf
+- [`src/pool-filler.ts`](../src/pool-filler.ts) — the sweep that keeps it stocked
+- [`src/pool-bootstrap.ts`](../src/pool-bootstrap.ts) — the script a machine runs
+  to install itself; served by the relay, secret-free
+- [`src/environment-handover.ts`](../src/environment-handover.ts) — single-use
+  codes, because nothing can be piped into a sprite
 - `supabase/migrations/20260827000000_environments.sql` — one table, one nullable
   timestamp
-- `npm run e2e:cloud` — the picker, rendered, at two widths
+- `supabase/migrations/20260827130000_environment_ready_at.sql` — being built vs
+  being asleep
+- `supabase/migrations/20260827140000_environment_pool.sql` — the shelf, and the
+  atomic claim
+- `npm run e2e:cloud` — the picker, rendered, at two widths, including a machine
+  mid-build
