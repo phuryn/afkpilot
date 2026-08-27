@@ -12,6 +12,13 @@ import { InMemoryUsageStore, type UsageStore } from "./usage.js";
 import { SupabaseUsageStore } from "./usage-supabase.js";
 import { Hub } from "./hub.js";
 import { createRelayServer } from "./server.js";
+import {
+  InMemoryEnvironmentStore,
+  SupabaseEnvironmentStore,
+  type EnvironmentStore,
+} from "./environment-store.js";
+import { WakeCoordinator, spriteWaker } from "./environment-waker.js";
+import { startWakeScheduler } from "./wake-scheduler.js";
 
 const log = (line: string) => console.log(line);
 
@@ -101,4 +108,50 @@ if (perMinute > 0) {
 const store = new LinkStore({ now: Date.now, randomCode: () => makeLinkCode((max) => randomInt(max)) });
 const hub = new Hub(log);
 
-createRelayServer({ host, port, webRoot, store, devices, sessions, requiredFeature, freeTier, messageRate, clerkPublishableKey, hub, log });
+// Cloud environments — machines we run, as opposed to machines people own.
+//
+// OFF unless SPRITES_TOKEN is set, and off is a supported configuration rather
+// than a degraded one: every device is then an ordinary laptop, /api/devices
+// answers exactly as it always did, and the wake endpoint 404s. That is the
+// keyless dev default and it is also what production looked like yesterday.
+//
+// The store follows the same seam as devices: Supabase when there is a database,
+// in-memory otherwise, so the whole flow can be developed with no account.
+let environments: EnvironmentStore | undefined;
+let waker: WakeCoordinator | undefined;
+let stopWakeScheduler: (() => void) | undefined;
+const spritesToken = process.env.SPRITES_TOKEN;
+if (spritesToken) {
+  environments = supabaseUrl && supabaseSecretKey
+    ? new SupabaseEnvironmentStore(createDb(supabaseUrl, supabaseSecretKey))
+    : new InMemoryEnvironmentStore();
+  waker = new WakeCoordinator({
+    // A sprite's public hostname carries a per-sprite suffix, so it cannot be
+    // derived from the name. SPRITES_URL_TEMPLATE holds the shape with `{name}`
+    // where the sprite goes; without it the default guess is right for some
+    // orgs and wrong for others, which is why it is configurable rather than
+    // assumed.
+    wake: spriteWaker({
+      token: spritesToken,
+      urlFor: (id) => (process.env.SPRITES_URL_TEMPLATE || "https://{name}.sprites.app/").replace("{name}", id),
+    }),
+    log,
+  });
+  // Scheduled wakes: the sweep that makes routines fire ON TIME on a machine
+  // that sleeps. Without it routines still run — catch-up is arithmetic — but
+  // only whenever somebody next opens the environment.
+  stopWakeScheduler = startWakeScheduler({
+    store: environments,
+    coordinator: waker,
+    isOnline: (deviceId) => hub.uplinkConnected(deviceId),
+    log,
+  });
+  log(`[relay] cloud environments: enabled (${supabaseUrl ? "Supabase" : "in-memory"})`);
+  // Referenced so the stop handle is not dead code to a linter, and so a future
+  // graceful-shutdown path has an obvious place to call it.
+  process.once("SIGTERM", () => stopWakeScheduler?.());
+} else {
+  log("[relay] cloud environments: disabled (set SPRITES_TOKEN to serve hosted machines)");
+}
+
+createRelayServer({ host, port, webRoot, store, devices, sessions, requiredFeature, freeTier, messageRate, clerkPublishableKey, hub, environments, waker, log });
