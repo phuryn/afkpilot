@@ -551,6 +551,28 @@
     transition: color 0.15s ease, background 0.15s ease;
   }
   .device-remove:hover { color: var(--red); background: var(--surface-2); }
+  /* The row clips its children so their backgrounds respect its rounded
+     corners. That also clipped the ⋯ popover into invisibility — present,
+     sized, and painted nowhere a person could see it. Only cloud rows have
+     a popover, so only they opt out. */
+  .device-row[data-cloud="true"] { overflow: visible; }
+  .device-menu { position: relative; }
+  .device-menu-btn:hover { color: var(--fg); }
+  .device-menu-pop {
+    position: absolute; right: 0; top: 100%; z-index: 20; min-width: 12rem;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 0.5rem; padding: 0.25rem; box-shadow: 0 8px 24px rgba(0,0,0,.12);
+  }
+  .device-menu-item {
+    display: block; width: 100%; text-align: left; background: none; border: 0;
+    padding: 0.5rem 0.65rem; border-radius: 0.375rem; cursor: pointer;
+    font: inherit; color: var(--fg);
+  }
+  .device-menu-item:hover { background: var(--surface-2); }
+  .device-menu-item.is-danger { color: var(--red); }
+  .picker-error {
+    margin: 0.75rem 0 0; color: var(--red); font-size: var(--step--1);
+  }
 
   .dialog-overlay {
     position: fixed;
@@ -1384,6 +1406,104 @@
     dialogCancel.focus();
   }
 
+  /** An authenticated POST that never throws. A picker action that explodes on
+   *  a flaky network is worse than one that says it did not work. */
+  async function apiPost(path, body) {
+    try {
+      const headers = await authHeaders();
+      headers["content-type"] = "application/json";
+      const res = await fetch(path, { method: "POST", headers, body: JSON.stringify(body || {}) });
+      return await res.json().catch(function () { return { ok: false, error: "unavailable" }; });
+    } catch (e) {
+      return { ok: false, error: "unavailable" };
+    }
+  }
+
+  /** One line under the list. Deliberately not an alert: this is information,
+   *  and the row it belongs to is right there. */
+  function setPickerError(text) {
+    let el = document.getElementById("picker-error");
+    if (!el) {
+      el = document.createElement("p");
+      el.id = "picker-error";
+      el.className = "picker-error";
+      const list = document.getElementById("list");
+      if (list && list.parentNode) list.parentNode.insertBefore(el, list.nextSibling);
+    }
+    el.textContent = text || "";
+    el.hidden = !text;
+  }
+
+  /** The ⋯ for a cloud row. One item today; it exists as a menu because Reset
+   *  is destructive and should not sit under a bare glyph. */
+  function cloudMenu(device) {
+    const wrap = document.createElement("div");
+    wrap.className = "device-menu";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "device-remove device-menu-btn";
+    btn.setAttribute("aria-label", "Cloud options");
+    btn.setAttribute("aria-expanded", "false");
+    btn.title = "Cloud options";
+    btn.textContent = "⋯";
+
+    const menu = document.createElement("div");
+    menu.className = "device-menu-pop";
+    menu.hidden = true;
+
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "device-menu-item is-danger";
+    reset.textContent = "Reset my Cloud";
+    reset.addEventListener("click", function () {
+      menu.hidden = true;
+      btn.setAttribute("aria-expanded", "false");
+      openResetDialog(device);
+    });
+    menu.appendChild(reset);
+
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      const open = menu.hidden;
+      // One menu at a time.
+      for (const other of document.querySelectorAll(".device-menu-pop")) other.hidden = true;
+      menu.hidden = !open;
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    document.addEventListener("click", function () {
+      menu.hidden = true;
+      btn.setAttribute("aria-expanded", "false");
+    });
+
+    wrap.appendChild(btn);
+    wrap.appendChild(menu);
+    return wrap;
+  }
+
+  /**
+   * Reset asks first, and says what it takes.
+   *
+   * Naming the consequences rather than saying "are you sure": somebody who
+   * reads "this removes your projects, your agent sign-ins and everything on
+   * the machine" can decide. Somebody who reads "are you sure" can only guess.
+   */
+  function openResetDialog(device) {
+    const ok = window.confirm(
+      "Reset your cloud environment?" + String.fromCharCode(10, 10)
+      + "This permanently removes everything on it — your projects, your agent "
+      + "sign-ins, and any work that is not pushed. A new, empty environment is "
+      + "created the next time you open it." + String.fromCharCode(10, 10)
+      + "This cannot be undone.",
+    );
+    if (!ok) return;
+    setPickerError("");
+    apiPost("/api/cloud/reset").then(function (body) {
+      if (body && body.ok) { refresh(); return; }
+      setPickerError("Couldn't reset your cloud environment. Try again.");
+    });
+  }
+
   async function removeDevice(id) {
     const headers = await authHeaders();
     try { await fetch("/api/devices/" + encodeURIComponent(id), { method: "DELETE", headers }); }
@@ -1429,9 +1549,20 @@
       // Older relays send no `availability`, so it falls back to `online` and
       // this page behaves exactly as it did — field presence, never a version.
       const availability = d.availability || (d.online ? "ready" : "offline");
-      const usable = availability !== "offline";
+      // `state` is only present on a cloud row. "not-provisioned" means no
+      // machine exists yet and opening it makes one; "upgrade" means the plan
+      // does not include it — the row is still here, because everyone has one.
+      const cloudState = d.environment && d.environment.state;
+      const isCloud = !!d.environment;
+      const usable = availability !== "offline" && cloudState !== "upgrade";
       li.dataset.online = usable ? "true" : "false";
       li.dataset.availability = availability;
+      // The row identifies itself. Anything looking for a specific row used to
+      // reach through the remove button's data attribute, which broke the moment
+      // cloud rows stopped having one.
+      if (d.deviceId) li.dataset.deviceId = d.deviceId;
+      if (isCloud) li.dataset.cloud = "true";
+      if (cloudState) li.dataset.cloudState = cloudState;
 
       const body = document.createElement("div");
       body.className = "device-body";
@@ -1463,6 +1594,13 @@
       badge.className = "device-badge";
       if (d.online) {
         badge.textContent = d.clients + " viewer" + (d.clients === 1 ? "" : "s");
+      } else if (cloudState === "upgrade") {
+        badge.classList.add("is-offline");
+        badge.textContent = "upgrade";
+      } else if (cloudState === "not-provisioned") {
+        // Deliberately NOT "not created" or "inactive". Nothing has happened
+        // yet and nothing needs to: opening it is the whole setup.
+        badge.textContent = "ready";
       } else if (availability === "waking") {
         // Only ever seen if a wake is genuinely slow. Sub-second is the norm.
         badge.textContent = "starting";
@@ -1478,7 +1616,44 @@
       head.appendChild(badge);
       body.appendChild(head);
 
-      if (usable) {
+      if (cloudState === "upgrade") {
+        // An offer, not an error. The row exists precisely so this is
+        // discoverable.
+        const up = document.createElement("a");
+        up.className = "btn btn-primary device-start";
+        up.href = "#billing";
+        up.textContent = "Upgrade to use Cloud";
+        body.appendChild(up);
+      } else if (cloudState === "not-provisioned") {
+        // A button, not a link: the machine does not exist yet, so opening it
+        // has to create one first. Lazy on purpose — an account that never taps
+        // this costs nothing at all.
+        const start = document.createElement("button");
+        start.type = "button";
+        start.className = "btn btn-primary device-start";
+        start.textContent = "Start remote session";
+        start.addEventListener("click", function () {
+          if (start.disabled) return;
+          start.disabled = true;
+          start.textContent = "Starting…";
+          apiPost("/api/cloud/open").then(function (body) {
+            if (body && body.ok && body.deviceId) {
+              window.open(chatTarget(body.deviceId), "_blank", "noopener");
+              refresh();
+              return;
+            }
+            // Named refusals only. Anything else is our problem, and telling
+            // somebody the provider returned 503 gives them nothing to do.
+            start.disabled = false;
+            start.textContent = "Start remote session";
+            if (body && body.error === "upgrade") { window.location.hash = "billing"; return; }
+            setPickerError(body && body.error === "quota"
+              ? "You've reached your plan's limit for running environments."
+              : "Couldn't start your cloud environment. Try again.");
+          });
+        });
+        body.appendChild(start);
+      } else if (usable) {
         // A sleeping environment gets a live link, not a disabled one. Opening
         // it IS what wakes it: the relay starts the machine when a client
         // attaches, and the wait is well under a second.
@@ -1514,7 +1689,15 @@
       rm.addEventListener("click", openUnlinkDialog);
 
       li.appendChild(body);
-      li.appendChild(rm);
+      if (isCloud) {
+        // A cloud environment has no ✕, deliberately. Unlinking one would leave
+        // an account without a product it cannot get back on its own, and a gap
+        // in a list that promises everyone has one. What it has instead is
+        // Reset: same account, same row, new machine, nothing kept.
+        li.appendChild(cloudMenu(d));
+      } else {
+        li.appendChild(rm);
+      }
       list.appendChild(li);
     }
   }

@@ -57,6 +57,32 @@ const waitFor = async (fn, what, ms = 15000) => {
 const DEVICES = {
   devices: [
     {
+      // The state EVERY account starts in: a row, and no machine behind it.
+      deviceId: null,
+      name: "Cloud",
+      createdAt: null,
+      online: false,
+      clients: 0,
+      clientLabel: "by afkpilot.com",
+      platform: "cloud",
+      osLabel: null,
+      availability: "ready",
+      environment: { provider: "sprite", state: "not-provisioned" },
+    },
+    {
+      // What a free account sees once the launch window closes.
+      deviceId: null,
+      name: "Cloud",
+      createdAt: null,
+      online: false,
+      clients: 0,
+      clientLabel: "by afkpilot.com",
+      platform: "cloud",
+      osLabel: null,
+      availability: "upgrade",
+      environment: { provider: "sprite", state: "upgrade" },
+    },
+    {
       deviceId: "d-cloud-sleeping",
       name: "Cloud — Pawel",
       createdAt: Date.now() - 86_400_000,
@@ -134,7 +160,7 @@ try {
     await page.goto(BASE, { waitUntil: "load" });
     await page.locator(".device-row").first().waitFor({ state: "visible", timeout: 15000 });
 
-    const row = (id) => page.locator(`.device-row:has(.device-remove[data-device-id="${id}"])`);
+    const row = (id) => page.locator(`.device-row[data-device-id="${id}"]`);
 
     // 1. A SLEEPING environment must look usable. This is the whole model.
     const sleeping = row("d-cloud-sleeping");
@@ -170,7 +196,77 @@ try {
     assert.ok(brokenTitle && !/VS Code/i.test(brokenTitle),
       `an environment must not be explained as a VS Code problem: ${brokenTitle}`);
 
-    // 5. An ordinary offline laptop is unchanged — still offline, still told to
+    // 5. NOT PROVISIONED — the state every account starts in. It must read as
+    //    usable, offer a button (not a link: the machine does not exist yet and
+    //    opening it has to make one), and never mention provisioning.
+    const fresh = page.locator('.device-row[data-cloud-state="not-provisioned"]').first();
+    const freshText = (await fresh.innerText()).replace(/\s+/g, " ");
+    assert.ok(!/provision|create|set ?up|not created|inactive/i.test(freshText),
+      `a fresh cloud row must not talk about provisioning: ${freshText}`);
+    assert.ok(!/\boffline\b/i.test(freshText), `a fresh cloud row must not say offline: ${freshText}`);
+    assert.equal(await fresh.locator("button.device-start").count(), 1,
+      "a fresh cloud row needs a BUTTON — opening it creates the machine");
+    assert.equal(await fresh.locator("a.device-start").count(), 0,
+      "a fresh cloud row must not be a plain link to a device that does not exist");
+
+    // 6. UPGRADE — visible, and an offer rather than an error. The row exists
+    //    precisely so this is discoverable.
+    const locked = page.locator('.device-row[data-cloud-state="upgrade"]').first();
+    const lockedText = (await locked.innerText()).replace(/\s+/g, " ");
+    assert.ok(/upgrade/i.test(lockedText), `a locked cloud row should offer an upgrade: ${lockedText}`);
+    const lockedHref = await locked.locator("a.device-start").getAttribute("href");
+    assert.equal(lockedHref, "#billing", "the upgrade must go where every other upgrade goes");
+
+    // 7. NO ✕ ON A CLOUD ROW, ever. Unlinking one would leave an account
+    //    without a product it cannot get back, and a gap in a list that
+    //    promises everyone has one.
+    for (const state of ["not-provisioned", "upgrade"]) {
+      const r = page.locator(`.device-row[data-cloud-state="${state}"]`).first();
+      assert.equal(await r.locator(".device-remove:not(.device-menu-btn)").count(), 0,
+        `a ${state} cloud row must not offer an unlink ✕`);
+    }
+    const sleepingMenu = sleeping.locator(".device-menu-btn");
+    assert.equal(await sleepingMenu.count(), 1, "a cloud row offers ⋯ instead of ✕");
+    await sleepingMenu.click();
+    const item = sleeping.locator(".device-menu-item");
+    assert.equal((await item.innerText()).trim(), "Reset my Cloud");
+    // VISIBLE and occupying space, not merely present. A popover that renders
+    // behind something, at zero height, or closes on the same click that opened
+    // it satisfies every text assertion and shows the reader nothing — which is
+    // the exact failure this whole gate exists for.
+    await item.waitFor({ state: "visible", timeout: 5000 });
+    const menuBox = await item.boundingBox();
+    assert.ok(menuBox && menuBox.width > 60 && menuBox.height > 12,
+      `the reset menu is not actually rendered: ${JSON.stringify(menuBox)}`);
+    // A HIT TEST, because "visible" is not enough. `.device-row` sets
+    // `overflow: hidden` so its children respect the rounded corners, and that
+    // clipped this popover into invisibility: Playwright still reported it
+    // visible with a real box, and the screenshot showed nothing. Asking the
+    // page what is actually painted at that point catches clipping, z-index and
+    // anything drawn on top of it.
+    const painted = await page.evaluate(({ x, y }) => {
+      const el = document.elementFromPoint(x, y);
+      return el ? el.className || el.tagName : null;
+    }, { x: menuBox.x + menuBox.width / 2, y: menuBox.y + menuBox.height / 2 });
+    assert.ok(String(painted).includes("device-menu-item"),
+      `the reset menu is covered or clipped — the point where it should be paints "${painted}"`);
+    // Clipped to the row PLUS the space under it. A full-page shot downscales
+    // the popover into nothing; an element shot clips it away entirely, because
+    // it is absolutely positioned outside the row box. Neither is evidence.
+    const rowBox = await sleeping.boundingBox();
+    await page.screenshot({
+      path: join(OUT, `${tag}-menu.png`),
+      clip: {
+        x: Math.max(0, rowBox.x - 8),
+        y: Math.max(0, rowBox.y - 8),
+        width: Math.min(viewport.width - Math.max(0, rowBox.x - 8), rowBox.width + 16),
+        height: Math.min(viewport.height - Math.max(0, rowBox.y - 8), rowBox.height + menuBox.height + 40),
+      },
+    });
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.mouse.click(5, 5);
+
+    // 8. An ordinary offline laptop is unchanged — still offline, still told to
     //    open VS Code. "We added a feature and nothing else moved."
     const laptop = row("d-laptop");
     assert.ok(/offline/i.test(await laptop.innerText()));
@@ -184,7 +280,7 @@ try {
 
     assert.deepEqual(errors, [], "the page must throw nothing");
     await page.screenshot({ path: join(OUT, `${tag}.png`), fullPage: true });
-    log(`${tag}: sleeping reads usable, unwakeable reads offline, laptop unchanged`);
+    log(`${tag}: fresh + sleeping usable, upgrade offers billing, no ✕ on cloud, laptop unchanged`);
     await ctx.close();
   }
 
