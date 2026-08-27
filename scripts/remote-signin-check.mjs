@@ -267,7 +267,42 @@ try {
   await page.screenshot({ path: join(OUT, "signin", "5-failed.png") });
   log("a retryable failure offers a retry");
 
-  // 6. And success closes it out.
+  // 6. THE CODEX PRE-FLIGHT. Device-code sign-in is off by default on every
+  //    account, so the first attempt fails for almost everyone — and the fix
+  //    takes fifteen seconds if you are told where. Shown BEFORE the button
+  //    does anything, and cloud-only: at a desk the browser flow just works.
+  host(clientId, {
+    type: "onboarding", state: "codex-login", platform: "linux", provider: "codex",
+    device: {
+      status: "unavailable",
+      message: "Codex needs one setting turned on before it can sign in here.",
+      preflight: {
+        reason: "Codex needs one setting turned on before it can sign in here. It is off by default for everyone.",
+        steps: [
+          "Open ChatGPT and go to Settings → Security",
+          "Turn on \"Device code authorization for Codex\"",
+          "Come back and connect — the code appears here",
+        ],
+        url: "https://chatgpt.com/#settings/Security",
+      },
+    },
+  });
+  await waitFor(
+    async () => (await page.locator("#welcome-onboarding").innerText()).includes("Device code authorization"),
+    "the codex pre-flight",
+  );
+  {
+    const steps = await page.locator(".onb-steps li").count();
+    assert.equal(steps, 3, "the pre-flight lists the steps, in order");
+    // Still offered: the setting may already be on, and a screen that only
+    // sends you elsewhere is a dead end with a link on it.
+    assert.equal(await page.locator('[data-act="connectRemote"]').count(), 1,
+      "the pre-flight must still let somebody proceed");
+    await page.screenshot({ path: join(OUT, "signin", "8-codex-preflight.png") });
+    log("the codex setting is explained before anything is attempted");
+  }
+
+  // 7. And success closes it out.
   host(clientId, {
     type: "onboarding", state: "auth-required", platform: "linux", provider: "grok",
     device: { status: "done" },

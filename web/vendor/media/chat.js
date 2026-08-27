@@ -8504,6 +8504,29 @@
       `</div>`;
     }
 
+    // Shown BEFORE anything is attempted, when a sign-in is likely to fail for a
+    // reason the reader can fix in seconds. Codex device-code login is off by
+    // default on every account — telling somebody that after a wait and a
+    // failure is telling them too late.
+    if (device && device.preflight) {
+      status("One setting first");
+      const pf = device.preflight;
+      const steps = (pf.steps || [])
+        .map((s) => `<li>${escapeHtml(String(s))}</li>`)
+        .join("");
+      return `<div class="onb">` +
+        `<p class="onb-heading">Turn on device sign-in for ${escapeHtml(name)}</p>` +
+        `<p class="onb-desc">${escapeHtml(pf.reason || "")}</p>` +
+        (steps ? `<ol class="onb-steps">${steps}</ol>` : "") +
+        (pf.url
+          ? `<a class="onb-action" href="${escapeHtml(pf.url)}" target="_blank" rel="noopener noreferrer">Open ${escapeHtml(name)} settings</a>`
+          : "") +
+        // Still offered, because the setting may already be on — and because a
+        // screen that only sends you elsewhere is a dead end with a link on it.
+        `<button class="onb-action onb-secondary" type="button" data-act="connectRemote" data-provider="${escapeHtml(provider)}">I've turned it on — connect</button>` +
+      `</div>`;
+    }
+
     if (device && (device.status === "failed" || device.status === "unavailable")) {
       const stuck = device.status === "unavailable";
       status(stuck ? "Sign in at your computer" : "Sign-in failed");

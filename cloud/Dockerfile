@@ -51,10 +51,32 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run compile
 
-# The agent CLI, after the build so a CLI release does not invalidate it.
-# `|| true`: a spike must still boot and say "no agent found" rather than fail
-# to build, and that is also the state a real environment starts in.
+# The agent CLIs, after the build so a CLI release does not invalidate it.
+#
+# `|| true` on each: a container must still boot and say "that agent is not
+# installed" rather than fail to build. That is also a state a real environment
+# can legitimately be in, and the client already renders it.
+#
+# All THREE, because a cloud environment has no desk to fall back to. On a
+# laptop an agent that will not sign in headlessly can be connected by walking
+# to the machine; here there is no machine to walk to, so whatever cannot be
+# done from a phone cannot be done at all.
 RUN curl -fsSL https://x.ai/cli/install.sh | bash || true
+RUN curl -fsSL https://claude.ai/install.sh | bash || true
+RUN npm install -g @openai/codex@latest || true
+
+# A pseudo-terminal, and the reason it is worth a native dependency.
+#
+# `claude setup-token` is an Ink TUI: given pipes it prints ZERO BYTES and waits
+# for a keypress that cannot arrive (measured — 18 s, both streams empty).
+# `gh auth login` is the same shape. Neither can be driven by the pipe-based
+# spawn the host uses everywhere else.
+#
+# The extension deliberately avoids native modules — keep-awake.ts chose three
+# OS binaries over one native dependency for exactly that reason. That rule is
+# about a VS Code extension shipped to thousands of machines, and it does not
+# apply to an image we build and run ourselves. Here a pty is just a library.
+RUN npm install -g node-pty || true
 
 # Where a real environment mounts its volume. Everything that must outlive a
 # stop lives here: the agent logins, and the projects themselves.

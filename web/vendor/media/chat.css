@@ -4990,3 +4990,14 @@ body.vscode-light .preview-overlay {
 @media (hover: none), (pointer: coarse) {
   .add-project-btn, .add-project-fix, .add-project-input { min-height: 36px; }
 }
+/* The pre-flight step list. Numbered because these are steps in an order, and
+   the reader is following them in another window. */
+.onb-steps {
+  margin: 0;
+  padding-left: 1.15rem;
+  color: var(--vscode-descriptionForeground);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.onb-steps li { margin: 0; }
