@@ -144,6 +144,35 @@ describe("what it is told, and what it is not", () => {
     expect(script).toContain('export APPDIR="$APP/squashfs-root"');
   });
 
+  it("installs all three agent CLIs itself", () => {
+    // Fly's image happens to ship claude and codex, and not grok. Relying on
+    // that is relying on somebody else's image to keep containing what we need;
+    // the day it drops one, machines come up an agent short and the only
+    // symptom is a user told to install something on a computer that does not
+    // exist.
+    expect(script).toContain("https://x.ai/cli/install.sh");
+    expect(script).toContain("https://claude.ai/install.sh");
+    expect(script).toContain("@openai/codex@latest");
+    // Non-fatal, each — two of three is a usable machine — but never silent.
+    expect(script).toContain("grok CLI install FAILED");
+    expect(script).toContain("agent MISSING:");
+  });
+
+  it("keeps the CLIs current, because nobody in a cloud environment installed them", () => {
+    // On a desk the person owns updating what they installed. Here nobody did,
+    // so left alone they rot until an agent stops working against its own
+    // service for reasons the reader cannot see.
+    expect(script).toContain("refresh_agents_if_stale");
+    // BEFORE the host starts, never while it runs: swapping a CLI binary under
+    // a turn in flight breaks a live session, which is worse than being stale.
+    const refresh = script.indexOf("refresh_agents_if_stale" + String.fromCharCode(10));
+    const start = script.indexOf("starting host");
+    expect(refresh).toBeGreaterThan(-1);
+    expect(start).toBeGreaterThan(refresh);
+    // And bounded, so waking a machine you use daily is not a download a day.
+    expect(script).toContain("AGENT_MAX_AGE=604800");
+  });
+
   it("waits to be claimed instead of exiting", () => {
     // A pooled machine boots before anyone owns it. Exiting would let the
     // service supervisor treat a healthy spare as a crash loop.

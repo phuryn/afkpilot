@@ -75,6 +75,37 @@ if [ -n "$NAME" ] && [ -n "$SECRET" ]; then
   printf '%s\\n%s\\n' "$NAME" "$SECRET" > "$HOME/.afkpilot-pool"
 fi
 
+AGENTS_STAMP="$HOME/.afkpilot-agents-updated"
+AGENT_MAX_AGE=604800   # a week
+
+# Install or refresh the agent CLIs. Each is independent and non-fatal.
+install_agents() {
+  step "agents: installing/updating"
+  curl -fsSL https://x.ai/cli/install.sh | bash >/dev/null 2>&1 || step "grok CLI install FAILED"
+  curl -fsSL https://claude.ai/install.sh | bash >/dev/null 2>&1 || step "claude CLI install FAILED"
+  npm install -g @openai/codex@latest >/dev/null 2>&1 || step "codex CLI install FAILED"
+}
+
+# Keep them current, because nobody else will.
+#
+# On a laptop the person installed these and owns updating them. In a cloud
+# environment nobody did, so left alone they rot until an agent stops working
+# against its own service and the reader has no idea why.
+#
+# BEFORE the host starts, never while it runs: replacing a CLI binary underneath
+# a turn in flight breaks a live session, which is a worse failure than being a
+# few days behind. And at most weekly, so waking a machine you use daily is not
+# a download every time.
+refresh_agents_if_stale() {
+  [ -f "$ENVFILE" ] || return 0          # unclaimed: the build already did it
+  local last=0
+  [ -f "$AGENTS_STAMP" ] && last=$(cat "$AGENTS_STAMP" 2>/dev/null || echo 0)
+  local now; now=$(date +%s)
+  [ $((now - last)) -lt "$AGENT_MAX_AGE" ] && return 0
+  install_agents
+  date +%s > "$AGENTS_STAMP"
+}
+
 step "boot"
 
 if [ ! -f "$STAMP" ]; then
@@ -127,6 +158,23 @@ if [ ! -f "$STAMP" ]; then
     echo source > "$APP/.afkpilot-kind"
   fi
 
+  # ALL THREE agent CLIs, explicitly.
+  #
+  # Fly's base image happens to ship claude and codex, and not grok. Relying on
+  # that is relying on somebody else's image to keep containing what we need:
+  # the day it drops one, machines quietly come up an agent short and the only
+  # symptom is a user being told to install something on a computer that does
+  # not exist. Installing all three costs seconds and makes it ours.
+  #
+  # Non-fatal, each: two agents out of three is a usable machine, and the client
+  # already renders "not installed" honestly. What is NOT acceptable is being
+  # unable to tell afterwards, so the result is logged either way.
+  install_agents
+  for a in grok claude codex; do
+    if command -v "$a" >/dev/null 2>&1; then step "agent present: $a"; else step "agent MISSING: $a"; fi
+  done
+  date +%s > "$AGENTS_STAMP"
+
   touch "$STAMP"
   step "install: done"
 fi
@@ -149,6 +197,7 @@ fi
 while [ ! -f "$ENVFILE" ]; do sleep 5; done
 
 set -a; . "$ENVFILE"; set +a
+refresh_agents_if_stale
 cd "$APP" || exit 73
 
 pkill -f "Xvfb :99" 2>/dev/null || true

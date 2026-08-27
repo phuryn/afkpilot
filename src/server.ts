@@ -1326,6 +1326,32 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       hub.detachUplink(device.deviceId);
       if (uplinkSockets.get(device.deviceId) === ws) uplinkSockets.delete(device.deviceId);
       log(`[relay] uplink detached: ${device.deviceId}`);
+
+      // WAKE ON DROP — the counterpart to wake-on-attach, and the case that was
+      // missing.
+      //
+      // Wake-on-attach covers somebody arriving at a sleeping machine. It does
+      // NOT cover the machine going to sleep underneath somebody who is already
+      // there: a hosted environment pauses when idle, which kills its outbound
+      // socket, and no new attach ever happens — so the page sat there saying
+      // the environment was not responding while nothing was going to wake it.
+      //
+      // Gated on PRESENCE, not on a socket being open. A browser tab left open
+      // overnight is not a reason to keep a machine awake and billing; a person
+      // who was interacting a moment ago is.
+      if (environments && waker && presence?.present(device.deviceId)) {
+        void (async () => {
+          const environment = await environments.find(device.deviceId).catch(() => null);
+          if (!environment) return;
+          if (hub.uplinkConnected(device.deviceId)) return; // it already came back
+          if (waker.waking(device.deviceId)) return;
+          log(`[relay] uplink dropped with someone present; waking ${device.deviceId}`);
+          const outcome = await waker.wake(environment);
+          if (!outcome.ok) {
+            log(`[relay] wake on drop failed for ${device.deviceId}: ${outcome.kind}`);
+          }
+        })();
+      }
     };
     ws.on("close", detach);
     ws.on("error", () => ws.close());
