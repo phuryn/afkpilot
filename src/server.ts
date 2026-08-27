@@ -42,6 +42,7 @@ import {
 import type { ProvisionCoordinator } from "./environment-provisioner.js";
 import type { EnvironmentPoolStore } from "./environment-pool-store.js";
 import { claimOutcome } from "./environment-pool.js";
+import type { KeepAliveCoordinator } from "./environment-keepalive.js";
 import { HandoverCodes, handoverCommand, handoverEnvFile, redactCode } from "./environment-handover.js";
 import { poolBootstrapScript, poolBuildCommand } from "./pool-bootstrap.js";
 import { PRESENCE_TYPE, PresenceTracker } from "./presence.js";
@@ -107,6 +108,15 @@ export interface RelayServerOptions {
   pool?: EnvironmentPoolStore;
   /** Single-use codes a claimed machine redeems for its device token. */
   handover?: HandoverCodes;
+  /**
+   * Holds a cloud machine awake while it is working.
+   *
+   * A Sprite suspends about a minute after the last external interaction, and
+   * suspended means FROZEN — measured, not assumed. Without this a long turn
+   * dies the moment somebody puts their phone down, which is the one thing this
+   * product exists to prevent.
+   */
+  keepAlive?: KeepAliveCoordinator;
   /**
    * This relay's own public https URL.
    *
@@ -404,7 +414,9 @@ export function injectWebAppVersion(html: string, version: string): string {
 
 export function createRelayServer(opts: RelayServerOptions): RelayServer {
   const { store, devices, sessions, requiredFeature, freeTier, messageRate, hub, log } = opts;
-  const { environments, waker, provisioner, cloudFeature, pool, handover, publicUrl } = opts;
+  const {
+    environments, waker, provisioner, cloudFeature, pool, handover, publicUrl, keepAlive,
+  } = opts;
   // Who is actually watching. Client-asserted, because the relay cannot tell a
   // person reading from a tab forgotten last night — both are an open socket.
   const presence = opts.presence ?? new PresenceTracker();
@@ -1309,7 +1321,22 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         })
         .catch(() => {});
     }
+
+    // Resolved ONCE per uplink, because the alternative is a database read per
+    // frame. A laptop leaves this undefined and pays nothing for the feature.
+    let keepAliveTarget: string | undefined;
+    if (keepAlive && environments) {
+      void environments.find(device.deviceId)
+        .then((env) => { if (env) keepAliveTarget = env.externalId; })
+        .catch(() => {});
+    }
     admit((raw) => {
+      // A frame arrived, so this machine is working. What the frame SAYS is not
+      // consulted — the relay stays payload-blind and an idle host sends
+      // nothing at all, so arrival alone is the signal.
+      if (keepAlive && keepAliveTarget) {
+        keepAlive.noteActivity(device.deviceId, keepAliveTarget);
+      }
       const result = hub.fromUplink(device.deviceId, raw);
       if (result.kind === "accepted") backfillDeviceClient(device, raw);
       if (result.kind !== "refused") return;
@@ -1326,6 +1353,9 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       hub.detachUplink(device.deviceId);
       if (uplinkSockets.get(device.deviceId) === ws) uplinkSockets.delete(device.deviceId);
       log(`[relay] uplink detached: ${device.deviceId}`);
+      // Whatever the clock says, a machine whose host has gone is not working,
+      // and holding a socket open against it buys nothing but a bill.
+      keepAlive?.releaseFor(device.deviceId);
 
       // WAKE ON DROP — the counterpart to wake-on-attach, and the case that was
       // missing.
@@ -1346,9 +1376,14 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
           if (hub.uplinkConnected(device.deviceId)) return; // it already came back
           if (waker.waking(device.deviceId)) return;
           log(`[relay] uplink dropped with someone present; waking ${device.deviceId}`);
+          // Same reason as wake-on-attach: hold it running long enough for the
+          // host to dial back, or it is suspended again before it can. `detach`
+          // released the old hold a moment ago, so this opens a fresh one.
+          keepAlive?.noteActivity(device.deviceId, environment.externalId);
           const outcome = await waker.wake(environment);
           if (!outcome.ok) {
             log(`[relay] wake on drop failed for ${device.deviceId}: ${outcome.kind}`);
+            keepAlive?.releaseFor(device.deviceId);
           }
         })();
       }
@@ -1423,9 +1458,20 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         // `environment` is non-null here — shouldWakeOnAttach returns false
         // without one — but the compiler cannot see that through the helper.
         if (!environment) return;
+        // Hold it running while it finds its way back. Resuming a machine takes
+        // about a second; a host noticing its socket died and reconnecting takes
+        // longer than the minute the hypervisor waits before suspending an
+        // untouched machine again. Without this the wake succeeds and the
+        // machine is asleep again before anyone can use it — which is exactly
+        // what "your cloud environment isn't responding" looked like from the
+        // outside. The sweeper lets go on its own if the uplink never arrives.
+        keepAlive?.noteActivity(deviceId, environment.externalId);
         const outcome = await waker.wake(environment);
         if (!outcome.ok) {
           log(`[relay] wake on attach failed for ${deviceId}: ${outcome.kind}`);
+          // Nothing to keep awake, and a hold against a machine that is gone or
+          // over quota is a socket that reconnects forever.
+          keepAlive?.releaseFor(deviceId);
         }
       })();
     }

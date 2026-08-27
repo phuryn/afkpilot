@@ -180,6 +180,12 @@ export class Hub {
         for (const m of frame.msgs) this.safeSend(client.sender, JSON.stringify(m));
         return { kind: "accepted" };
       }
+      case "working":
+        // Nothing to route. The frame did its job by arriving: the server notes
+        // uplink traffic before this call and holds the cloud machine awake on
+        // it. Deliberately NOT forwarded to browsers — a person watching a turn
+        // learns nothing from it, and a person not watching is the point.
+        return { kind: "accepted" };
     }
   }
 

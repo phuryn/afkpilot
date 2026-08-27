@@ -9,6 +9,7 @@ import {
   TRANSPORT_PROBE_TYPE,
   isTransportProbe,
   transportProbeReply,
+  REMOTE_PROTO_VERSION,
 } from "../src/frames.js";
 
 describe("parseUplinkFrame", () => {
@@ -114,5 +115,24 @@ describe("relay frame builders", () => {
     expect(clientLeftFrame("c9")).toEqual({ t: "client-left", clientId: "c9" });
     expect(msgFrame("c9", { type: "cancel" })).toEqual({ t: "msg", clientId: "c9", msg: { type: "cancel" } });
     expect(clientsFrame(3)).toEqual({ t: "clients", count: 3 });
+  });
+});
+
+describe("the working frame", () => {
+  // Additive by design: an older relay does not know this type, drops it, and
+  // says nothing — which is why the extension can send it unconditionally.
+  it("parses, carrying nothing", () => {
+    expect(parseUplinkFrame(JSON.stringify({ t: "working" }))).toEqual({ t: "working" });
+  });
+
+  it("ignores anything hung off it", () => {
+    // Nobody should be able to smuggle a payload through a frame that exists to
+    // be counted rather than read.
+    expect(parseUplinkFrame(JSON.stringify({ t: "working", msg: { type: "x" }, clientIds: ["a"] })))
+      .toEqual({ t: "working" });
+  });
+
+  it("does not move the protocol version", () => {
+    expect(REMOTE_PROTO_VERSION).toBe(1);
   });
 });

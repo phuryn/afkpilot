@@ -5,7 +5,8 @@ import { hasDeviceClientInfo, parseDeviceClientFields, type DeviceClientInfo } f
 // REMOTE_PROTO_VERSION in BOTH repos on any incompatible change.
 //
 // Legs:
-//   extension -> relay : UplinkFrame  (hello / host / host-to / snapshot)
+//   extension -> relay : UplinkFrame  (hello / host / host-to / snapshot /
+//                        working)
 //   relay -> extension : RelayFrame   (client-ready / client-left / msg / clients)
 //   browser  <-> relay : raw HostMsg / WebviewMsg JSON (the webview protocol
 //                        itself — the relay only inspects `type`), plus a
@@ -23,7 +24,19 @@ export type UplinkFrame =
   | { t: "hello"; proto: number; device?: { name?: string }; client?: DeviceClientInfo }
   | { t: "host"; msg: ProtocolMsg }
   | { t: "host-to"; clientIds: string[]; msg: ProtocolMsg }
-  | { t: "snapshot"; clientId: string; msgs: ProtocolMsg[] };
+  | { t: "snapshot"; clientId: string; msgs: ProtocolMsg[] }
+  /**
+   * "I am mid-turn." Carries no payload and produces no side effect here — its
+   * only job is to ARRIVE, because a cloud machine is held awake by traffic on
+   * its uplink and a turn spends most of its life waiting on a tool with
+   * nothing to say. Streaming text keeps a machine alive by accident; this
+   * keeps it alive on purpose.
+   *
+   * Additive, so REMOTE_PROTO_VERSION does not move: an older relay does not
+   * recognise `working`, drops the frame, and drops it silently. That is the
+   * whole compatibility story in both directions.
+   */
+  | { t: "working" };
 
 export type RelayFrame =
   | { t: "client-ready"; clientId: string; tabToken?: string }
@@ -70,6 +83,8 @@ export function parseUplinkFrame(raw: string): UplinkFrame | null {
     case "snapshot":
       if (typeof f.clientId !== "string" || !Array.isArray(f.msgs)) return null;
       return f.msgs.every(isProtocolMsg) ? { t: "snapshot", clientId: f.clientId, msgs: f.msgs as ProtocolMsg[] } : null;
+    case "working":
+      return { t: "working" };
     default:
       return null;
   }

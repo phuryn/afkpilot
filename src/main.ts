@@ -24,6 +24,11 @@ import { InMemoryEnvironmentPoolStore, SupabaseEnvironmentPoolStore, type Enviro
 import { HandoverCodes } from "./environment-handover.js";
 import { poolBuildCommand } from "./pool-bootstrap.js";
 import { startPoolFiller } from "./pool-filler.js";
+import {
+  KeepAliveCoordinator,
+  startKeepAliveSweeper,
+} from "./environment-keepalive.js";
+import { spriteHold } from "./sprite-exec.js";
 import { startWakeScheduler } from "./wake-scheduler.js";
 
 const log = (line: string) => console.log(line);
@@ -131,6 +136,8 @@ let pool: EnvironmentPoolStore | undefined;
 let handover: HandoverCodes | undefined;
 let publicUrl: string | undefined;
 let stopPoolFiller: (() => void) | undefined;
+let keepAlive: KeepAliveCoordinator | undefined;
+let stopKeepAlive: (() => void) | undefined;
 const spritesToken = process.env.SPRITES_TOKEN;
 const cloudFeature = process.env.RELAY_CLOUD_FEATURE || undefined;
 if (spritesToken) {
@@ -169,6 +176,28 @@ if (spritesToken) {
     isOnline: (deviceId) => hub.uplinkConnected(deviceId),
     log,
   });
+  // KEEPING A WORKING MACHINE AWAKE.
+  //
+  // A Sprite suspends about a minute after the last external interaction, and
+  // suspended means frozen: a service writing a timestamp every five seconds
+  // stopped dead the moment the machine went `warm` (measured 2026-08-27). So a
+  // long turn does not survive somebody putting their phone down — the exact
+  // promise this product exists to keep.
+  //
+  // A held-open exec session is what keeps it `running`; an instantaneous poke
+  // only reaches `warm`, which is still frozen. The relay holds one while
+  // frames are arriving from the machine and drops it when they stop, so a
+  // machine is paid for while it works and sleeps when it does not.
+  keepAlive = new KeepAliveCoordinator({
+    hold: spriteHold({
+      token: spritesToken,
+      apiBase: process.env.SPRITES_API_BASE || undefined,
+    }),
+    now: Date.now,
+    log,
+  });
+  stopKeepAlive = startKeepAliveSweeper(keepAlive);
+
   // THE SHELF. A machine is created in a second and made useful in twenty-five
   // minutes; the pool pays that cost before anybody is waiting. Off unless a
   // size is set, because turning it on buys real machines — see parsePoolSize.
@@ -229,9 +258,16 @@ if (spritesToken) {
     : "[relay] cloud access: OPEN to every account (set RELAY_CLOUD_FEATURE to gate it)");
   // Referenced so the stop handle is not dead code to a linter, and so a future
   // graceful-shutdown path has an obvious place to call it.
-  process.once("SIGTERM", () => { stopWakeScheduler?.(); stopPoolFiller?.(); });
+  process.once("SIGTERM", () => {
+    stopWakeScheduler?.();
+    stopPoolFiller?.();
+    stopKeepAlive?.();
+    // Every hold is a machine being billed. Letting them go is the one piece of
+    // shutdown that costs money to skip.
+    keepAlive?.releaseAll();
+  });
 } else {
   log("[relay] cloud environments: disabled (set SPRITES_TOKEN to serve hosted machines)");
 }
 
-createRelayServer({ host, port, webRoot, store, devices, sessions, requiredFeature, freeTier, messageRate, clerkPublishableKey, hub, environments, waker, provisioner, pool, handover, publicUrl, cloudFeature, log });
+createRelayServer({ host, port, webRoot, store, devices, sessions, requiredFeature, freeTier, messageRate, clerkPublishableKey, hub, environments, waker, provisioner, pool, handover, publicUrl, keepAlive, cloudFeature, log });

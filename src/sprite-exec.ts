@@ -75,6 +75,72 @@ export function spriteExecUrl(input: {
   return `${base}/v1/sprites/${encodeURIComponent(input.name)}/exec?${qs}`;
 }
 
+/**
+ * Hold a machine RUNNING until released.
+ *
+ * The measured difference between this and {@link spriteExec}: an
+ * instantaneous command leaves a Sprite at `warm` — awake enough to answer,
+ * frozen between calls — while a session that STAYS OPEN keeps it `running`.
+ * Verified 2026-08-27: `cold` at t+0, `running` at t+1m and still running at
+ * t+2m with the socket held.
+ *
+ * The command is a trivial heartbeat. Its output is irrelevant and is
+ * discarded; what matters is that the session exists. Cheap by construction —
+ * a `sleep` loop costs nothing next to the agent turn this is protecting.
+ *
+ * Reconnects on its own, because the whole point is to outlast a long turn and
+ * a dropped socket would silently stop paying for the thing it was protecting.
+ */
+export function spriteHold(opts: SpriteExecOptions) {
+  const apiBase = opts.apiBase ?? "https://api.sprites.dev";
+  const connect = opts.connect ?? ((url, headers) => new WebSocket(url, { headers }));
+
+  return function hold(name: string): { release(): void } {
+    let released = false;
+    let ws: WebSocket | undefined;
+    let retry: NodeJS.Timeout | undefined;
+
+    const open = () => {
+      if (released) return;
+      const url = spriteExecUrl({
+        apiBase,
+        name,
+        argv: ["sh", "-c", "while true; do echo .; sleep 5; done"],
+      });
+      try {
+        ws = connect(url, { authorization: `Bearer ${opts.token}` });
+      } catch {
+        schedule();
+        return;
+      }
+      ws.on("error", () => { /* close follows */ });
+      ws.on("close", () => {
+        ws = undefined;
+        // A hold that quietly stopped holding is worse than no hold: the caller
+        // believes the machine is protected while it suspends mid-turn.
+        schedule();
+      });
+    };
+
+    const schedule = () => {
+      if (released || retry) return;
+      retry = setTimeout(() => { retry = undefined; open(); }, 2_000);
+      retry.unref?.();
+    };
+
+    open();
+
+    return {
+      release() {
+        released = true;
+        if (retry) { clearTimeout(retry); retry = undefined; }
+        try { ws?.close(); } catch { /* already gone */ }
+        ws = undefined;
+      },
+    };
+  };
+}
+
 export function spriteExec(opts: SpriteExecOptions) {
   const apiBase = opts.apiBase ?? "https://api.sprites.dev";
   const timeoutMs = opts.timeoutMs ?? EXEC_TIMEOUT_MS;

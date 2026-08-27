@@ -454,3 +454,27 @@ describe("Hub routing", () => {
     expect(up.json().some((frame) => (frame as { t?: string }).t === "client-left")).toBe(false);
   });
 });
+
+describe("the working frame in the hub", () => {
+  it("is accepted and routed nowhere", () => {
+    // It exists to arrive. The server holds a cloud machine awake on uplink
+    // traffic before the hub ever sees the frame, so forwarding it to browsers
+    // would be noise on a socket that carries a person's screen.
+    const hub = new Hub(() => {});
+    const sent: string[] = [];
+    hub.attachUplink("d1", () => {});
+    hub.fromUplink("d1", JSON.stringify({ t: "hello", proto: 1 }));
+    hub.addClient("d1", (raw) => sent.push(raw));
+    expect(hub.fromUplink("d1", JSON.stringify({ t: "working" }))).toEqual({ kind: "accepted" });
+    expect(sent).toEqual([]);
+  });
+
+  it("still needs a hello first", () => {
+    // No frame type gets to skip the handshake — that is how the relay knows
+    // which protocol it is speaking before it acts on anything.
+    const hub = new Hub(() => {});
+    hub.attachUplink("d1", () => {});
+    expect(hub.fromUplink("d1", JSON.stringify({ t: "working" })))
+      .toEqual({ kind: "refused", reason: "hello-required" });
+  });
+});
