@@ -60,10 +60,12 @@ works for twenty minutes is not idle — they are the reason this exists. A rule
 that counted only attached clients would stop the work the moment the person
 walked away.
 
-The first half is client-side: your browser reports that a human is present
-(pointer, keyboard, tab visibility). Go quiet and it stops reporting, the hold
-lapses after a few minutes, and the machine sleeps. You are never shown any of
-this.
+The first half is client-side, because the relay cannot see a person — an open
+socket is exactly what a forgotten tab looks like. Your browser reports that
+somebody is present (pointer, keyboard, tab visibility) every thirty seconds. Go
+quiet for five minutes, or send the tab to the background, and it stops
+reporting; the hold lapses and the machine sleeps. You are never shown any of
+this, and none of it can interrupt work already running.
 
 ## Routines still run
 
