@@ -24,7 +24,12 @@
 create table if not exists public.environments (
   -- One environment per device. The device row remains the identity; this is a
   -- side table so that revoking a device revokes the environment with it.
-  device_id   text primary key references public.devices (device_id) on delete cascade,
+  --
+  -- uuid, matching public.devices.device_id. A foreign key whose type differs
+  -- from the column it references is not a warning: Postgres refuses the whole
+  -- statement, so a `text` here does not make a slightly wrong table, it makes
+  -- no table at all and every later migration queues behind the failure.
+  device_id   uuid primary key references public.devices (device_id) on delete cascade,
   user_id     text not null,
   -- Which platform runs it. One value today; the column exists so a second
   -- provider does not require a migration on a live table.

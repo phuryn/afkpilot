@@ -24,7 +24,7 @@ const log = (m) => console.log(`[repro] ${m}`);
 const NEEDLE = "zebrafish";
 
 const relay = spawn(process.execPath, ["dist/main.js"], {
-  env: { ...process.env, RELAY_PORT: String(PORT), CLERK_SECRET_KEY: "", CLERK_PUBLISHABLE_KEY: "", SUPABASE_URL: "", SUPABASE_SECRET_KEY: "" },
+  env: { ...process.env, RELAY_PORT: String(PORT), CLERK_SECRET_KEY: "", CLERK_PUBLISHABLE_KEY: "", SPRITES_TOKEN: "", SPRITES_LABELS: "", SUPABASE_URL: "", SUPABASE_SECRET_KEY: "" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 relay.stdout.on("data", () => {});

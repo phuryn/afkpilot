@@ -454,7 +454,13 @@ function spawnRelay() {
       RELAY_PORT: String(PORT),
       CLERK_SECRET_KEY: "",
       CLERK_PUBLISHABLE_KEY: "",
-      SUPABASE_URL: "",
+      // Cleared for the same reason as Clerk and Supabase above: the relay reads
+    // a maintainer's .env, and one with SPRITES_TOKEN in it adds a cloud row to
+    // every device list. A gate that passes or fails depending on whose machine
+    // runs it is not a gate. Cloud has its own: e2e:cloud.
+    SPRITES_TOKEN: "",
+    SPRITES_LABELS: "",
+    SUPABASE_URL: "",
       SUPABASE_SECRET_KEY: "",
     },
     stdio: ["ignore", "pipe", "pipe"],
