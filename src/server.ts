@@ -31,6 +31,9 @@ import { hasDeviceClientInfo, parseDeviceClientFields } from "./device-client.js
 import { countMachines, isRecognizedInstallId, MinuteRateLimiter, type FreeTier, type MessageRate } from "./limits.js";
 import { usageWindow, resetsInText } from "./usage.js";
 import { Hub } from "./hub.js";
+import { deviceAvailability, parseWakeAt, shouldWakeOnAttach } from "./environments.js";
+import type { EnvironmentStore } from "./environment-store.js";
+import type { WakeCoordinator } from "./environment-waker.js";
 import { parseUplinkFrame, REMOTE_PROTO_VERSION, TRANSPORT_PROBE_TYPE } from "./frames.js";
 import { downloadPlatformFromPath, resolveDownload, RELEASES_PAGE_URL } from "./downloads.js";
 import {
@@ -73,6 +76,14 @@ export interface RelayServerOptions {
    *  30s; 0 disables (tests). */
   pingIntervalMs?: number;
   hub: Hub;
+  /**
+   * Cloud environments. Absent = this relay serves no hosted machines, which is
+   * the keyless dev default and stays a supported configuration: every device is
+   * then an ordinary laptop and nothing below changes behaviour.
+   */
+  environments?: EnvironmentStore;
+  /** Wakes a sleeping environment. Required only alongside `environments`. */
+  waker?: WakeCoordinator;
   log: (line: string) => void;
   /**
    * GitHub HTTP (releases API + channel-file bytes). Tests inject a stub so
@@ -208,6 +219,19 @@ export interface RelayServer {
   close: () => Promise<void>;
 }
 
+/** The raw `Authorization: Bearer <token>` value, or undefined.
+ *
+ *  Deliberately NOT sessionTokenFromRequest: that also reads the __session
+ *  cookie, which is right for a browser and wrong for a device. A machine
+ *  authenticates with its device token and nothing else, so a stray cookie on a
+ *  request must never stand in for one. */
+const bearerToken = (headers: { authorization?: string }): string | undefined => {
+  const raw = headers.authorization;
+  if (typeof raw !== "string") return undefined;
+  const m = /^Bearer\s+(.+)$/i.exec(raw.trim());
+  return m ? m[1].trim() || undefined : undefined;
+};
+
 /** Shape sessionTokenFromRequest reads off an incoming request/upgrade. */
 const authHeaders = (req: http.IncomingMessage) => ({
   authorization: req.headers.authorization,
@@ -313,6 +337,7 @@ export function injectWebAppVersion(html: string, version: string): string {
 
 export function createRelayServer(opts: RelayServerOptions): RelayServer {
   const { store, devices, sessions, requiredFeature, freeTier, messageRate, hub, log } = opts;
+  const { environments, waker } = opts;
 
   // Computed once at boot — a fresh process is a fresh deploy.
   const assetVersion = computeAssetVersion(opts.webRoot);
@@ -617,22 +642,72 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         const body = await readJsonBody(req);
         return sendJson(res, 200, store.poll(typeof body?.code === "string" ? body.code : ""));
       }
+      if (req.method === "POST" && p === "/api/environment/wake-at") {
+        // The host tells the relay when to wake it next. ONE timestamp.
+        //
+        // This is what keeps routines working on a machine that sleeps without
+        // making this database a payload store. The host already computes its
+        // own next due window — routines.ts, where catch-up is arithmetic — so
+        // it can simply say WHEN. The relay never learns the cron, the routine's
+        // name, or its prompt.
+        //
+        // Authenticated by the DEVICE token, not a user session: the machine is
+        // scheduling its own wake, and nothing else should be able to. The
+        // store scopes the write by userId as well, so a token for one account
+        // cannot schedule a wake on another's environment.
+        if (!environments) return sendJson(res, 404, { ok: false, error: "not-supported" });
+        const token = bearerToken(authHeaders(req));
+        const device = token ? await devices.verify(token) : null;
+        if (!device) return sendJson(res, 401, { ok: false, error: "auth" });
+        const body = await readJsonBody(req);
+        const parsed = parseWakeAt(body?.wakeAt, Date.now());
+        if (!parsed.ok) return sendJson(res, 400, { ok: false, error: "bad-request", reason: parsed.reason });
+        const written = await environments
+          .setWakeAt(device.deviceId, device.userId, parsed.wakeAt)
+          .catch(() => false);
+        // A device that is not an environment gets a plain no — it has no
+        // sleeping to be woken from, and pretending otherwise would hide a
+        // misconfigured host.
+        if (!written) return sendJson(res, 404, { ok: false, error: "not-an-environment" });
+        return sendJson(res, 200, { ok: true, wakeAt: parsed.wakeAt });
+      }
       if (req.method === "GET" && p === "/api/devices") {
         // ALL the caller's devices — offline ones included, so the device
         // manager can show and remove them. Liveness/viewers from the hub.
         const claims = await sessions.verify(sessionTokenFromRequest(authHeaders(req)));
         if (!claims) return sendJson(res, 401, { ok: false, error: "auth" });
-        const list = (await devices.listByUser(claims.userId))
-          .map((d) => ({
+        const owned = await devices.listByUser(claims.userId);
+        // One query for the caller's environments, not one per device.
+        const envs = environments ? await environments.listByUser(claims.userId) : [];
+        const envByDevice = new Map(envs.map((e) => [e.deviceId, e]));
+        const list = owned.map((d) => {
+          const environment = envByDevice.get(d.deviceId) ?? null;
+          const online = hub.uplinkConnected(d.deviceId);
+          return {
             deviceId: d.deviceId,
             name: d.name,
             createdAt: d.createdAt,
-            online: hub.uplinkConnected(d.deviceId),
+            online,
             clients: hub.clientCount(d.deviceId),
             clientLabel: d.clientLabel ?? null,
             platform: d.platform ?? null,
             osLabel: d.osLabel ?? null,
-          }));
+            // `online` above stays exactly what it always was, so nothing that
+            // reads it changes. `availability` is the field a picker should
+            // render: for a hosted machine, asleep-but-wakeable reads as ready,
+            // because to the person tapping it, it is.
+            availability: deviceAvailability({
+              online,
+              environment,
+              waking: waker?.waking(d.deviceId) ?? false,
+              unwakeable: !!waker?.failure(d.deviceId),
+            }),
+            // Presence of this object is how a client knows the row is a hosted
+            // machine at all. Deliberately carries no provider identity: the
+            // sprite's name is ours, not the reader's.
+            environment: environment ? { provider: environment.provider } : null,
+          };
+        });
         return sendJson(res, 200, { devices: list });
       }
       if (req.method === "DELETE" && p.startsWith("/api/devices/")) {
@@ -948,6 +1023,34 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     }
     const clientId = hub.addClient(deviceId, ws);
     log(`[relay] client ${clientId} joined device ${deviceId}`);
+
+    // WAKE ON ATTACH — on attach, never on listing.
+    //
+    // A picker showing three environments would otherwise start all three so
+    // somebody could glance at the page and pay for it. Attaching is the signal
+    // that a person actually wants this one.
+    //
+    // Deliberately not awaited. The browser has already joined and will get its
+    // snapshot the moment the host dials back in; blocking the socket here
+    // would add the whole wake to the time before anything renders, and a wake
+    // that fails would look like a page that failed.
+    if (environments && waker) {
+      void (async () => {
+        const environment = await environments.find(deviceId).catch(() => null);
+        if (!shouldWakeOnAttach({
+          online: hub.uplinkConnected(deviceId),
+          environment,
+          wakeInFlight: waker.waking(deviceId),
+        })) return;
+        // `environment` is non-null here — shouldWakeOnAttach returns false
+        // without one — but the compiler cannot see that through the helper.
+        if (!environment) return;
+        const outcome = await waker.wake(environment);
+        if (!outcome.ok) {
+          log(`[relay] wake on attach failed for ${deviceId}: ${outcome.kind}`);
+        }
+      })();
+    }
     const bounce = (text: string, submissionId?: string) => {
       try {
         // submissionId is a correlation token only — copied from the refused
