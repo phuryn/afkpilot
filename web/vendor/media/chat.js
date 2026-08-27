@@ -430,6 +430,16 @@
     mentionActive: 0,
     mentionQuery: null,
     pendingDiffByToolCallId: new Map(),
+    // Permission requests whose diff has already been auto-opened once.
+    //
+    // NOT cleared by resetForNewSession, deliberately — like imagePreviews
+    // above. Auto-open is meant to fire when a permission card ARRIVES, and
+    // re-entering a conversation re-renders its pending cards from the
+    // transcript, which is not an arrival. Clearing this per session would
+    // reproduce exactly the bug it fixes: close the proposed diff, switch
+    // chats, come back, and it reopens over the files you were working in
+    // (#132).
+    autoOpenedDiffRequests: new Set(),
     toolItemsByToolCallId: new Map(),
     toolFailuresById: new Map(), // toolCallId → error text, so a single-call group carries it onto the flat
     // Media-gen toolCallIds (isMediaGenToolCall on the initial tool_call). The
@@ -10464,6 +10474,20 @@
     vscode.postMessage(openDiffMessage(diff, requestId));
   }
 
+  /**
+   * Remember that this request's diff has been auto-opened.
+   *
+   * Bounded, because it is never cleared: a long-lived window with thousands of
+   * permissions would otherwise keep every id forever. Sets iterate in
+   * insertion order, so dropping the front drops the oldest — and an id old
+   * enough to be evicted belongs to a card nobody is about to re-render.
+   */
+  function rememberAutoOpenedDiff(requestId) {
+    const seen = state.autoOpenedDiffRequests;
+    seen.add(requestId);
+    while (seen.size > 500) seen.delete(seen.values().next().value);
+  }
+
   function openDiffMessage(diff, requestId) {
     const positionedSites = diff.sites.filter(
       (site) => Number.isInteger(site.oldLine) || Number.isInteger(site.newLine),
@@ -12272,7 +12296,16 @@
       // cover the permission buttons, so previewInApp waits for the tap.
       // Moving a remote transcript on card arrival is disorienting; its
       // explicit tap expands inline.
-      if (!IS_REMOTE && !hostPreviewsInApp()) openDiff();
+      //
+      // ONCE per request, not once per render. This card is rebuilt every time
+      // its conversation is re-entered, and firing again there reopened a diff
+      // the reader had closed — on top of the files they were actually working
+      // in (#132). A new edit is a new request id and still opens, which is the
+      // behaviour that was wanted.
+      if (!IS_REMOTE && !hostPreviewsInApp() && !state.autoOpenedDiffRequests.has(req.id)) {
+        rememberAutoOpenedDiff(req.id);
+        openDiff();
+      }
     }
 
     const { buttons, defaultIndex } =
