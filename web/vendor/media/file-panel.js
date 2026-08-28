@@ -143,7 +143,6 @@
       // on the project you just left must not dim or freeze the one you
       // switched to.
       refreshing: false,
-      expanded: new Set(),
       filter: "",
     };
   }
@@ -1092,7 +1091,7 @@
       // for, so join it rather than racing a second request against it.
       if (state.rootLoad) return state.rootLoad;
       const scopeId = state.scope.id;
-      const remembered = [...state.expanded];
+      const remembered = expandedPaths();
       const scrollTop = tree.scrollTop;
       state.refreshing = true;
       state.rootLoad = (async () => {
@@ -1118,7 +1117,6 @@
           const result = folderResults[index];
           if (result && result.ok) listings.set(relPath, result);
         });
-        pruneRemembered(state, remembered, rootResult, listings);
         state.tree = rootResult;
         renderRootTree(state, listings);
         tree.scrollTop = scrollTop;
@@ -1134,37 +1132,28 @@
     }
 
     /**
-     * Forget folders that are gone, so a deleted one does not cost a request on
-     * every refresh from here on. Only when its parent's listing proves it:
-     * a folder missing from a TRUNCATED listing may simply be past the cut, and
-     * a parent we could not read proves nothing at all.
+     * The folders open ON SCREEN, deepest path last, read from the tree itself.
+     *
+     * Deliberately not a remembered Set. Bookkeeping kept alongside the DOM has
+     * to be corrected at every point the two can diverge — collapsing a parent,
+     * a folder deleted on disk, a listing that failed, a listing truncated
+     * before the folder appeared — and each correction was its own defect. The
+     * tree already knows which folders are open, so ask it: descending only
+     * into expanded nodes means a folder inside a collapsed parent is never
+     * reached, and one no longer on disk is not there to find.
      */
-    function pruneRemembered(state, remembered, rootResult, listings) {
-      // Shallowest first, so a folder is always judged before its children —
-      // and carry the verdict down, because pruning a parent removes the very
-      // listing that would have proved its children gone. Without both, a
-      // deleted subtree keeps costing one request per refresh for ever.
-      const shallowestFirst = [...remembered]
-        .sort((a, b) => a.split("/").length - b.split("/").length);
-      const gone = new Set();
-      const forget = (relPath) => {
-        state.expanded.delete(relPath);
-        listings.delete(relPath);
-        gone.add(relPath);
-      };
-      for (const relPath of shallowestFirst) {
-        const cut = relPath.lastIndexOf("/");
-        const parent = cut >= 0 ? relPath.slice(0, cut) : "";
-        if (parent && gone.has(parent)) {
-          forget(relPath);
-          continue;
+    function expandedPaths() {
+      const out = [];
+      (function walk(container) {
+        for (const node of container.querySelectorAll(":scope > .gfp-node")) {
+          if (node.dataset.kind !== "dir") continue;
+          if (!node.classList.contains("gfp-expanded")) continue;
+          out.push(node.dataset.rel);
+          const children = node.querySelector(":scope > .gfp-children");
+          if (children) walk(children);
         }
-        const parentResult = parent ? listings.get(parent) : rootResult;
-        if (!parentResult || parentResult.truncated) continue;
-        const entries = parentResult.entries || [];
-        if (entries.some((entry) => entry.kind === "dir" && entry.relPath === relPath)) continue;
-        forget(relPath);
-      }
+      })(tree);
+      return out;
     }
 
     /**
@@ -1302,21 +1291,7 @@
       node.classList.toggle("gfp-expanded", opening);
       node.classList.toggle("desk-ft-open", opening);
       lead.innerHTML = opening ? ICON.chevronDown : ICON.chevronRight;
-      if (!opening) {
-        // Descendants go with it. `expanded` is the set of folders open ON
-        // SCREEN, and collapsing a parent closes its whole subtree — keeping
-        // the children would leave entries no refresh can ever resolve, since
-        // the parent's listing is what proves a child gone. Re-expanding does
-        // not restore a child's open state either, so nothing wants them kept.
-        const prefix = entry.relPath + "/";
-        for (const relPath of [...currentState.expanded]) {
-          if (relPath === entry.relPath || relPath.startsWith(prefix)) {
-            currentState.expanded.delete(relPath);
-          }
-        }
-        return;
-      }
-      currentState.expanded.add(entry.relPath);
+      if (!opening) return;
       if (children.dataset.loaded === "1") return;
       appendStatus(children, "Loading…");
       const state = currentState;

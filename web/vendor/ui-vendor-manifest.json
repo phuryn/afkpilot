@@ -25,7 +25,7 @@
     {
       "source": "media/file-panel.js",
       "destination": "media/file-panel.js",
-      "sha256": "9b612bbd1137365f571d76d133d15d913c35d8ce78543c20c5473a92e435621f"
+      "sha256": "be1e37ecb7835682956b681af3a6f080363c789098c1c0cfce67273f1cdb1786"
     },
     {
       "source": "media/syntax-highlight.js",
