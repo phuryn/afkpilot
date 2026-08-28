@@ -96,6 +96,7 @@ Run these commands from `afkpilot`.
 | `npm run gate:ci` | `gate` without `e2e:browser` and without `e2e:lifecycle`. | What the single `gate` job in `.github/workflows/ci.yml` runs on a bare clone. `e2e:browser` needs Clerk credentials; `e2e:lifecycle` needs the sibling extension checkout. Neither absence is covered by another job — the local `npm run gate` before a promote is what covers them. |
 | `npm run smoke -- <url>` | Read-only deployed-service checks: health and public pages/config, link-code shape, expected WebSocket refusals, and download/update reachability. | After a development or production deployment. Pass the URL explicitly. |
 | `npm run smoke:auth -- <url>` | Authenticated canary: real session, link approval, device listing, uplink/client connection, and revocation. | After an authentication-sensitive deployment and before relying on a production promotion. Pass an explicit URL and canary credentials. |
+| `npm run smoke:keepalive -- <url> [busySeconds] [quietSeconds]` | Opens the caller's cloud environment on a real deployment and watches the machine's status through both halves of the promise: used once a minute it must stay `running`; left alone it must fall asleep. ~10 minutes. Needs canary credentials and `SPRITES_TOKEN`. Measured 2026-08-28: `running` for all 300 busy seconds, asleep 60s after the last traffic. | After anything touching the hold, the waker, or what counts as activity. It buys and wakes a real machine, so it is an operator check rather than part of any gate — and it is the only thing that tests the promise the product is sold on, end to end. |
 
 `npm run build` and `npm test` both invoke `check:vendor`. A stale or hand-edited `web/vendor/` therefore fails before TypeScript or Vitest can give a misleading green result.
 
@@ -148,7 +149,7 @@ Add `e2e:browser` when the renderer change affects authentication, linking, shim
 
 ### Before a relay promotion
 
-Run `npm run gate` locally. After the branch deploys, run `npm run smoke -- <url>`; add `smoke:auth` for session, device, entitlement, or WebSocket enforcement changes.
+Run `npm run gate` locally. After the branch deploys, run `npm run smoke -- <url>`; add `smoke:auth` for session, device, entitlement, or WebSocket enforcement changes, and `smoke:keepalive` for anything touching the hold, the waker, or what counts as activity.
 
 ### Before an extension release tag
 
