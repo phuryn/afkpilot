@@ -405,16 +405,37 @@ body.desk-rail-collapsed .desk-rail-open-btn { display: inline-flex; }
   outline-offset: -2px;
 }
 
-.gfp-close { align-self: center; margin: 0 8px 0 auto; }
+.gfp-close { align-self: center; margin: 0 8px 0 0; }
 .gfp-close[hidden] { display: none !important; }
+
+/* Re-list the tree (#134). First of the trailing controls, and the one that
+   carries the auto margin pinning the whole group to the strip's RIGHT edge —
+   .gfp-tabs is display:none while empty, so nothing else grows to do it.
+   Exactly one auto margin may be live or the free space splits between them,
+   which is why maximize and close no longer carry their own. That is safe
+   because this control is hidden ONLY in the viewer, and the viewer always has
+   a tab open, so .gfp-tabs is there to grow instead. */
+.gfp-refresh {
+  align-self: center;
+  margin: 0 4px 0 auto;
+}
+.gfp-refresh[hidden] { display: none !important; }
+.gfp-refresh[disabled] { opacity: 0.5; cursor: default; }
+.gfp-refresh.gfp-busy svg { animation: gfp-spin 900ms linear infinite; }
+@keyframes gfp-spin { to { transform: rotate(360deg); } }
+
+/* The listing that is being replaced stays on screen and dims. Wiping it to
+   "Loading…" first makes a fast refresh flash and a slow one look broken. */
+.gfp-panel.gfp-refreshing .gfp-tree {
+  opacity: 0.45;
+  pointer-events: none;
+}
 
 /* Bar-icon primitive via .gfp-icon-button. Desktop and wide-browser mounts
    opt in via mount.maximize; applyPresentation hides the control in overlay. */
 .gfp-maximize {
   align-self: center;
-  /* Pinned to the strip's RIGHT edge (owner): margin-left auto keeps it there
-     even when the tabs container is empty/display:none and nothing grows. */
-  margin: 0 4px 0 auto;
+  margin: 0 4px 0 0;
 }
 .gfp-maximize[hidden] { display: none !important; }
 
@@ -982,6 +1003,9 @@ body.vscode-light {
 
 @media (prefers-reduced-motion: reduce) {
   .gfp-panel, .gfp-resizer { scroll-behavior: auto; }
+  /* The dimmed tree still says a refresh is running, so the spin is the part
+     that can go. */
+  .gfp-refresh.gfp-busy svg { animation: none; }
 }
 
 /* The action offered inside a "could not open this" tab — the OS route, which

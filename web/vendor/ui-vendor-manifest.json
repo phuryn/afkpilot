@@ -2,9 +2,9 @@
   "version": 1,
   "source": {
     "repository": "grok-build-vscode",
-    "revision": "85f1d0fe4973bd9365d60a683dcb8b7d9ce87e18",
-    "appVersion": "3.19.2",
-    "filesMatchRevision": true
+    "revision": "26627df8c20e319a56e35ec2974ca5e737bc945b",
+    "appVersion": "3.19.3",
+    "filesMatchRevision": false
   },
   "artifacts": [
     {
@@ -20,12 +20,12 @@
     {
       "source": "media/file-panel.css",
       "destination": "media/file-panel.css",
-      "sha256": "38b0025fc323996ab06e52bc28b61e1a9a714ff6a5a84b2a02054d343bad269a"
+      "sha256": "397d436c24bd13cd9587be471f9f701c957211e9bedd01d9527c84f75dd42d73"
     },
     {
       "source": "media/file-panel.js",
       "destination": "media/file-panel.js",
-      "sha256": "85b10ae823779d430ae54c15026408c4b7e51464d66c9bffb8eca95301e78778"
+      "sha256": "b8f9542d3a3ebab48bba2ccc101ec7b48d7ecd4c2611c34ac870c47304710bc4"
     },
     {
       "source": "media/syntax-highlight.js",
