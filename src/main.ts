@@ -240,6 +240,17 @@ if (spritesToken) {
         }
         return true;
       },
+      // A machine installing itself is not being touched from outside, so it
+      // suspends about a minute in and its install FREEZES — which is exactly
+      // what a slow one looks like from here. Measured 2026-08-28: a build's
+      // log ended at t+41s and the machine sat `cold` with an empty install
+      // directory half an hour later. Roughly half of every batch died this
+      // way; the survivors were the ones that happened to finish inside a
+      // minute. Same hold the keep-alive uses, for the same reason.
+      hold: spriteHold({
+        token: spritesToken,
+        apiBase: process.env.SPRITES_API_BASE || undefined,
+      }),
       target: poolSize,
       now: Date.now,
       randomId: () => randomUUID(),

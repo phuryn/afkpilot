@@ -26,14 +26,30 @@
  * turned that into minutes for no benefit; they are independent, so they go
  * together.
  *
- * ## Nothing here watches a build
+ * ## Nothing here watches a build, but something has to keep it ALIVE
  *
  * Starting one is a command whose exit code the filler DOES see — it registers
- * a service — but the install that service then performs takes ~25 minutes, and
- * holding a socket open for that is a bet against the network. So the filler
- * starts a build and forgets it; the machine reports its own readiness later.
+ * a service — but the install that service then performs takes minutes, and
+ * watching it over a socket is a bet against the network. So the filler starts
+ * a build and forgets it; the machine reports its own readiness later.
  * `failStale` exists because from out here "still building" and "died twenty
  * minutes ago" look identical.
+ *
+ * Forgetting it entirely, however, was a bug that hid inside a plausible story.
+ * A sprite suspends about a minute after the last EXTERNAL interaction, and a
+ * machine installing itself is not interacting with anything — so it froze
+ * mid-install, with its own log ending part-way through a line and its install
+ * directory empty. Measured 2026-08-28 on `afkpilot-pool-7ba8da874277`:
+ *
+ *     [23:48:41] install: looking for a published Linux build (t+41s)
+ *     …nothing further, 31 minutes later, status `cold`
+ *
+ * That is why roughly half of every batch "stalled downloading": the ones that
+ * finished were the ones that happened to finish inside a minute. So the filler
+ * now HOLDS each building machine awake — the same mechanism that keeps a
+ * working machine awake for a turn — and lets go the moment the row stops
+ * saying `building`, whether that is because it went ready or because it was
+ * scrapped.
  */
 import {
   FILL_INTERVAL_MS,
@@ -53,6 +69,23 @@ export interface PoolFillerDeps {
    * finished. The machine says that later, when it reports ready.
    */
   startBuild(externalId: string, claimSecret: string): Promise<boolean>;
+  /**
+   * Keep a machine running while it installs itself.
+   *
+   * Optional: without it the filler behaves as it did, which is to say builds
+   * longer than about a minute freeze. Present in production, absent in the
+   * unit tests that only care about the arithmetic.
+   */
+  hold?(externalId: string): { release(): void };
+  /**
+   * The holds currently open, keyed by machine.
+   *
+   * Lives on the deps rather than in a lookup keyed by them, so that spreading
+   * `{...deps, now}` — which the tests and any future caller will do — carries
+   * the same holds rather than silently starting a fresh, leaking set.
+   * `startPoolFiller` creates one; call `sweepPool` directly and you own it.
+   */
+  holds?: Map<string, { release(): void }>;
   target: number;
   now: () => number;
   randomId: () => string;
@@ -77,9 +110,32 @@ export interface SweepResult {
  * later sweep would ever look at it again and the bill would run forever. Two
  * of those existed before this was written.
  */
+/** Let go of everything this filler is holding. Used when it stops. */
+export function releasePoolHolds(deps: PoolFillerDeps): void {
+  const holds = deps.holds;
+  if (!holds) return;
+  for (const [id, h] of holds) {
+    holds.delete(id);
+    try { h.release(); } catch { /* the socket is going either way */ }
+  }
+}
+
 export async function sweepPool(deps: PoolFillerDeps): Promise<SweepResult> {
   const log = deps.log ?? (() => {});
   const now = deps.now();
+  const holds = deps.holds;
+
+  // Let go of anything that is no longer building. A machine that went ready is
+  // finished with us; one that was scrapped no longer exists. Either way a hold
+  // on it is a socket reconnecting for ever against something nobody wants.
+  if (holds && holds.size > 0) {
+    const stillBuilding = new Set(await deps.pool.building().catch(() => [...holds.keys()]));
+    for (const [id, h] of holds) {
+      if (stillBuilding.has(id)) continue;
+      holds.delete(id);
+      try { h.release(); } catch { /* already gone */ }
+    }
+  }
 
   let scrapped = 0;
   for (const id of await deps.pool.staleBuilds(now).catch(() => [])) {
@@ -93,6 +149,14 @@ export async function sweepPool(deps: PoolFillerDeps): Promise<SweepResult> {
     }
     await deps.pool.markFailed(id, "build never reported ready; machine destroyed")
       .catch(() => false);
+    // Released HERE, not on the next sweep's tidy-up: the machine has just been
+    // destroyed, so a hold on it is a socket reconnecting for ever against
+    // something that no longer exists.
+    const h = holds?.get(id);
+    if (h) {
+      holds!.delete(id);
+      try { h.release(); } catch { /* already gone */ }
+    }
     scrapped += 1;
   }
   if (scrapped > 0) log(`[pool] scrapped ${scrapped} build(s) that never reported ready`);
@@ -124,6 +188,17 @@ export async function sweepPool(deps: PoolFillerDeps): Promise<SweepResult> {
         return false;
       }
 
+      // BEFORE the build, not after: the install begins the moment the command
+      // lands, and the machine can suspend inside the first minute of it.
+      if (deps.hold && holds && !holds.has(made.externalId)) {
+        try {
+          holds.set(made.externalId, deps.hold(made.externalId));
+        } catch {
+          // A machine that cannot be held still gets built; it just gets the
+          // old, worse odds. Failing the whole sweep over it would be worse.
+        }
+      }
+
       const kicked = await deps.startBuild(made.externalId, secret).catch(() => false);
       if (!kicked) {
         // The row stays. The machine exists and is paid for either way, and the
@@ -153,6 +228,8 @@ export function startPoolFiller(
   deps: PoolFillerDeps & { intervalMs?: number },
 ): () => void {
   const every = deps.intervalMs ?? FILL_INTERVAL_MS;
+  // One set of holds for this filler's whole life, shared by every sweep.
+  if (!deps.holds) deps.holds = new Map();
   let running = false;
   const tick = async () => {
     // A sweep can outlive its interval — twenty creates against a slow provider
@@ -169,5 +246,10 @@ export function startPoolFiller(
   };
   const timer = setInterval(() => { void tick(); }, every);
   timer.unref?.();
-  return () => clearInterval(timer);
+  return () => {
+    clearInterval(timer);
+    // The stopper owns the holds it opened. Leaving them would mean a relay
+    // that has shut down still paying to keep machines awake.
+    releasePoolHolds(deps);
+  };
 }

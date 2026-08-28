@@ -60,6 +60,15 @@ export interface EnvironmentPoolStore {
    * retry the whole thing next time if the provider was having a bad minute.
    */
   staleBuilds(now: number, timeoutMs?: number): Promise<string[]>;
+  /**
+   * Every machine currently installing itself, stale or not.
+   *
+   * The filler holds these awake — a machine that is not being touched from
+   * outside suspends about a minute in, and a frozen install is exactly what a
+   * slow one looks like. So this answers "who still needs holding", and a name
+   * dropping out of it is what releases the hold.
+   */
+  building(): Promise<string[]>;
   /** Bury one, once its machine is actually gone. */
   markFailed(externalId: string, note: string): Promise<boolean>;
 }
@@ -116,6 +125,12 @@ export class InMemoryEnvironmentPoolStore implements EnvironmentPoolStore {
   async staleBuilds(now: number, timeoutMs = BUILD_TIMEOUT_MS): Promise<string[]> {
     return [...this.rows.values()]
       .filter((r) => r.state === "building" && now - r.createdAt >= timeoutMs)
+      .map((r) => r.externalId);
+  }
+
+  async building(): Promise<string[]> {
+    return [...this.rows.values()]
+      .filter((r) => r.state === "building")
       .map((r) => r.externalId);
   }
 
@@ -198,6 +213,19 @@ export class SupabaseEnvironmentPoolStore implements EnvironmentPoolStore {
       .lte("created_at", cutoff);
     if (error || !data) return [];
     return (data as unknown as { external_id: string }[]).map((r) => r.external_id);
+  }
+
+  async building(): Promise<string[]> {
+    const { data, error } = await this.db
+      .from("environment_pool")
+      .select("external_id")
+      .eq("state", "building");
+    // THROWS on error rather than answering "nobody is building". That answer
+    // would make the filler let go of every hold it has, freezing every install
+    // in flight, on nothing worse than a slow query. The caller keeps what it
+    // is holding until it can find out otherwise.
+    if (error) throw new Error(`environment_pool.building failed: ${error.message}`);
+    return ((data ?? []) as unknown as { external_id: string }[]).map((r) => r.external_id);
   }
 
   async markFailed(externalId: string, note: string): Promise<boolean> {

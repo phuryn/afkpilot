@@ -291,3 +291,108 @@ describe("the timer", () => {
     }
   });
 });
+
+describe("keeping a building machine awake", () => {
+  /**
+   * A machine installing itself is not being touched from outside, so a sprite
+   * suspends about a minute in and the install FREEZES. Measured 2026-08-28 on
+   * `afkpilot-pool-7ba8da874277`: its log ended at `t+41s`, mid-install, and
+   * half an hour later it was `cold` with an empty install directory. That is
+   * why roughly half of every batch "stalled downloading" — the ones that
+   * survived were the ones that happened to finish inside a minute.
+   */
+  function holding(over: Partial<PoolFillerDeps> = {}) {
+    const held: string[] = [];
+    const freed: string[] = [];
+    // The claim secret is generated inside the sweep and never returned, so a
+    // test that wants to mark a build ready has to watch it go in. Guessing it
+    // would leave the row `building`, the hold correctly kept, and a green test
+    // that proved nothing.
+    const secrets = new Map<string, string>();
+    const d = deps({
+      hold: (id: string) => {
+        held.push(id);
+        return { release: () => { freed.push(id); } };
+      },
+      holds: new Map(),
+      ...over,
+    });
+    const add = d.pool.add.bind(d.pool);
+    d.pool.add = async (name: string, secret: string) => {
+      secrets.set(name, secret);
+      return add(name, secret);
+    };
+    return { d, held, freed, secrets };
+  }
+
+  it("holds every machine it starts a build on", async () => {
+    const { d, held } = holding();
+    await sweepPool(d);
+    expect(held.sort()).toEqual([...d.builds].sort());
+    expect(held).toHaveLength(5);
+  });
+
+  it("holds each one once, however many sweeps run", async () => {
+    // The sweep runs every few minutes for the whole length of a build. A hold
+    // per sweep would be a socket per sweep.
+    const { d, held } = holding();
+    await sweepPool(d);
+    await sweepPool(d);
+    await sweepPool(d);
+    expect(held).toHaveLength(5);
+  });
+
+  it("lets go when the machine reports ready", async () => {
+    // It is finished with us, and a hold past that point keeps a shelved
+    // machine running and billing while nobody is using it.
+    const { d, held, freed, secrets } = holding();
+    await sweepPool(d);
+    const [first] = held;
+    expect(await d.pool.markReady(first, secrets.get(first)!, 1_000)).toBe(true);
+    await sweepPool(d);
+    expect(freed).toEqual([first]);
+  });
+
+  it("lets go of a build it scraps", async () => {
+    // The machine is destroyed; a hold on it is a socket reconnecting for ever
+    // against something that no longer exists.
+    const { d, held, freed } = holding({ now: () => 0 });
+    await sweepPool(d);
+    const first = [...held];
+    expect(first).toHaveLength(5);
+    // The same sweep that scraps them also starts replacements, so compare
+    // against the batch that was scrapped rather than everything ever held.
+    await sweepPool({ ...d, now: () => BUILD_TIMEOUT_MS + 1 });
+    expect(freed.sort()).toEqual(first.sort());
+  });
+
+  it("keeps holding when it cannot find out who is building", async () => {
+    // "Nobody is building" is exactly what a failed query says, and acting on
+    // it would let go of every hold at once — freezing every install in flight
+    // over nothing worse than a slow database.
+    const { d, held, freed } = holding();
+    await sweepPool(d);
+    d.pool.building = async () => { throw new Error("db down"); };
+    await sweepPool(d);
+    expect(freed).toEqual([]);
+    expect(held).toHaveLength(5);
+  });
+
+  it("builds anyway when a machine cannot be held", async () => {
+    // Worse odds are not a reason to stop filling the shelf.
+    const d = deps({ hold: () => { throw new Error("no socket"); }, holds: new Map() });
+    await sweepPool(d);
+    expect(d.builds).toHaveLength(5);
+  });
+
+  it("lets go of everything when the filler stops", async () => {
+    // Otherwise a relay that has shut down is still paying to keep machines
+    // awake, and nothing is left that could ever release them.
+    const { d, held, freed } = holding();
+    const stop = startPoolFiller({ ...d, intervalMs: 5 });
+    await sweepPool(d);
+    expect(held).toHaveLength(5);
+    stop();
+    expect(freed.sort()).toEqual([...held].sort());
+  });
+});
