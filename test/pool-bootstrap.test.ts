@@ -230,6 +230,8 @@ describe("updating the host on a machine nobody can walk up to", () => {
     installedAsset?: string;
     unpacks?: boolean;
     lastChecked?: string;
+    /** A download left behind by an earlier attempt, and what it came from. */
+    partial?: { asset: string; bytes: string };
   }) {
     const dir = mkdtempSync(join(tmpdir(), "afkpilot-refresh-"));
     try {
@@ -262,8 +264,14 @@ describe("updating the host on a machine nobody can walk up to", () => {
         "curl() {",
         opts.curlBehaviour,
         "}",
+        ...(opts.partial ? [
+          'mkdir -p "$APP/next"',
+          `printf '%s' "${opts.partial.bytes}" > "$APP/next/afkpilot.AppImage"`,
+          `printf '%s\n' "${opts.partial.asset}" > "$APP/next/.asset"`,
+        ] : []),
         fn,
         "refresh_host_if_stale",
+        '[ -f "$HOST_STAMP" ] || echo STAMP-GONE',
         'ls "$APP" | sort | sed "s/^/APP: /"',
         'echo "APPRUN: $(cat "$APP/squashfs-root/AppRun" 2>/dev/null | tail -1)"',
         'echo "ASSET: $(cat "$ASSET_RECORD" 2>/dev/null)"',
@@ -279,16 +287,25 @@ describe("updating the host on a machine nobody can walk up to", () => {
   }
 
   /** A curl stub that serves a release URL and then a working AppImage. */
-  const workingCurl = (unpacks: boolean) => [
+  /** The release-lookup half, shared by every curl stub below. */
+  const curlLookup = [
     '  local out="" prev=""',
     '  for a in "$@"; do if [ "$prev" = "-o" ]; then out="$a"; fi; prev="$a"; done',
     '  if [ -z "$out" ]; then',
     '    echo \'"browser_download_url": "https://new.example/a-9.9.9-linux-x86_64.AppImage"\'',
     "    return 0",
     "  fi",
+  ];
+
+  /** Serves a release URL, then an AppImage that does or does not unpack. */
+  const workingCurl = (unpacks: boolean) => [
+    ...curlLookup,
     '  printf "#!/bin/sh\nmkdir -p squashfs-root && printf \'#!/bin/sh\\necho new\\n\' > squashfs-root/AppRun && chmod +x squashfs-root/AppRun\n" > "$out"',
     unpacks ? "  return 0" : '  printf "#!/bin/sh\nexit 1\n" > "$out"; return 0',
-  ].join("\n");
+  ].join(String.fromCharCode(10));
+
+  /** Serves a release URL, then fails the download with curl exit 28. */
+  const timingOutCurl = () => [...curlLookup, "  return 28"].join(String.fromCharCode(10));
 
   it("installs a newer build and keeps the machine startable", (ctx) => {
     const bash = bashOr(ctx);
@@ -347,6 +364,46 @@ describe("updating the host on a machine nobody can walk up to", () => {
     });
     expect(out).toContain("APPRUN: echo old");
     expect(out).not.toContain("host update: fetching");
+  });
+
+  it("starts over when the partial came from a DIFFERENT build", (ctx) => {
+    // The resume flag takes its offset from the file on disk and skips that
+    // many bytes of whatever URL comes next — it never checks they are the same
+    // artifact. A timed-out release followed a week later by a new one would
+    // otherwise append the tail of B onto the head of A: a hybrid treated as
+    // finished, failing to unpack, deleted, and not retried for another week.
+    const bash = bashOr(ctx);
+    if (!bash) return;
+    const out = runRefresh(bash, {
+      curlBehaviour: workingCurl(true),
+      partial: { asset: "https://old.example/a-1.0.0-linux-x86_64.AppImage", bytes: "HEAD-OF-A" },
+    });
+    expect(out).toContain("partial belongs to a different build; starting over");
+    expect(out).toContain("host update: installed");
+    expect(out).toContain("APPRUN: echo new");
+  });
+
+  it("keeps a partial that belongs to the build it is fetching", (ctx) => {
+    // Otherwise a slow link restarts from zero every week and never finishes.
+    const bash = bashOr(ctx);
+    if (!bash) return;
+    const out = runRefresh(bash, {
+      curlBehaviour: workingCurl(true),
+      partial: { asset: "https://new.example/a-9.9.9-linux-x86_64.AppImage", bytes: "HEAD-OF-SAME" },
+    });
+    expect(out).not.toContain("starting over");
+  });
+
+  it("does not spend the weekly budget on an unfinished download", (ctx) => {
+    // A half file plus a written stamp is how a slow link never updates: it
+    // waits a week, resumes for two minutes, times out, and waits again.
+    const bash = bashOr(ctx);
+    if (!bash) return;
+    const out = runRefresh(bash, {
+      curlBehaviour: timingOutCurl(),
+    });
+    expect(out).toContain("will resume next boot");
+    expect(out).toContain("STAMP-GONE");
   });
 
   it("does nothing when it checked recently", (ctx) => {

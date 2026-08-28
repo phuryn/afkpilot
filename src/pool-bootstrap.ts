@@ -162,9 +162,28 @@ refresh_host_if_stale() {
   [ "$asset" = "$(cat "$ASSET_RECORD" 2>/dev/null)" ] && return 0
 
   step "host update: fetching $asset"
-  # NOT cleared first: the partial from a previous attempt is what the resume
-  # flag continues from. Only a corrupt unpack clears it.
   mkdir -p "$APP/next" || return 0
+
+  # A PARTIAL BELONGS TO THE ASSET IT CAME FROM.
+  #
+  # The resume flag takes its offset from the file already on disk and skips
+  # that many bytes of whatever URL it is given next. It does not check that the
+  # two are the same artifact. So a release that timed out, followed a week
+  # later by a NEW release, would append the tail of B onto the head of A: a
+  # hybrid that is treated as a finished download, fails to unpack, is deleted,
+  # and — because the weekly stamp was already written — is not retried for
+  # another week. On a link slow enough to need two attempts, which is the exact
+  # case the resume exists to serve, that repeats for ever and the machine never
+  # updates at all.
+  #
+  # So the partial records which asset it is, and a different one starts over.
+  PARTIAL_ID="$APP/next/.asset"
+  if [ -f "$APP/next/afkpilot.AppImage" ] \\
+     && [ "$asset" != "$(cat "$PARTIAL_ID" 2>/dev/null)" ]; then
+    step "host update: partial belongs to a different build; starting over"
+    rm -f "$APP/next/afkpilot.AppImage"
+  fi
+  printf '%s\\n' "$asset" > "$PARTIAL_ID"
   # ONE attempt, and a real bound.
   #
   # The max-time flag is per ATTEMPT and resets on every retry, so four
@@ -181,7 +200,11 @@ refresh_host_if_stale() {
   if ! curl -fL "$asset" -o "$APP/next/afkpilot.AppImage" \\
       --retry 0 --continue-at - \\
       --speed-limit 51200 --speed-time 30 --max-time 120 --silent --show-error; then
-    step "host update: download unfinished; keeping the build we have and what we downloaded"
+    # Un-stamp, so the next boot continues instead of waiting out the week with
+    # a half-downloaded file sitting there. The attempt itself is bounded, so
+    # resuming on each boot costs at most two minutes and makes progress.
+    rm -f "$HOST_STAMP"
+    step "host update: download unfinished; will resume next boot"
     return 0
   fi
   chmod +x "$APP/next/afkpilot.AppImage"
