@@ -1106,8 +1106,17 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         // to find it again. The picker never offers this for a cloud row; this
         // is the API saying the same thing, because a bill with no owner is not
         // something to leave to the UI.
-        if (environments && await environments.find(deviceId).catch(() => null)) {
-          return sendJson(res, 409, { ok: false, error: "cloud-environment" });
+        if (environments) {
+          // Fails CLOSED. Revoking is irreversible and, on a cloud device,
+          // strands a machine that goes on billing — so "the database did not
+          // answer" must not become "it is only a laptop, go ahead".
+          let env: unknown;
+          try {
+            env = await environments.find(deviceId);
+          } catch {
+            return sendJson(res, 503, { ok: false, error: "unavailable" });
+          }
+          if (env) return sendJson(res, 409, { ok: false, error: "cloud-environment" });
         }
         await revokeDevice(deviceId);
         log(`[relay] device ${deviceId} removed by ${claims.userId}`);
@@ -1122,8 +1131,15 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         // Same reason as the DELETE above: a cloud machine's identity was handed
         // TO it by the relay and is not the host's to give up. Discarding it
         // would strand the machine — still running, still billing, unreachable.
-        if (environments && await environments.find(device.deviceId).catch(() => null)) {
-          return sendJson(res, 409, { ok: false, error: "cloud-environment" });
+        if (environments) {
+          // Same as the DELETE above, and for the same reason: fail closed.
+          let env: unknown;
+          try {
+            env = await environments.find(device.deviceId);
+          } catch {
+            return sendJson(res, 503, { ok: false, error: "unavailable" });
+          }
+          if (env) return sendJson(res, 409, { ok: false, error: "cloud-environment" });
         }
         await revokeDevice(device.deviceId);
         log(`[relay] device ${device.deviceId} unlinked by device token`);
@@ -1400,9 +1416,21 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       hub.detachUplink(device.deviceId);
       if (uplinkSockets.get(device.deviceId) === ws) uplinkSockets.delete(device.deviceId);
       log(`[relay] uplink detached: ${device.deviceId}`);
-      // Whatever the clock says, a machine whose host has gone is not working,
-      // and holding a socket open against it buys nothing but a bill.
-      keepAlive?.releaseFor(device.deviceId);
+      // The hold is DELIBERATELY not released here.
+      //
+      // "The uplink dropped" and "the agent stopped working" are not the same
+      // event, and on a cloud machine the difference is the whole product: the
+      // agent runs on the machine, not on this socket. A relay restart or a
+      // network blip would otherwise let go mid-turn, the machine would suspend
+      // about a minute later, and its own reconnect loop would freeze with it —
+      // stalling the turn until somebody came back and woke it by hand. That is
+      // precisely the failure this feature exists to prevent, arriving through
+      // the code that prevents it.
+      //
+      // Doing nothing is safe because the idle sweep already covers the other
+      // case: a host that is really gone sends no frames, and ninety seconds
+      // later the hold lapses on its own. The cost of being wrong is at most
+      // ninety seconds of a machine we were paying for a moment ago.
 
       // WAKE ON DROP — the counterpart to wake-on-attach, and the case that was
       // missing.
@@ -1488,13 +1516,21 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     // attaching WAKES it, arriving at that URL is itself what starts the meter.
     // `remote` gates driving your own laptop; this gates a machine that is ours.
     if (environments && cloudFeature && !mayUseCloud(claims.features, cloudFeature)) {
-      let isCloud = false;
+      let isCloud: boolean;
       try {
         isCloud = (await environments.find(deviceId)) !== null;
-      } catch {
-        // The store is down. Refusing everybody's cloud on a database blip is
-        // worse than the lapsed plan this catches, so fall through — the picker
-        // and /api/cloud/open still hold the line.
+      } catch (e) {
+        // Fails CLOSED, exactly as the device lookup just above it does. An
+        // earlier version fell through on the grounds that a database blip
+        // should not lock everybody out — but the very next thing this socket
+        // does is WAKE the machine, using a second lookup that may well
+        // succeed. Two lookups with two answers is how a lapsed plan gets in
+        // and starts the meter. And the fallthrough bought nothing anyway: the
+        // device lookup reads the same database, so an outage refuses here
+        // regardless.
+        log(`[relay] client environment lookup failed: ${(e as Error).message}`);
+        if (ws.readyState === WebSocket.OPEN) ws.close(1011, "registry error");
+        return;
       }
       if (isCloud) {
         if (ws.readyState !== WebSocket.OPEN) return;

@@ -52,8 +52,16 @@ export interface SpriteExecOptions {
   /** How long to wait for an exit before giving up. */
   timeoutMs?: number;
   /** Injected in tests. */
-  connect?: (url: string, headers: Record<string, string>) => WebSocket;
+  connect?: (url: string, headers: Record<string, string>, handshakeTimeoutMs?: number) => WebSocket;
 }
+
+/**
+ * How long a hold's WebSocket upgrade may take before it is abandoned.
+ *
+ * A hold that never connects is the failure with no symptom: the coordinator
+ * believes the machine is protected, and it suspends mid-turn anyway.
+ */
+export const HOLD_HANDSHAKE_MS = 15_000;
 
 /** Long enough for an apt install to finish, short enough to not hang a sweep. */
 export const EXEC_TIMEOUT_MS = 120_000;
@@ -90,15 +98,24 @@ export function spriteExecUrl(input: {
  *
  * Reconnects on its own, because the whole point is to outlast a long turn and
  * a dropped socket would silently stop paying for the thing it was protecting.
+ *
+ * Releasing does not stop the command instantly: the loop outlives the socket
+ * by roughly five seconds. `max_run_after_disconnect` is documented as the
+ * control for that and was measured on 2026-08-28 to make no difference —
+ * `0s`, `0` and omitting it all behaved identically. A few seconds of a shell
+ * loop on a machine that was about to suspend anyway is not worth a workaround,
+ * so this is recorded rather than fixed.
  */
 export function spriteHold(opts: SpriteExecOptions) {
   const apiBase = opts.apiBase ?? "https://api.sprites.dev";
-  const connect = opts.connect ?? ((url, headers) => new WebSocket(url, { headers }));
+  const connect = opts.connect
+    ?? ((url, headers, handshakeTimeout) => new WebSocket(url, { headers, handshakeTimeout }));
 
   return function hold(name: string): { release(): void } {
     let released = false;
     let ws: WebSocket | undefined;
     let retry: NodeJS.Timeout | undefined;
+    let watchdog: NodeJS.Timeout | undefined;
 
     const open = () => {
       if (released) return;
@@ -108,14 +125,34 @@ export function spriteHold(opts: SpriteExecOptions) {
         argv: ["sh", "-c", "while true; do echo .; sleep 5; done"],
       });
       try {
-        ws = connect(url, { authorization: `Bearer ${opts.token}` });
+        ws = connect(url, { authorization: `Bearer ${opts.token}` }, HOLD_HANDSHAKE_MS);
       } catch {
         schedule();
         return;
       }
-      ws.on("error", () => { /* close follows */ });
-      ws.on("close", () => {
-        ws = undefined;
+      const socket = ws;
+      // A CONNECTION THAT NEVER FINISHES IS THE DANGEROUS ONE.
+      //
+      // Retries hang off `close`, so a socket that stalls mid-upgrade and emits
+      // neither `open` nor `close` is never retried — and the coordinator, which
+      // records the handle synchronously, goes on reporting the machine as held.
+      // Every heartbeat then refreshes a hold that does not exist and the
+      // machine suspends mid-turn anyway, which is worse than no hold at all
+      // because nothing looks wrong. `handshakeTimeout` covers the upgrade; this
+      // covers everything else that can swallow it.
+      watchdog = setTimeout(() => {
+        if (socket.readyState !== WebSocket.OPEN) {
+          try { socket.close(); } catch { /* already gone */ }
+          schedule();
+        }
+      }, HOLD_HANDSHAKE_MS + 5_000);
+      watchdog.unref?.();
+      const clearWatchdog = () => { if (watchdog) { clearTimeout(watchdog); watchdog = undefined; } };
+      socket.on("open", clearWatchdog);
+      socket.on("error", () => { /* close follows */ });
+      socket.on("close", () => {
+        clearWatchdog();
+        if (ws === socket) ws = undefined;
         // A hold that quietly stopped holding is worse than no hold: the caller
         // believes the machine is protected while it suspends mid-turn.
         schedule();
@@ -134,6 +171,7 @@ export function spriteHold(opts: SpriteExecOptions) {
       release() {
         released = true;
         if (retry) { clearTimeout(retry); retry = undefined; }
+        if (watchdog) { clearTimeout(watchdog); watchdog = undefined; }
         try { ws?.close(); } catch { /* already gone */ }
         ws = undefined;
       },

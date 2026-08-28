@@ -105,3 +105,17 @@ describe("attaching to a machine we pay for", () => {
     expect(await attach(laptop.deviceId)).toBe(0);
   });
 });
+
+describe("when the database will not answer", () => {
+  it("refuses rather than admitting", async () => {
+    // Fails closed, exactly as the device lookup beside it does. Falling
+    // through looks kinder until you notice what the socket does next: it
+    // WAKES the machine, with a second lookup that may well succeed. Two
+    // lookups with two answers is how a lapsed plan gets in and starts the
+    // meter — and the fallthrough bought nothing anyway, since the device
+    // lookup reads the same database and would refuse regardless.
+    const d = await cloudDevice();
+    environments.find = async () => { throw new Error("supabase down"); };
+    expect(await attach(d.deviceId)).toBe(1011);
+  });
+});

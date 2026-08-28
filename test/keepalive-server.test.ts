@@ -139,9 +139,17 @@ describe("what starts a hold", () => {
 });
 
 describe("what ends one", () => {
-  it("releases when the uplink goes", async () => {
-    // Every hold is a machine being billed. A host that disconnected is not
-    // working, whatever its idle clock says.
+  it("KEEPS holding when the uplink goes, and lets the idle sweep decide", async () => {
+    // "The uplink dropped" and "the agent stopped working" are not the same
+    // event: the agent runs on the machine, not on this socket. Releasing here
+    // meant a relay restart or a network blip let go mid-turn — the machine
+    // suspended a minute later and its own reconnect loop froze with it, which
+    // is the exact failure this feature exists to prevent, arriving through the
+    // code that prevents it.
+    //
+    // A host that is really gone sends no frames, so the sweep releases it
+    // ninety seconds later. Being wrong costs ninety seconds of a machine we
+    // were paying for a moment ago.
     const d = await cloudDevice("sprite-gone");
     const ws = await openUplink(d.token);
     ws.send(JSON.stringify({ t: "working" }));
@@ -149,12 +157,17 @@ describe("what ends one", () => {
     expect(holds).toEqual(["sprite-gone"]);
     ws.close();
     await settle();
+    expect(releases).toEqual([]);
+    expect(keepAlive.holding(d.deviceId)).toBe(true);
+    // ...and the sweep is what ends it.
+    keepAlive.releaseAll();
     expect(releases).toEqual(["sprite-gone"]);
-    expect(keepAlive.size()).toBe(0);
   });
 
-  it("re-holds when the machine comes back", async () => {
-    // Reconnects are ordinary — a sleeping machine that is woken reconnects.
+  it("reuses the same hold across a reconnect", async () => {
+    // Reconnects are ordinary — a woken machine reconnects, and so does one
+    // whose network blinked. The hold survives it, which is the point: opening
+    // a second one would mean the first had been dropped mid-turn.
     const d = await cloudDevice("sprite-again");
     const first = await openUplink(d.token);
     first.send(JSON.stringify({ t: "working" }));
@@ -164,8 +177,8 @@ describe("what ends one", () => {
     const second = await openUplink(d.token);
     second.send(JSON.stringify({ t: "working" }));
     await settle();
-    expect(holds).toEqual(["sprite-again", "sprite-again"]);
-    expect(releases).toEqual(["sprite-again"]);
+    expect(holds).toEqual(["sprite-again"]);
+    expect(releases).toEqual([]);
     second.close();
   });
 });

@@ -137,10 +137,20 @@ const toRecord = (r: EnvironmentRow): EnvironmentRecord => ({
 export class SupabaseEnvironmentStore implements EnvironmentStore {
   constructor(private readonly db: SupabaseClient) {}
 
+  /**
+   * `null` means there is no environment. An error THROWS.
+   *
+   * The two were the same answer once, and that is a fail-open: "this device is
+   * not a cloud machine" is exactly what a database blip would say, and it is
+   * the answer that unlinks a machine or admits a lapsed plan. Callers that can
+   * safely guess are free to catch; the ones that cannot must not be told a
+   * comfortable lie.
+   */
   async find(deviceId: string): Promise<EnvironmentRecord | null> {
     const { data, error } = await this.db
       .from("environments").select(COLS).eq("device_id", deviceId).maybeSingle();
-    if (error || !data) return null;
+    if (error) throw new Error(`environments.find failed: ${error.message}`);
+    if (!data) return null;
     return toRecord(data as unknown as EnvironmentRow);
   }
 

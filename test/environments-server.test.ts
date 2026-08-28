@@ -268,6 +268,20 @@ describe("a cloud environment cannot be removed out from under its machine", () 
     expect(await rowFor(d.deviceId)).toBeTruthy();
   });
 
+  it("refuses rather than guesses when the database is down", async () => {
+    // The failure this whole guard exists to prevent, arriving through the
+    // guard: "there is no environment" is exactly what a database blip says,
+    // and revoking is irreversible. So the lookup fails CLOSED — a removal that
+    // waits is recoverable; one that strands a billing machine is not.
+    const d = await makeDevice();
+    await h.environments.create({
+      deviceId: d.deviceId, userId: MOCK_USER_ID, provider: "sprite", externalId: "s1",
+    });
+    h.environments.find = async () => { throw new Error("supabase down"); };
+    expect((await del(d.deviceId)).status).toBe(503);
+    expect(await rowFor(d.deviceId)).toBeTruthy();
+  });
+
   it("still removes an ordinary laptop", async () => {
     // The guard must not cost everybody else the operation they do have.
     const d = await makeDevice("Laptop");
