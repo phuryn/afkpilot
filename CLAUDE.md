@@ -58,9 +58,10 @@ npm run e2e:legacy  # /chat against a v2.0.4-only host — the compatibility con
 npm run e2e:screens # real Chromium, two viewports, screenshot gates
 npm run e2e:downloads # /desktop with the GitHub Releases API stubbed
 npm run gate        # ALL of the above — mandatory before promoting to production
-npm run gate:ci     # what CI runs: gate minus e2e:browser (needs Clerk keys) and
-                    # e2e:lifecycle (needs the sibling checkout) — both covered
-                    # by their own jobs, so gate:ci is a strict subset of gate
+npm run gate:ci     # what CI runs, and a strict subset of gate: no e2e:browser
+                    # (needs Clerk keys) and no e2e:lifecycle (needs the sibling
+                    # checkout). NOTHING in CI covers those two — the local gate
+                    # before a promote is the only thing that does.
 npm start           # http://127.0.0.1:8787 (RELAY_HOST / RELAY_PORT env)
 ```
 

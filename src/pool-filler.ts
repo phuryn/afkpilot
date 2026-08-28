@@ -86,6 +86,8 @@ export interface PoolFillerDeps {
    * `startPoolFiller` creates one; call `sweepPool` directly and you own it.
    */
   holds?: Map<string, { release(): void }>;
+  /** See {@link failedLaunches}. Created on first use; carried by a spread. */
+  failedLaunches?: Set<string>;
   target: number;
   now: () => number;
   randomId: () => string;
@@ -110,6 +112,20 @@ export interface SweepResult {
  * later sweep would ever look at it again and the bill would run forever. Two
  * of those existed before this was written.
  */
+/**
+ * Machines whose build command never went out.
+ *
+ * Their rows still say `building` — deliberately, so the stale sweep destroys
+ * them — but nothing is installing behind them, so they must not be adopted and
+ * held awake. Lives on the deps beside `holds`, and for the same reason: a
+ * lookup keyed by the deps object silently starts fresh when somebody writes
+ * `{...deps, now}`, which is how the first version of `holds` leaked.
+ */
+function failedLaunches(deps: PoolFillerDeps): Set<string> {
+  if (!deps.failedLaunches) deps.failedLaunches = new Set();
+  return deps.failedLaunches;
+}
+
 /** Let go of everything this filler is holding. Used when it stops. */
 export function releasePoolHolds(deps: PoolFillerDeps): void {
   const holds = deps.holds;
@@ -128,12 +144,40 @@ export async function sweepPool(deps: PoolFillerDeps): Promise<SweepResult> {
   // Let go of anything that is no longer building. A machine that went ready is
   // finished with us; one that was scrapped no longer exists. Either way a hold
   // on it is a socket reconnecting for ever against something nobody wants.
-  if (holds && holds.size > 0) {
-    const stillBuilding = new Set(await deps.pool.building().catch(() => [...holds.keys()]));
-    for (const [id, h] of holds) {
-      if (stillBuilding.has(id)) continue;
-      holds.delete(id);
-      try { h.release(); } catch { /* already gone */ }
+  if (holds && deps.hold) {
+    // ADOPT, then let go. Adoption is the half that is easy to miss and the
+    // half that matters most: a deploy or a crash takes this process's hold
+    // sockets with it, and the replacement starts with an empty map. Without
+    // adopting the rows that were already building, every install in flight
+    // across a deploy freezes about a minute later and stays frozen until the
+    // stale sweep destroys it an hour on — which is exactly the failure this
+    // whole mechanism exists to prevent, and deploys are when it is most
+    // likely to happen.
+    let building: string[] | null = null;
+    try {
+      building = await deps.pool.building();
+    } catch {
+      // "Nobody is building" is what a failed query says, and acting on it
+      // would drop every hold at once. Keep what we have and try next sweep.
+      building = null;
+    }
+    if (building) {
+      const stillBuilding = new Set(building);
+      const bad = failedLaunches(deps);
+      for (const id of stillBuilding) {
+        // Not the ones whose build command never went out: those rows say
+        // `building` and nothing is installing behind them.
+        if (holds.has(id) || bad.has(id)) continue;
+        try {
+          holds.set(id, deps.hold(id));
+          log(`[pool] adopted ${id}; holding it awake`);
+        } catch { /* it still gets the old, worse odds */ }
+      }
+      for (const [id, h] of holds) {
+        if (stillBuilding.has(id)) continue;
+        holds.delete(id);
+        try { h.release(); } catch { /* already gone */ }
+      }
     }
   }
 
@@ -205,6 +249,18 @@ export async function sweepPool(deps: PoolFillerDeps): Promise<SweepResult> {
         // stale sweep is a better place to decide it is hopeless than a `catch`
         // that has no idea whether the command half-ran.
         log(`[pool] ${made.externalId} created but the build command did not go out`);
+        // But STOP HOLDING IT. Nothing is installing, so the hold would keep a
+        // machine running and billing for the full hour until the stale sweep
+        // reached it — and if the failure is systematic, that is the entire
+        // pool target burning at once. Remembered, not just released, because
+        // the row is still `building` and adoption would otherwise pick it
+        // straight back up on the next sweep.
+        failedLaunches(deps).add(made.externalId);
+        const h = holds?.get(made.externalId);
+        if (h) {
+          holds!.delete(made.externalId);
+          try { h.release(); } catch { /* already gone */ }
+        }
       }
       return true;
     }),

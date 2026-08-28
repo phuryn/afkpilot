@@ -106,6 +106,74 @@ refresh_agents_if_stale() {
   date +%s > "$AGENTS_STAMP"
 }
 
+HOST_STAMP="$APP/.afkpilot-host-checked"
+ASSET_RECORD="$APP/.afkpilot-asset"
+
+# Keep the HOST current too, for the same reason as the CLIs and with a sharper
+# edge: the install was one-shot, so a machine took whatever build existed on
+# the day it was made and kept it for ever. Nobody can walk up to a cloud
+# machine and press update, so a fix shipped here would never reach anybody
+# already using one — which is the same outcome as never shipping it.
+#
+# NON-DESTRUCTIVE, unlike the first install. The new build is unpacked BESIDE
+# the running one and swapped in only once its AppRun exists; anything short of
+# that leaves the machine exactly as it was. A cloud environment that fails to
+# update is a machine a week behind. One that deletes its own host is a machine
+# somebody has lost.
+#
+# Same timing rule as the CLIs: at boot, before the host starts, never while a
+# turn is in flight.
+refresh_host_if_stale() {
+  [ -f "$ENVFILE" ] || return 0          # unclaimed: the build already did it
+  [ "$(cat "$APP/.afkpilot-kind" 2>/dev/null)" = "appimage" ] || return 0
+  local last=0
+  [ -f "$HOST_STAMP" ] && last=$(cat "$HOST_STAMP" 2>/dev/null || echo 0)
+  local now; now=$(date +%s)
+  [ $((now - last)) -lt "$AGENT_MAX_AGE" ] && return 0
+  # Stamped BEFORE the work: a release whose asset cannot be fetched must not
+  # make every wake for the rest of the week retry the whole download.
+  date +%s > "$HOST_STAMP"
+
+  local asset
+  asset=$(curl -fsSL --max-time 60 https://api.github.com/repos/phuryn/grok-build-vscode/releases/latest \\
+    | grep -o '"browser_download_url": *"[^"]*\\.AppImage"' \\
+    | head -1 | sed 's/.*"\\(https[^"]*\\)"/\\1/')
+  [ -n "\${asset:-}" ] || { step "host update: no published build found"; return 0; }
+  # The URL carries the version, so an unchanged one means there is nothing to
+  # do — and finding that out costs one small request instead of 110 MB.
+  [ "$asset" = "$(cat "$ASSET_RECORD" 2>/dev/null)" ] && return 0
+
+  step "host update: fetching $asset"
+  rm -rf "$APP/next"; mkdir -p "$APP/next" || return 0
+  if ! curl -fL "$asset" -o "$APP/next/afkpilot.AppImage" \\
+      --retry 4 --retry-delay 5 --retry-all-errors --continue-at - \\
+      --speed-limit 51200 --speed-time 60 --max-time 900 --silent --show-error; then
+    step "host update: download failed; keeping the build we have"
+    rm -rf "$APP/next"; return 0
+  fi
+  chmod +x "$APP/next/afkpilot.AppImage"
+  if ! (cd "$APP/next" && ./afkpilot.AppImage --appimage-extract >/dev/null 2>&1) \\
+     || [ ! -x "$APP/next/squashfs-root/AppRun" ]; then
+    step "host update: did not unpack; keeping the build we have"
+    rm -rf "$APP/next"; return 0
+  fi
+
+  # The swap. Only now is the running build touched at all.
+  rm -rf "$APP/squashfs-root.old"
+  mv "$APP/squashfs-root" "$APP/squashfs-root.old" 2>/dev/null || true
+  if mv "$APP/next/squashfs-root" "$APP/squashfs-root"; then
+    mv "$APP/next/afkpilot.AppImage" "$APP/afkpilot.AppImage" 2>/dev/null || true
+    printf '%s\\n' "$asset" > "$ASSET_RECORD"
+    rm -rf "$APP/next" "$APP/squashfs-root.old"
+    step "host update: installed"
+  else
+    # Put it back. A machine with no host is worse than a stale one.
+    mv "$APP/squashfs-root.old" "$APP/squashfs-root" 2>/dev/null || true
+    rm -rf "$APP/next"
+    step "host update: swap failed; kept the build we have"
+  fi
+}
+
 step "boot"
 
 if [ ! -f "$STAMP" ]; then
@@ -158,6 +226,10 @@ if [ ! -f "$STAMP" ]; then
       if (cd "$APP" && ./afkpilot.AppImage --appimage-extract >/dev/null 2>&1) \\
          && [ -x "$APP/squashfs-root/AppRun" ]; then
         echo appimage > "$APP/.afkpilot-kind"
+        # What we installed, so a later refresh can tell "already current" from
+        # "never checked" without downloading 110 MB to find out.
+        printf '%s\\n' "$ASSET" > "$APP/.afkpilot-asset"
+        date +%s > "$APP/.afkpilot-host-checked"
         step "install: unpacked"
       else
         # A truncated or corrupt download extracts to nothing. Say so, and let
@@ -228,6 +300,7 @@ while [ ! -f "$ENVFILE" ]; do sleep 5; done
 
 set -a; . "$ENVFILE"; set +a
 refresh_agents_if_stale
+refresh_host_if_stale
 cd "$APP" || exit 73
 
 pkill -f "Xvfb :99" 2>/dev/null || true

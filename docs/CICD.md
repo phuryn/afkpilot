@@ -6,7 +6,9 @@ The repositories ship differently. The relay uses branch-connected deployment se
 
 ### Relay pull requests
 
-Pushes and pull requests targeting `main` (and pushes to `production`) run `.github/workflows/ci.yml`: Node.js 20, locked dependencies, a Chromium install for Playwright, then `npm run gate:ci`, plus a separate `lifecycle` job that also checks out `phuryn/grok-build-vscode` (public, no secrets) and runs the cross-repo host-restart e2e under `xvfb-run`.
+Pushes and pull requests targeting `main` (and pushes to `production`) run `.github/workflows/ci.yml`: Node.js 20, locked dependencies, a Chromium install for Playwright, then `npm run gate:ci`. That is the whole workflow — one job.
+
+Two suites are therefore **not** covered by CI at all: `e2e:browser` needs Clerk credentials, and `e2e:lifecycle` needs a checkout of `phuryn/grok-build-vscode`. The local `npm run gate` before a promote is the only thing that runs them, which makes running it a real gate rather than a formality.
 
 `gate:ci` is `gate` minus `e2e:browser` and minus `e2e:lifecycle`. `e2e:browser` drives the real Clerk sign-in modal and needs the dev Clerk and Supabase keys; without them the relay starts in mock mode and the suite fails its Clerk check, so it cannot run unattended without repository secrets. `e2e:lifecycle` needs a checkout of `phuryn/grok-build-vscode` (real desktop host) and runs in its own job. Everything else blanks its credentials deliberately and is hermetic.
 

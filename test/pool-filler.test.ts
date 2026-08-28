@@ -396,3 +396,59 @@ describe("keeping a building machine awake", () => {
     expect(freed.sort()).toEqual([...held].sort());
   });
 });
+
+describe("holds across a restart, and holds nothing is using", () => {
+  function holding(over: Partial<PoolFillerDeps> = {}) {
+    const held: string[] = [];
+    const freed: string[] = [];
+    const d = deps({
+      hold: (id: string) => { held.push(id); return { release: () => { freed.push(id); } }; },
+      holds: new Map(),
+      ...over,
+    });
+    return { d, held, freed };
+  }
+
+  it("adopts builds that were already running when it started", async () => {
+    // A deploy or a crash takes this process's hold sockets with it and the
+    // replacement starts with an empty map. Without adoption every install in
+    // flight across a deploy freezes about a minute later and stays frozen
+    // until the stale sweep destroys it an hour on — and a deploy is exactly
+    // when builds are most likely to be in flight.
+    const { d, held } = holding({ target: 0 });
+    await d.pool.add("afkpilot-pool-orphaned", "s");
+    await sweepPool(d);
+    expect(held).toEqual(["afkpilot-pool-orphaned"]);
+  });
+
+  it("adopts each one only once", async () => {
+    const { d, held } = holding({ target: 0 });
+    await d.pool.add("afkpilot-pool-orphaned", "s");
+    await sweepPool(d);
+    await sweepPool(d);
+    await sweepPool(d);
+    expect(held).toEqual(["afkpilot-pool-orphaned"]);
+  });
+
+  it("lets go when the build command never went out", async () => {
+    // The row deliberately stays `building` so the stale sweep destroys the
+    // machine — but nothing is installing behind it, so holding it awake would
+    // burn an hour of a machine doing nothing. Systematically, that is the
+    // whole pool target burning at once.
+    const { d, held, freed } = holding({ startBuild: async () => false });
+    await sweepPool(d);
+    expect(held).toHaveLength(5);
+    expect(freed.sort()).toEqual([...held].sort());
+  });
+
+  it("does not adopt one back after its launch failed", async () => {
+    // Otherwise the release above is undone by the next sweep, which sees a row
+    // that still says `building` and cannot tell the difference.
+    const { d, held, freed } = holding({ startBuild: async () => false, target: 5 });
+    await sweepPool(d);
+    const firstRound = held.length;
+    await sweepPool({ ...d, target: 0 });
+    expect(held).toHaveLength(firstRound);
+    expect(freed).toHaveLength(firstRound);
+  });
+});

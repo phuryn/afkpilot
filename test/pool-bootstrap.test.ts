@@ -199,3 +199,165 @@ describe("what it is told, and what it is not", () => {
     expect(script).toContain('while [ ! -f "$ENVFILE" ]; do sleep 5; done');
   });
 });
+
+describe("updating the host on a machine nobody can walk up to", () => {
+  /**
+   * `refresh_host_if_stale` is the one function here that can destroy a working
+   * machine, so it is RUN rather than read. The script's own function is
+   * extracted and executed against stub `curl`/`step` and a fake $APP tree —
+   * asserting on the tree that is left behind, which is the thing that decides
+   * whether somebody's environment still starts tomorrow.
+   */
+  function bashOr(ctx: { skip(): void }): string | null {
+    try {
+      execFileSync("bash", ["--version"], { stdio: "ignore" });
+      return "bash";
+    } catch {
+      ctx.skip();
+      return null;
+    }
+  }
+
+  /**
+   * Run the function in isolation.
+   *
+   * `curlBehaviour` is the body of a stub `curl`, which stands in for both the
+   * release lookup and the download. Returns the resulting `$APP` listing plus
+   * the log the script wrote.
+   */
+  function runRefresh(bash: string, opts: {
+    curlBehaviour: string;
+    installedAsset?: string;
+    unpacks?: boolean;
+    lastChecked?: string;
+  }) {
+    const dir = mkdtempSync(join(tmpdir(), "afkpilot-refresh-"));
+    try {
+      // Everything from the function definition to its closing brace.
+      const start = script.indexOf("refresh_host_if_stale() {");
+      expect(start).toBeGreaterThan(-1);
+      const end = script.indexOf("\n}\n", start);
+      const fn = script.slice(start, end + 3);
+
+      const harness = [
+        "#!/usr/bin/env bash",
+        "set -u",
+        `APP="${dir.split(String.fromCharCode(92)).join("/")}/afkpilot"`,
+        `ENVFILE="${dir.split(String.fromCharCode(92)).join("/")}/env"`,
+        "AGENT_MAX_AGE=604800",
+        'HOST_STAMP="$APP/.afkpilot-host-checked"',
+        'ASSET_RECORD="$APP/.afkpilot-asset"',
+        'step() { echo "$*" >> "$APP/log"; }',
+        // The existing, working installation.
+        'mkdir -p "$APP/squashfs-root"',
+        'printf "#!/bin/sh\necho old\n" > "$APP/squashfs-root/AppRun"',
+        'chmod +x "$APP/squashfs-root/AppRun"',
+        'echo appimage > "$APP/.afkpilot-kind"',
+        'touch "$ENVFILE"',
+        `printf '%s\n' "${opts.installedAsset ?? "https://old.example/a-1.0.0-linux-x86_64.AppImage"}" > "$ASSET_RECORD"`,
+        `echo "${opts.lastChecked ?? "0"}" > "$HOST_STAMP"`,
+        // Stubs. `curl` covers both the API lookup and the download; the
+        // downloaded "AppImage" is a script whose --appimage-extract either
+        // produces a working squashfs-root or does not.
+        "curl() {",
+        opts.curlBehaviour,
+        "}",
+        fn,
+        "refresh_host_if_stale",
+        'ls "$APP" | sort | sed "s/^/APP: /"',
+        'echo "APPRUN: $(cat "$APP/squashfs-root/AppRun" 2>/dev/null | tail -1)"',
+        'echo "ASSET: $(cat "$ASSET_RECORD" 2>/dev/null)"',
+        'echo "LOG: $(cat "$APP/log" 2>/dev/null | tr "\n" ";")"',
+      ].join("\n");
+
+      const path = join(dir, "harness.sh");
+      writeFileSync(path, harness);
+      return execFileSync(bash, [path], { encoding: "utf8" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  /** A curl stub that serves a release URL and then a working AppImage. */
+  const workingCurl = (unpacks: boolean) => [
+    '  local out="" prev=""',
+    '  for a in "$@"; do if [ "$prev" = "-o" ]; then out="$a"; fi; prev="$a"; done',
+    '  if [ -z "$out" ]; then',
+    '    echo \'"browser_download_url": "https://new.example/a-9.9.9-linux-x86_64.AppImage"\'',
+    "    return 0",
+    "  fi",
+    '  printf "#!/bin/sh\nmkdir -p squashfs-root && printf \'#!/bin/sh\\necho new\\n\' > squashfs-root/AppRun && chmod +x squashfs-root/AppRun\n" > "$out"',
+    unpacks ? "  return 0" : '  printf "#!/bin/sh\nexit 1\n" > "$out"; return 0',
+  ].join("\n");
+
+  it("installs a newer build and keeps the machine startable", (ctx) => {
+    const bash = bashOr(ctx);
+    if (!bash) return;
+    const out = runRefresh(bash, { curlBehaviour: workingCurl(true) });
+    expect(out).toContain("APPRUN: echo new");
+    expect(out).toContain("ASSET: https://new.example/a-9.9.9-linux-x86_64.AppImage");
+    expect(out).toContain("host update: installed");
+    // No debris left where the next refresh would trip over it.
+    expect(out).not.toContain("APP: next");
+    expect(out).not.toContain("APP: squashfs-root.old");
+  });
+
+  it("KEEPS the old build when the download fails", (ctx) => {
+    // The property that matters. A machine a week behind is a nuisance; a
+    // machine that deleted its own host is one somebody has lost, and nobody
+    // can walk up to it and fix that.
+    const bash = bashOr(ctx);
+    if (!bash) return;
+    const out = runRefresh(bash, {
+      curlBehaviour: [
+        '  local out="" prev=""',
+        '  for a in "$@"; do if [ "$prev" = "-o" ]; then out="$a"; fi; prev="$a"; done',
+        '  if [ -z "$out" ]; then',
+        '    echo \'"browser_download_url": "https://new.example/a-9.9.9-linux-x86_64.AppImage"\'',
+        "    return 0",
+        "  fi",
+        "  return 22",
+      ].join("\n"),
+    });
+    expect(out).toContain("APPRUN: echo old");
+    expect(out).toContain("host update: download failed");
+    expect(out).not.toContain("APP: next");
+  });
+
+  it("KEEPS the old build when the new one will not unpack", (ctx) => {
+    // A truncated download extracts to nothing, and swapping that in would
+    // leave an AppRun that does not exist.
+    const bash = bashOr(ctx);
+    if (!bash) return;
+    const out = runRefresh(bash, { curlBehaviour: workingCurl(false) });
+    expect(out).toContain("APPRUN: echo old");
+    expect(out).toContain("host update: did not unpack");
+    expect(out).not.toContain("APP: next");
+  });
+
+  it("does nothing when the published build is the one already installed", (ctx) => {
+    // Otherwise every machine re-downloads 110 MB a week to arrive where it is.
+    const bash = bashOr(ctx);
+    if (!bash) return;
+    const out = runRefresh(bash, {
+      curlBehaviour: workingCurl(true),
+      installedAsset: "https://new.example/a-9.9.9-linux-x86_64.AppImage",
+    });
+    expect(out).toContain("APPRUN: echo old");
+    expect(out).not.toContain("host update: fetching");
+  });
+
+  it("does nothing when it checked recently", (ctx) => {
+    // Waking a machine you use daily must not be a download every time.
+    const bash = bashOr(ctx);
+    if (!bash) return;
+    const out = runRefresh(bash, {
+      curlBehaviour: workingCurl(true),
+      lastChecked: String(Math.floor(Date.now() / 1000)),
+    });
+    expect(out).toContain("APPRUN: echo old");
+    // Not even the release lookup: the age check comes first, so a daily wake
+    // costs nothing at all.
+    expect(out).not.toContain("host update:");
+  });
+});
