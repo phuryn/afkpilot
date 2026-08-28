@@ -139,6 +139,10 @@
       activeRelPath: null,
       tree: null,
       rootLoad: null,
+      // Per-scope, because the panel element is shared: a refresh left running
+      // on the project you just left must not dim or freeze the one you
+      // switched to.
+      refreshing: false,
       expanded: new Set(),
       filter: "",
     };
@@ -601,6 +605,13 @@
       // would ask for the same thing twice.
       refreshBtn.disabled = !currentState || !!currentState.rootLoad;
       refreshBtn.classList.toggle("gfp-busy", !!(currentState && currentState.rootLoad));
+      // Read from the scope on screen, never left behind by the one that
+      // started it. `rootEl` is shared, and a refresh whose requests are still
+      // outstanding on a project you have left would otherwise dim — and, via
+      // pointer-events, freeze — the project you moved to. The adapters ignore
+      // the abort signal, so that wait is 30s on a remote and open-ended on
+      // the desk.
+      rootEl.classList.toggle("gfp-refreshing", !!(currentState && currentState.refreshing));
       if (refreshBtn.hidden !== wasHidden) applyStripShrink();
     }
 
@@ -1083,7 +1094,7 @@
       const scopeId = state.scope.id;
       const remembered = [...state.expanded];
       const scrollTop = tree.scrollTop;
-      rootEl.classList.add("gfp-refreshing");
+      state.refreshing = true;
       state.rootLoad = (async () => {
         const [rootResult, ...folderResults] = await Promise.all([
           callAccess("list", scopeId, ""),
@@ -1117,7 +1128,7 @@
         await state.rootLoad;
       } finally {
         state.rootLoad = null;
-        rootEl.classList.remove("gfp-refreshing");
+        state.refreshing = false;
         paintRefresh();
       }
     }
@@ -1129,15 +1140,30 @@
      * a parent we could not read proves nothing at all.
      */
     function pruneRemembered(state, remembered, rootResult, listings) {
-      for (const relPath of remembered) {
+      // Shallowest first, so a folder is always judged before its children —
+      // and carry the verdict down, because pruning a parent removes the very
+      // listing that would have proved its children gone. Without both, a
+      // deleted subtree keeps costing one request per refresh for ever.
+      const shallowestFirst = [...remembered]
+        .sort((a, b) => a.split("/").length - b.split("/").length);
+      const gone = new Set();
+      const forget = (relPath) => {
+        state.expanded.delete(relPath);
+        listings.delete(relPath);
+        gone.add(relPath);
+      };
+      for (const relPath of shallowestFirst) {
         const cut = relPath.lastIndexOf("/");
         const parent = cut >= 0 ? relPath.slice(0, cut) : "";
+        if (parent && gone.has(parent)) {
+          forget(relPath);
+          continue;
+        }
         const parentResult = parent ? listings.get(parent) : rootResult;
         if (!parentResult || parentResult.truncated) continue;
         const entries = parentResult.entries || [];
         if (entries.some((entry) => entry.kind === "dir" && entry.relPath === relPath)) continue;
-        state.expanded.delete(relPath);
-        listings.delete(relPath);
+        forget(relPath);
       }
     }
 
@@ -1277,7 +1303,17 @@
       node.classList.toggle("desk-ft-open", opening);
       lead.innerHTML = opening ? ICON.chevronDown : ICON.chevronRight;
       if (!opening) {
-        currentState.expanded.delete(entry.relPath);
+        // Descendants go with it. `expanded` is the set of folders open ON
+        // SCREEN, and collapsing a parent closes its whole subtree — keeping
+        // the children would leave entries no refresh can ever resolve, since
+        // the parent's listing is what proves a child gone. Re-expanding does
+        // not restore a child's open state either, so nothing wants them kept.
+        const prefix = entry.relPath + "/";
+        for (const relPath of [...currentState.expanded]) {
+          if (relPath === entry.relPath || relPath.startsWith(prefix)) {
+            currentState.expanded.delete(relPath);
+          }
+        }
         return;
       }
       currentState.expanded.add(entry.relPath);
