@@ -636,15 +636,22 @@ async function main() {
   await pageB.screenshot({ path: path.join(ART, "7-usage-meter.png") });
 
   // Remove the device from the web: confirm in the dialog, then the live
-  // uplink must die with 4001 (token revoked) and the list empty out.
+  // uplink must die with 4001 (token revoked) and the row must go.
+  //
+  // "The row must go" rather than "the empty state appears": on a relay with
+  // cloud environments configured EVERY account carries a cloud row whether or
+  // not it has linked anything, so the list is never literally empty and
+  // waiting for #empty would wait for ever. `.device-remove` is the control on
+  // a linked device; the cloud row's menu is a different class precisely so
+  // this can tell them apart.
   const uplinkClosed = new Promise((resolve) => uplinkFree.on("close", (c) => resolve(c)));
   const removeBtn = pageB.locator(`.device-remove`).first();
   await removeBtn.click();
   await pageB.locator("#dialog-confirm", { hasText: "Unlink" }).click();
   const closeCode = await uplinkClosed;
   assert.equal(closeCode, 4001, `revoked uplink should close 4001, got ${closeCode}`);
-  await pageB.locator("#empty").waitFor({ state: "visible", timeout: 15000 });
-  log("device removed from the web: uplink closed 4001, list empty");
+  await pageB.locator(".device-remove").waitFor({ state: "detached", timeout: 15000 });
+  log("device removed from the web: uplink closed 4001, no linked devices left");
   await pageB.screenshot({ path: path.join(ART, "8-device-removed.png") });
   await ctxB.close();
 

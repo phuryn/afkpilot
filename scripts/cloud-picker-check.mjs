@@ -241,11 +241,11 @@ try {
     // Including a cloud machine the relay has NO record for — the owner had one
     // of those, unlinked it, and lost every route back to a sprite that was
     // still running.
-    assert.equal(await sleeping.locator(".device-remove:not(.device-menu-btn)").count(), 0,
+    assert.equal(await sleeping.locator(".device-remove").count(), 0,
       "a cloud row must never offer an unlink, even without an environment record");
     for (const state of ["not-provisioned", "upgrade"]) {
       const r = page.locator(`.device-row[data-cloud-state="${state}"]`).first();
-      assert.equal(await r.locator(".device-remove:not(.device-menu-btn)").count(), 0,
+      assert.equal(await r.locator(".device-remove").count(), 0,
         `a ${state} cloud row must not offer an unlink ✕`);
     }
     const sleepingMenu = sleeping.locator(".device-menu-btn");
@@ -305,7 +305,7 @@ try {
     // somebody to keep pressing it and conclude the product is broken.
     assert.equal(await building.locator(".device-start").count(), 0,
       "a building row offers nothing to press");
-    assert.equal(await building.locator(".device-remove:not(.device-menu-btn)").count(), 0,
+    assert.equal(await building.locator(".device-remove").count(), 0,
       "a building row is still a cloud row: no ✕");
 
     // 8b. An ordinary offline laptop is unchanged — still offline, still told to

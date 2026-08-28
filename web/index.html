@@ -551,7 +551,11 @@
     cursor: default;
     pointer-events: none;
   }
-  .device-remove {
+  /* Layout for either control that sits at the end of a device row. Shared
+     because they are the same shape and size; `.device-remove` stays the name
+     of the one that actually removes something, so a selector for it cannot
+     land on a menu button that does not. */
+  .device-row-btn {
     flex: none;
     align-self: stretch;
     padding: 0 0.95rem;
@@ -565,7 +569,7 @@
     cursor: pointer;
     transition: color 0.15s ease, background 0.15s ease;
   }
-  .device-remove:hover { color: var(--red); background: var(--surface-2); }
+  .device-row-btn:hover { color: var(--red); background: var(--surface-2); }
   /* The row clips its children so their backgrounds respect its rounded
      corners. That also clipped the ⋯ popover into invisibility — present,
      sized, and painted nowhere a person could see it. Only cloud rows have
@@ -1457,7 +1461,7 @@
 
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "device-remove device-menu-btn";
+    btn.className = "device-row-btn device-menu-btn";
     btn.setAttribute("aria-label", "Cloud options");
     btn.setAttribute("aria-expanded", "false");
     btn.title = "Cloud options";
@@ -1738,7 +1742,7 @@
 
       const rm = document.createElement("button");
       rm.type = "button";
-      rm.className = "device-remove";
+      rm.className = "device-row-btn device-remove";
       rm.dataset.deviceId = d.deviceId;
       rm.dataset.deviceName = display.displayName;
       rm.setAttribute("aria-label", "Remove " + display.displayName);
