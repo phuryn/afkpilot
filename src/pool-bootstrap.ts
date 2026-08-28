@@ -1,6 +1,24 @@
 /**
  * The script a pooled machine runs to become useful.
  *
+ * ## How a change here reaches machines that already exist
+ *
+ * It does not. The service runs a COPY of this script, written into `$HOME`
+ * when the machine was built, and nothing re-fetches it — deliberately.
+ *
+ * A version of this file did re-fetch and re-exec itself on every boot, which
+ * meant a compromised relay could run whatever it liked on every cloud machine
+ * for ever, with the workspace and the device token in reach. `docs/security.md`
+ * promises the opposite in as many words, and a syntax check proves nothing
+ * about authenticity. The migration it bought was not worth the channel it
+ * opened.
+ *
+ * So a change here reaches the fleet by REBUILDING it: scrap the shelf and let
+ * the filler refill it, which is a routine operation and was measured at 139
+ * seconds for ten machines on 2026-08-28. What a machine can update on its own
+ * is the HOST — from GitHub Releases, which is where the published build lives
+ * and is a different party from the relay.
+ *
  * Served by the relay at `/api/environment/pool-bootstrap.sh` and fetched by
  * the sprite, rather than pushed into it. Exec takes no usable stdin, so the
  * only thing that fits down that channel is a URL — and a script that arrives
@@ -144,22 +162,34 @@ refresh_host_if_stale() {
   [ "$asset" = "$(cat "$ASSET_RECORD" 2>/dev/null)" ] && return 0
 
   step "host update: fetching $asset"
-  rm -rf "$APP/next"; mkdir -p "$APP/next" || return 0
+  # NOT cleared first: the partial from a previous attempt is what the resume
+  # flag continues from. Only a corrupt unpack clears it.
+  mkdir -p "$APP/next" || return 0
+  # ONE attempt, and a real bound.
+  #
+  # The max-time flag is per ATTEMPT and resets on every retry, so four
+  # retries at 180 seconds is up to five 180-second attempts, not three minutes — and
+  # curl restarts a retry from the original offset after a transfer timeout, so
+  # the retries were also throwing away the progress they had made. On a 4 Mbps
+  # link that turned into a quarter of an hour with the host down and nothing
+  # to show for it.
+  #
+  # So: no retries, two minutes, and KEEP the partial file. This runs on a wake
+  # with somebody very likely waiting, and the host does not start until it
+  # returns. A slow link therefore finishes the update over successive weekly
+  # attempts instead of holding any single boot open.
   if ! curl -fL "$asset" -o "$APP/next/afkpilot.AppImage" \\
-      --retry 4 --retry-delay 5 --retry-all-errors --continue-at - \\
-      --speed-limit 51200 --speed-time 60 --max-time 180 --silent --show-error; then
-    # BOUNDED at three minutes, unlike the first install. This runs on a wake,
-    # with somebody very likely waiting for the machine to answer — and the host
-    # does not start until it returns. The resume flag keeps whatever it got, so
-    # a slow link finishes the update across a few boots rather than holding one
-    # of them open for a quarter of an hour.
-    step "host update: download did not finish in time; keeping the build we have"
-    rm -rf "$APP/next"; return 0
+      --retry 0 --continue-at - \\
+      --speed-limit 51200 --speed-time 30 --max-time 120 --silent --show-error; then
+    step "host update: download unfinished; keeping the build we have and what we downloaded"
+    return 0
   fi
   chmod +x "$APP/next/afkpilot.AppImage"
   if ! (cd "$APP/next" && ./afkpilot.AppImage --appimage-extract >/dev/null 2>&1) \\
      || [ ! -x "$APP/next/squashfs-root/AppRun" ]; then
-    step "host update: did not unpack; keeping the build we have"
+    # Cleared, unlike a timeout: a corrupt file resumed for ever would never
+    # become a working build.
+    step "host update: did not unpack; discarding it and keeping the build we have"
     rm -rf "$APP/next"; return 0
   fi
 
@@ -178,32 +208,6 @@ refresh_host_if_stale() {
     step "host update: swap failed; kept the build we have"
   fi
 }
-
-# FETCH THIS SCRIPT AGAIN, FIRST, AND RE-EXEC.
-#
-# The service runs a COPY of this file that was written the day the machine was
-# built. Without this, everything below — including the host updater — is frozen
-# at whatever shipped then, and a machine nobody can walk up to can never
-# receive a fix. Shipping one would be the same as not shipping it.
-#
-# Syntax-checked before it replaces anything, so a truncated download
-# cannot leave a machine that will not boot. Guarded by an environment variable
-# so the re-exec happens at most once, and failure is a no-op: the copy we
-# already have is a working script.
-if [ -z "\${AFKPILOT_BOOT_REFRESHED:-}" ]; then
-  export AFKPILOT_BOOT_REFRESHED=1
-  NEXT="$HOME/.afkpilot-boot.next"
-  if curl -fsSL --max-time 30 "$RELAY/api/environment/pool-bootstrap.sh" -o "$NEXT" \\
-     && [ -s "$NEXT" ] && sh -n "$NEXT" 2>/dev/null; then
-    if ! cmp -s "$NEXT" "$HOME/afkpilot-boot.sh"; then
-      mv "$NEXT" "$HOME/afkpilot-boot.sh"
-      chmod +x "$HOME/afkpilot-boot.sh"
-      step "boot script updated; re-running it"
-      exec "$HOME/afkpilot-boot.sh" "$@"
-    fi
-  fi
-  rm -f "$NEXT"
-fi
 
 step "boot"
 

@@ -320,8 +320,10 @@ describe("updating the host on a machine nobody can walk up to", () => {
       ].join("\n"),
     });
     expect(out).toContain("APPRUN: echo old");
-    expect(out).toContain("host update: download did not finish in time");
-    expect(out).not.toContain("APP: next");
+    expect(out).toContain("host update: download unfinished");
+    // The partial is KEPT on purpose — it is what the next attempt resumes
+    // from. Deleting it is how a slow link never finished updating at all.
+    expect(out).toContain("APP: next");
   });
 
   it("KEEPS the old build when the new one will not unpack", (ctx) => {
@@ -362,99 +364,34 @@ describe("updating the host on a machine nobody can walk up to", () => {
   });
 });
 
-describe("the script keeps itself current", () => {
-  /**
-   * The service runs a COPY of this file, written the day the machine was
-   * built. Without a self-refresh the host updater below it — and every future
-   * fix — is frozen at whatever shipped that day, on a machine nobody can walk
-   * up to. Shipping a fix would then be the same as not shipping one.
-   *
-   * Run rather than read: a self-refresh that is wrong stops the machine
-   * booting at all.
-   */
-  function bashOr(ctx: { skip(): void }): string | null {
-    try {
-      execFileSync("bash", ["--version"], { stdio: "ignore" });
-      return "bash";
-    } catch { ctx.skip(); return null; }
-  }
-
-  /** Just the refresh block, with `curl` and `step` stubbed. */
-  function runSelfRefresh(bash: string, served: string | null) {
-    const dir = mkdtempSync(join(tmpdir(), "afkpilot-selfrefresh-"));
-    const p = (x: string) => join(dir, x).split(String.fromCharCode(92)).join("/");
-    try {
-      const start = script.indexOf("if [ -z ");
-      expect(start).toBeGreaterThan(-1);
-      const end = script.indexOf("\nstep \"boot\"", start);
-      const block = script.slice(start, end);
-
-      writeFileSync(join(dir, "afkpilot-boot.sh"), "#!/usr/bin/env bash\necho RAN-OLD\n");
-      if (served !== null) writeFileSync(join(dir, "served"), served);
-
-      const harness = [
-        "#!/usr/bin/env bash",
-        "set -u",
-        `HOME="${p("")}"`,
-        'RELAY="https://relay.example"',
-        'step() { echo "STEP: $*"; }',
-        // Stands in for the relay: serves whatever the case put in `served`,
-        // and fails outright when there is nothing to serve.
-        "curl() {",
-        '  local out="" prev=""',
-        '  for a in "$@"; do if [ "$prev" = "-o" ]; then out="$a"; fi; prev="$a"; done',
-        `  [ -f "${p("served")}" ] || return 22`,
-        `  cp "${p("served")}" "$out"`,
-        "}",
-        block,
-        'echo "FELL-THROUGH"',
-        `echo "STORED: $(cat "${p("afkpilot-boot.sh")}")"`,
-      ].join("\n");
-      const h = join(dir, "h.sh");
-      writeFileSync(h, harness);
-      return execFileSync(bash, [h], { encoding: "utf8" });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+describe("the script does not fetch code from the relay to run", () => {
+  it("never re-fetches and re-execs itself", () => {
+    // A version of this script did, on every boot. That handed a compromised
+    // relay arbitrary code on every cloud machine for ever, with the workspace
+    // and the device token in reach — the exact thing docs/security.md promises
+    // cannot happen, and a syntax check proves nothing about authenticity.
+    //
+    // A change here reaches existing machines by REBUILDING the shelf, which is
+    // a routine operation: ten machines in 139 seconds, measured 2026-08-28.
+    expect(script).not.toContain("AFKPILOT_BOOT_REFRESHED");
+    // The only executable it pulls is the published build, from GitHub.
+    const fetches = script.split(String.fromCharCode(10)).filter((l) => l.includes("curl "));
+    const fromRelay = fetches.filter((c) => c.includes("$RELAY"));
+    for (const c of fromRelay) {
+      expect(c).toContain("/api/environment/");
+      expect(c).not.toContain("pool-bootstrap.sh");
     }
-  }
-
-  it("replaces itself with a newer script and re-runs it", (ctx) => {
-    const bash = bashOr(ctx);
-    if (!bash) return;
-    const out = runSelfRefresh(bash, "#!/usr/bin/env bash\necho RAN-NEW\n");
-    expect(out).toContain("boot script updated");
-    expect(out).toContain("RAN-NEW");
-    // It re-executed, so the rest of the OLD copy never ran.
-    expect(out).not.toContain("FELL-THROUGH");
   });
 
-  it("carries on with the copy it has when the relay cannot be reached", (ctx) => {
-    // The machine must boot. A relay that is down is not a reason to strand it.
-    const bash = bashOr(ctx);
-    if (!bash) return;
-    const out = runSelfRefresh(bash, null);
-    expect(out).toContain("FELL-THROUGH");
-    expect(out).toContain("STORED: #!/usr/bin/env bash");
-    expect(out).toContain("RAN-OLD");
-  });
-
-  it("REFUSES a served script that is not valid shell", (ctx) => {
-    // A truncated download would otherwise become a machine that cannot boot,
-    // which nobody can reach to fix.
-    const bash = bashOr(ctx);
-    if (!bash) return;
-    const out = runSelfRefresh(bash, "#!/usr/bin/env bash\nif [ then done fi (\n");
-    expect(out).toContain("FELL-THROUGH");
-    expect(out).toContain("RAN-OLD");
-    expect(out).not.toContain("boot script updated");
-  });
-
-  it("does not re-exec when the served script is the one it is already running", (ctx) => {
-    // Otherwise every boot restarts itself once for nothing.
-    const bash = bashOr(ctx);
-    if (!bash) return;
-    const out = runSelfRefresh(bash, "#!/usr/bin/env bash\necho RAN-OLD\n");
-    expect(out).toContain("FELL-THROUGH");
-    expect(out).not.toContain("boot script updated");
+  it("bounds the host download to ONE attempt and keeps what it got", () => {
+    // max-time is per attempt and resets on every retry, so retries turned a
+    // "three minute" bound into a quarter of an hour with the host down — and
+    // curl restarts a retry from the original offset after a transfer timeout,
+    // so those attempts also discarded the progress they had made.
+    const refresh = script.slice(script.indexOf("refresh_host_if_stale() {"));
+    const download = refresh.slice(refresh.indexOf("curl -fL"));
+    expect(download).toContain("--retry 0");
+    expect(download).toContain("--continue-at -");
+    expect(download).toContain("--max-time 120");
   });
 });
