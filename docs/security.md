@@ -101,6 +101,31 @@ messages, but it **cannot drive host-local actions**: the extension refuses them
 regardless of what the relay sends. The relay inspects only the `t`/`type`
 discriminant to route; payloads are opaque.
 
+### …for a machine you own. A machine WE run is different, and here is why
+
+The sentence above is about your own computer, and there it is complete: the
+extension refuses host-local actions no matter what the relay says.
+
+A cloud environment is not your computer. The relay creates it, installs it,
+hands it its identity, and holds the provider credential that can run commands
+on it — that is how it gets built and claimed at all. So a relay that has been
+compromised **does** have authority over the cloud machines it provisioned. No
+arrangement of the boot script changes that; the authority is in the credential.
+
+What that authority is NOT is a free-standing channel anybody else can use. The
+boot script deliberately does not fetch executable code from the relay after it
+is installed, so an attacker who controls only the relay's HTTP responses — a
+hijacked domain, a cache, a proxy — cannot reach a running machine. Reaching one
+requires the provider credential itself, which lives only in the relay's
+environment. Those are different attackers, and the narrower one is worth
+keeping narrow.
+
+Practically: treat `SPRITES_TOKEN` as equivalent to shell on every cloud machine,
+and treat a machine's contents as no more private than the relay's own secrets.
+The things that stay private regardless are the ones the relay never has —
+prompts and outputs, which are ephemeral, and the credentials on your own
+computer.
+
 **Payloads are ephemeral.** Prompts, code, and outputs are ferried and never
 persisted — so a breached relay has no message store to exfiltrate. This is also
 why the quota/rate counters are **in-memory only** (a restart resets the
