@@ -233,12 +233,15 @@ if (spritesToken) {
           externalId,
           poolBuildCommand({ relayHttpUrl, name: externalId, claimSecret }),
         );
-        if (!r.ok || r.exitCode !== 0) {
-          log(`[pool] build command on ${externalId} failed: `
-            + `${r.error ?? `exit ${r.exitCode}`} ${r.output.slice(0, 200)}`);
-          return false;
-        }
-        return true;
+        // The EXIT CODE decides, not `ok`. A socket that errors after the exit
+        // frame arrives reports `ok: false` with `exitCode: 0` — the command ran
+        // and the service exists. Reading that as failure meant releasing the
+        // hold on a machine that was genuinely installing, which freezes the
+        // install and destroys it an hour later.
+        if (r.exitCode === 0) return true;
+        log(`[pool] build command on ${externalId} failed: `
+          + `${r.error ?? `exit ${r.exitCode}`} ${r.output.slice(0, 200)}`);
+        return false;
       },
       // A machine installing itself is not being touched from outside, so it
       // suspends about a minute in and its install FREEZES — which is exactly

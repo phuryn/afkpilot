@@ -59,11 +59,22 @@ async function mintSession() {
   return async () => (await f(`/v1/client/sessions/${sid}/tokens?_is_native=1`, {}, clientToken))?.jwt;
 }
 
+/**
+ * The machine's status, or a THROW.
+ *
+ * Returning undefined here made the whole check pass without observing
+ * anything: `undefined` is not `"running"`, so the quiet phase read it as
+ * asleep, and the busy phase's falsy check read it as fine. A wrong Supabase
+ * project, the wrong Sprites organisation, or a machine that is simply not
+ * there would all have printed PASS.
+ */
 async function spriteStatus(name) {
   const j = await fetch("https://api.sprites.dev/v1/sprites", {
     headers: { authorization: `Bearer ${SPRITES}` },
   }).then((r) => r.json());
-  return (Array.isArray(j) ? j : j.sprites || []).find((s) => s.name === name)?.status;
+  const found = (Array.isArray(j) ? j : j.sprites || []).find((s) => s.name === name);
+  if (!found?.status) throw new Error(`no sprite named ${name} — wrong token, org, or environment?`);
+  return found.status;
 }
 
 const mint = await mintSession();
@@ -74,13 +85,24 @@ const opened = await fetch(`${RELAY}/api/cloud/open`, {
   method: "POST", headers: { authorization: `Bearer ${jwt}`, "content-type": "application/json" }, body: "{}",
 }).then((r) => r.json());
 const deviceId = opened.deviceId;
+if (!deviceId) {
+  say("FAIL — /api/cloud/open gave no device:", JSON.stringify(opened));
+  process.exit(1);
+}
 say("device", deviceId);
 
 const env = await fetch(`${process.env.SUPABASE_URL}/rest/v1/environments?select=external_id&device_id=eq.${deviceId}`, {
   headers: { apikey: process.env.SUPABASE_SECRET_KEY, authorization: `Bearer ${process.env.SUPABASE_SECRET_KEY}` },
 }).then((r) => r.json());
 const sprite = env?.[0]?.external_id;
+if (!sprite) {
+  say("FAIL — no environment row for", deviceId, "— nothing to watch");
+  process.exit(1);
+}
 say("machine", sprite);
+// Prove it is reachable BEFORE measuring anything, so a misconfiguration is an
+// error at the top rather than a green run that watched nothing.
+say("initial status", await spriteStatus(sprite));
 
 // A browser tab. Every message it sends draws an answer from the host, and the
 // answer is what the relay counts.

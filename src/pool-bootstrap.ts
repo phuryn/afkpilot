@@ -147,8 +147,13 @@ refresh_host_if_stale() {
   rm -rf "$APP/next"; mkdir -p "$APP/next" || return 0
   if ! curl -fL "$asset" -o "$APP/next/afkpilot.AppImage" \\
       --retry 4 --retry-delay 5 --retry-all-errors --continue-at - \\
-      --speed-limit 51200 --speed-time 60 --max-time 900 --silent --show-error; then
-    step "host update: download failed; keeping the build we have"
+      --speed-limit 51200 --speed-time 60 --max-time 180 --silent --show-error; then
+    # BOUNDED at three minutes, unlike the first install. This runs on a wake,
+    # with somebody very likely waiting for the machine to answer — and the host
+    # does not start until it returns. The resume flag keeps whatever it got, so
+    # a slow link finishes the update across a few boots rather than holding one
+    # of them open for a quarter of an hour.
+    step "host update: download did not finish in time; keeping the build we have"
     rm -rf "$APP/next"; return 0
   fi
   chmod +x "$APP/next/afkpilot.AppImage"
@@ -173,6 +178,32 @@ refresh_host_if_stale() {
     step "host update: swap failed; kept the build we have"
   fi
 }
+
+# FETCH THIS SCRIPT AGAIN, FIRST, AND RE-EXEC.
+#
+# The service runs a COPY of this file that was written the day the machine was
+# built. Without this, everything below — including the host updater — is frozen
+# at whatever shipped then, and a machine nobody can walk up to can never
+# receive a fix. Shipping one would be the same as not shipping it.
+#
+# Syntax-checked before it replaces anything, so a truncated download
+# cannot leave a machine that will not boot. Guarded by an environment variable
+# so the re-exec happens at most once, and failure is a no-op: the copy we
+# already have is a working script.
+if [ -z "\${AFKPILOT_BOOT_REFRESHED:-}" ]; then
+  export AFKPILOT_BOOT_REFRESHED=1
+  NEXT="$HOME/.afkpilot-boot.next"
+  if curl -fsSL --max-time 30 "$RELAY/api/environment/pool-bootstrap.sh" -o "$NEXT" \\
+     && [ -s "$NEXT" ] && sh -n "$NEXT" 2>/dev/null; then
+    if ! cmp -s "$NEXT" "$HOME/afkpilot-boot.sh"; then
+      mv "$NEXT" "$HOME/afkpilot-boot.sh"
+      chmod +x "$HOME/afkpilot-boot.sh"
+      step "boot script updated; re-running it"
+      exec "$HOME/afkpilot-boot.sh" "$@"
+    fi
+  fi
+  rm -f "$NEXT"
+fi
 
 step "boot"
 
