@@ -6858,7 +6858,7 @@
       // NEVER answer, and the probe is sent for one repo only — so every other
       // repo would sit on a spinner forever with nothing coming.
       if (state.repoPreviewsUnsupported) {
-        const note = railNote("Update Grok Build to preview");
+        const note = railNote("Sessions need a newer Grok Build");
         note.title =
           "Grok Build on your computer — the extension or the desktop app — is older " +
           "than this page, so it can't list another project's sessions without " +
