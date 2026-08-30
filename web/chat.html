@@ -3144,9 +3144,18 @@ window.grokRemoteClient = true;
       : isCloudDevice
         ? "Your cloud environment isn't responding. It should come back on its own — this page will connect when it does."
         : "Device offline — open VS Code on that machine and this page will connect by itself.";
+    // A machine being BUILT is progress, not a fault, and red is the wrong
+    // colour for a minute of ordinary waiting (owner, 2026-08-31). The notice
+    // channel is already the calm one — blue rule, quiet background — and the
+    // spinner below makes it read like the rest of the chat's progress.
+    // Everything that really is a failure keeps the error channel.
     window.dispatchEvent(new MessageEvent("message", {
-      data: { type: "error", text: offlineText + queuedNote },
+      data: {
+        type: stillBooting ? "hostNotice" : "error",
+        text: offlineText + queuedNote,
+      },
     }));
+    if (stillBooting) markBootingNotice();
     // Calm now, honest later. A first boot that never finishes is a real
     // failure and must eventually say so rather than reassure for ever.
     if (stillBooting && !firstBootErrorTimer) {
@@ -3161,6 +3170,18 @@ window.grokRemoteClient = true;
         }));
       }, CLOUD_FIRST_BOOT_ERROR_MS);
     }
+  }
+
+  /** Turn the last notice into a progress line: the host's own notice markup
+   *  carries a list icon, which is wrong for "a machine is coming up". Done
+   *  here rather than in the vendored client because a cloud build is the
+   *  relay's concern, not the extension's. */
+  function markBootingNotice() {
+    requestAnimationFrame(function () {
+      var notices = document.querySelectorAll(".plan-notice");
+      var last = notices[notices.length - 1];
+      if (last) last.classList.add("cloud-booting");
+    });
   }
 
   function beginDeviceOfflineGrace() {
@@ -4712,6 +4733,25 @@ body.identity-restore-veil #identity-restoring-note { display: flex; }
    A footer the extension hid mid-turn still carries [hidden] -> display:none
    (chat.css), which beats every opacity rule involved. The tap-to-reveal
    gesture above stays for MEDIA overlays only. */
+
+  /* A cloud machine being built: the notice channel's blue, with the same
+     kind of quiet rotation the chat uses while an agent works. */
+  .plan-notice.cloud-booting { color: var(--vscode-charts-blue, #569cd6); }
+  .plan-notice.cloud-booting svg { display: none; }
+  .plan-notice.cloud-booting::before {
+    content: "";
+    flex: 0 0 auto;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    animation: cloud-booting-spin 0.9s linear infinite;
+  }
+  @keyframes cloud-booting-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .plan-notice.cloud-booting::before { animation: none; }
+  }
 </style>
 </head>
 <body class="thinking-hidden">
