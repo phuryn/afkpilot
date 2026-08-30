@@ -1165,7 +1165,13 @@ a:hover {
 .toolbar-popover-item:hover .mode-item-label { color: var(--vscode-list-hoverForeground, var(--vscode-foreground)); }
 .toolbar-popover-item.active { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground)); }
 .toolbar-popover-item.active .mode-item-desc { color: var(--vscode-list-activeSelectionForeground, var(--vscode-descriptionForeground)); opacity: 0.75; }
-.popover-check { color: var(--vscode-button-background); flex-shrink: 0; }
+/* textLink, not button-background. `button.background` is a SURFACE colour and
+   is only legible with `button.foreground` painted on it: VS Code's Dark High
+   Contrast theme sets it to pure BLACK, so a bare check mark in it disappears
+   into the popover (#139). Every other mark in this popover — .popover-back,
+   .popover-action, .popover-update-avail — already uses the link colour, which
+   is contrast-checked as a foreground in all four theme kinds. */
+.popover-check { color: var(--vscode-textLink-foreground, #3794ff); flex-shrink: 0; }
 .mode-popover-item { white-space: normal; align-items: flex-start; }
 
 /* On/off switcher used by toggle items in the gear popover (e.g. Show thinking
@@ -3270,9 +3276,11 @@ textarea#input {
   border: 1.5px solid var(--vscode-descriptionForeground);
   background: transparent;
 }
+/* Same reason as .popover-check: `button.background` is hcDark BLACK, which
+   made the filled dots vanish on the high-contrast background (#139). */
 .effort-dot.active::before {
-  background: var(--vscode-button-background);
-  border-color: var(--vscode-button-background);
+  background: var(--vscode-textLink-foreground, #3794ff);
+  border-color: var(--vscode-textLink-foreground, #3794ff);
 }
 .effort-dot:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
 .effort-dot.active { opacity: 1; }

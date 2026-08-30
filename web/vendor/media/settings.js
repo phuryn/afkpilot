@@ -148,6 +148,36 @@
     return list.find((p) => p && p.id === id) || { id, connected: false };
   }
 
+  /**
+   * Whether a remote has nothing useful to do with this provider row.
+   *
+   * A remote may CONNECT a provider — `runGrokLogin` runs the CLI's headless
+   * device-code flow and puts the URL and code in the transcript, opening no
+   * terminal on the desk. It may NOT sign one out: `logout` is host-local
+   * because it revokes a credential every surface on that machine shares.
+   *
+   * So the actionable row appears exactly when connecting is the useful thing,
+   * and a healthy connected provider stays a status line.
+   */
+  /**
+   * Whether this host can run an agent's headless sign-in for a remote.
+   *
+   * Field presence, never a version check. The relay serves the web client, so
+   * the client is always as new as the deploy while the extension is whatever
+   * the user installed — and every host built before `remoteAgentSignIn` shipped
+   * classifies `runGrokLogin` as host-local and DROPS it silently. Offering
+   * Connect there would be a button that does nothing, which is worse than the
+   * read-only row it replaced. Same gate `chat.js` puts on the connect panel.
+   */
+  function canSignInFromRemote(env) {
+    return !!(env && env.hostCaps && env.hostCaps.remoteAgentSignIn);
+  }
+
+  function remoteProviderIsSettled(snapshot, id) {
+    const provider = providerOf(snapshot, id);
+    return provider.connected === true && provider.needsLogin !== true;
+  }
+
   function providerAction(provider) {
     const connected = provider.connected === true;
     const needsLogin = connected && provider.needsLogin === true;
@@ -519,6 +549,12 @@
           : { type: "runGrokLogin", provider: "claude" };
       },
     },
+    // Remote provider rows come in a PAIR, and which one shows is the point.
+    // This page rendered status-only for a remote from 3.9.0, when a remote
+    // genuinely could not sign a provider in. `0fa6661` gave it the device-code
+    // flow and moved `runGrokLogin` to `full`, and this page was never told — so
+    // the onboarding card in the transcript was the only way to connect an agent
+    // from a phone or a cloud environment (owner, 2026-08-30).
     {
       id: "providerGrokStatus",
       category: "providers",
@@ -526,8 +562,23 @@
       title: "Grok",
       description: "",
       kind: "status",
-      visible: (s, env) => !!(env && env.isRemote && env.providersKnown),
+      visible: (s, env) => !!(env && env.isRemote && env.providersKnown
+        && (remoteProviderIsSettled(s, "grok") || !canSignInFromRemote(env))),
       describe: (s) => providerDescription(providerOf(s, "grok")),
+    },
+    {
+      id: "providerGrokRemote",
+      category: "providers",
+      logo: "grok",
+      title: "Grok",
+      description: "",
+      kind: "action",
+      visible: (s, env) => !!(env && env.isRemote && env.providersKnown
+        && canSignInFromRemote(env) && !remoteProviderIsSettled(s, "grok")),
+      describe: (s) => providerDescription(providerOf(s, "grok")),
+      actionLabel: (s) => providerAction(providerOf(s, "grok")),
+      // Never `logout` — that stays desk-only. See remoteProviderIsSettled.
+      message: () => ({ type: "runGrokLogin", provider: "grok" }),
     },
     {
       id: "providerCodexStatus",
@@ -536,8 +587,23 @@
       title: "Codex",
       description: "",
       kind: "status",
-      visible: (s, env) => !!(env && env.isRemote && env.providersKnown),
+      visible: (s, env) => !!(env && env.isRemote && env.providersKnown
+        && (remoteProviderIsSettled(s, "codex") || !canSignInFromRemote(env))),
       describe: (s) => providerDescription(providerOf(s, "codex")),
+    },
+    {
+      id: "providerCodexRemote",
+      category: "providers",
+      logo: "codex",
+      title: "Codex",
+      description: "",
+      kind: "action",
+      visible: (s, env) => !!(env && env.isRemote && env.providersKnown
+        && canSignInFromRemote(env) && !remoteProviderIsSettled(s, "codex")),
+      describe: (s) => providerDescription(providerOf(s, "codex")),
+      actionLabel: (s) => providerAction(providerOf(s, "codex")),
+      // Never `logout` — that stays desk-only. See remoteProviderIsSettled.
+      message: () => ({ type: "runGrokLogin", provider: "codex" }),
     },
     {
       id: "providerClaudeStatus",
@@ -546,8 +612,23 @@
       title: "Claude",
       description: "",
       kind: "status",
-      visible: (s, env) => !!(env && env.isRemote && env.providersKnown),
+      visible: (s, env) => !!(env && env.isRemote && env.providersKnown
+        && (remoteProviderIsSettled(s, "claude") || !canSignInFromRemote(env))),
       describe: (s) => providerDescription(providerOf(s, "claude")),
+    },
+    {
+      id: "providerClaudeRemote",
+      category: "providers",
+      logo: "claude",
+      title: "Claude",
+      description: "",
+      kind: "action",
+      visible: (s, env) => !!(env && env.isRemote && env.providersKnown
+        && canSignInFromRemote(env) && !remoteProviderIsSettled(s, "claude")),
+      describe: (s) => providerDescription(providerOf(s, "claude")),
+      actionLabel: (s) => providerAction(providerOf(s, "claude")),
+      // Never `logout` — that stays desk-only. See remoteProviderIsSettled.
+      message: () => ({ type: "runGrokLogin", provider: "claude" }),
     },
     {
       id: "continueRemotely",

@@ -589,8 +589,12 @@ body.settings-page .settings-surface {
   cursor: pointer;
 }
 
+/* The fallback is the LINK colour, not button.background: hosts that define no
+   charts.* palette still get a mark that reads, and `button.background` is
+   hcDark black, which would render an on switch identical to an off one
+   (#139, same class as .popover-check). */
 .settings-switch.on {
-  background: var(--vscode-charts-blue, var(--vscode-button-background));
+  background: var(--vscode-charts-blue, var(--vscode-textLink-foreground, #3794ff));
 }
 
 .settings-switch:disabled {
