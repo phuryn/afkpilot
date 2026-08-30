@@ -10606,6 +10606,28 @@
     scrollToBottom();
   }
 
+  /**
+   * An outdated host cannot describe its own age, so the client says it.
+   *
+   * Observed 2026-08-31: an old desktop answered a new session with "That
+   * project folder is no longer open on the desktop" while the rail, on the
+   * same screen, said every project needed a newer Grok Build. Both were the
+   * same fact -- the host is behind -- and only one of them said so. The host
+   * that produced the sentence is the one that cannot be taught a better one,
+   * so the newest thing in the loop supplies the missing half.
+   *
+   * Matched on the literal because an old host offers no other signal; the
+   * sentence is APPENDED, never replaced, so if the folder really is closed
+   * the original answer still stands.
+   */
+  function errorTextForHostAge(text) {
+    if (!state.repoPreviewsUnsupported) return text;
+    if (!/no longer open on the desktop|archived, so it is not available from here/.test(text)) return text;
+    return text
+      + " That machine is also running an older Grok Build, which can report projects"
+      + " incorrectly — updating it there is worth trying first.";
+  }
+
   function addError(text, code) {
     clearWelcome();
     const el = document.createElement("div");
@@ -16391,7 +16413,7 @@
           renderQueuedBlocks();
           updateSendButton();
         }
-        addError(msg.text, msg.code);
+        addError(errorTextForHostAge(msg.text), msg.code);
         break;
       case "hostNotice":
         addPlanNotice(msg.text);
