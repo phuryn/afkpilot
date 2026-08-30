@@ -51,6 +51,7 @@
       <ul>
         <li><strong>Your account</strong> — your email and authentication identity, held by Clerk, our sign-in provider.</li>
         <li><strong>Device records</strong> — a device name you choose, a key identifier, and an HMAC used to verify a device on connect. We never store the device token secret itself.</li>
+        <li><strong>Cloud machine records</strong> — if you use a hosted cloud machine: its identifier and lifecycle timestamps, tied to your account. The machine's disk is yours — we do not read it, and what you put on it (code, credentials you add, agent sign-ins) lives on that machine and is deleted when the machine is reset or removed.</li>
         <li><strong>Billing state</strong> — your plan and subscription status live with Clerk and Stripe. We do not see or store your card details.</li>
         <li><strong>A usage counter</strong> — on the free plan, one number per account: how many messages you have sent in the current weekly window. Not the messages, not their times, not their sizes — a single count, replaced each week.</li>
       </ul>
@@ -101,7 +102,6 @@
         <a href="/privacy">Privacy</a>
         <a href="/terms">Terms</a>
       </nav>
-      <p class="fine">AFK Pilot is an independent product, not affiliated with or endorsed by SpaceXAI (formerly xAI). Grok and Grok Build are trademarks of xAI, used only to describe what this service works with.</p>
     </div>
   </footer>
 </body>
