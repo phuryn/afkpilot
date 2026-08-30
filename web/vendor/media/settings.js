@@ -209,6 +209,18 @@
     return flow && flow.status ? flow : undefined;
   }
 
+  /** Steps the host wants read BEFORE the code is used (Codex's account
+   *  setting). Rendered as real nodes, never innerHTML — `**bold**` becomes a
+   *  <strong>, everything else stays text. */
+  function deviceFlowSteps(flow) {
+    const steps = flow && flow.preflight && flow.preflight.steps;
+    return Array.isArray(steps) ? steps : [];
+  }
+
+  function deviceFlowHint(flow) {
+    return (flow && flow.preflight && flow.preflight.reason) || "";
+  }
+
   function deviceFlowDescription(flow) {
     if (!flow) return "";
     if (flow.status === "starting") return "Asking the CLI for a sign-in code…";
@@ -640,7 +652,7 @@
       id: "providerGrokFlow",
       category: "providers",
       logo: "grok",
-      title: "Grok sign-in",
+      title: "Grok",
       description: "",
       kind: "deviceflow",
       providerId: "grok",
@@ -652,7 +664,7 @@
       id: "providerCodexFlow",
       category: "providers",
       logo: "codex",
-      title: "Codex sign-in",
+      title: "Codex",
       description: "",
       kind: "deviceflow",
       providerId: "codex",
@@ -664,7 +676,7 @@
       id: "providerClaudeFlow",
       category: "providers",
       logo: "claude",
-      title: "Claude sign-in",
+      title: "Claude",
       description: "",
       kind: "deviceflow",
       providerId: "claude",
@@ -2609,6 +2621,37 @@
     } else if (row.kind === "deviceflow") {
       const flow = (row.flow ? row.flow(snapshot, env) : undefined) || {};
       el.classList.add("settings-deviceflow");
+      const live = flow.status === "starting" || flow.status === "waiting" || flow.status === "verifying";
+      const hint = live ? deviceFlowHint(flow) : "";
+      const steps = live ? deviceFlowSteps(flow) : [];
+      if (hint) {
+        const note = document.createElement("div");
+        note.className = "settings-row-desc settings-deviceflow-hint";
+        note.textContent = hint;
+        title.appendChild(note);
+      }
+      if (steps.length) {
+        const list = document.createElement("ol");
+        list.className = "settings-deviceflow-steps";
+        for (const step of steps) {
+          const li = document.createElement("li");
+          // `**bold**` → <strong>, as DOM nodes. The setting people cannot find
+          // sits at the bottom of a long page, and the emphasis is the point.
+          const parts = String(step).split(/\*\*([^*\n]+)\*\*/);
+          parts.forEach((part, index) => {
+            if (!part) return;
+            if (index % 2 === 1) {
+              const strong = document.createElement("strong");
+              strong.textContent = part;
+              li.appendChild(strong);
+            } else {
+              li.appendChild(document.createTextNode(part));
+            }
+          });
+          list.appendChild(li);
+        }
+        title.appendChild(list);
+      }
       if (flow.status === "waiting") {
         if (flow.code) {
           // The person is about to type this somewhere else. Selectable as a
@@ -2769,7 +2812,10 @@
      *  clients see the answer — `providerState` is mirrored — but must not spawn
      *  the desk's CLIs to get it, which is why the rows there are status-only. */
     function canRefreshProviders() {
-      return !env.isRemote && env.providersKnown === true;
+      if (env.providersKnown !== true) return false;
+      // A cloud machine has no desk to do this for it — see CLOUD_DISPOSITION
+      // in remote-policy.ts, which is what lets the frame through.
+      return !env.isRemote || hostIsCloud(env);
     }
 
     function requestProvidersRefresh() {

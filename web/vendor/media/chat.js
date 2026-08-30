@@ -8494,6 +8494,14 @@
             `</div>`
           : `<p class="onb-desc">Open the link to finish signing in.</p>`) +
         `<a class="onb-action" href="${escapeHtml(device.url)}" target="_blank" rel="noopener noreferrer">Open the sign-in page</a>` +
+        // The setting to check, beside the code it gates — not on a screen
+        // before it that cost an extra click to get past.
+        (device.preflight && Array.isArray(device.preflight.steps) && device.preflight.steps.length
+          ? `<p class="onb-desc">${escapeHtml(device.preflight.reason || "")}</p>` +
+            `<ol class="onb-steps">${device.preflight.steps
+              .map((s) => `<li>${escapeHtml(String(s)).replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")}</li>`)
+              .join("")}</ol>`
+          : "") +
         cancel +
         // Said plainly because the instinct is to come back and press something
         // else. Nothing else needs pressing.
@@ -8573,18 +8581,30 @@
     // does not decide which of these can work headlessly — it asks, and the host
     // answers `unavailable` with a reason for any that cannot.
     status("Connect an agent");
-    const offer = provider ? [provider] : ["grok", "codex", "claude"];
+    // A cloud machine with NOTHING connected gets the whole menu, even when the
+    // frame names one provider (the session's agent needing auth). On a fresh
+    // machine that narrowing hid the choice entirely: the owner saw only Grok
+    // where all three belong (2026-08-31). Once something IS connected, the
+    // frame's provider is the specific thing being asked for again.
+    const nothingConnected = !((state.providers || []).some((p) => p && p.connected));
+    const cloudFresh = !!(state.hostCaps && state.hostCaps.remoteAgentSignOut) && nothingConnected;
+    const offer = provider && !cloudFresh ? [provider] : ["grok", "codex", "claude"];
     // A cloud machine's three agents are not equal offers: Grok is the native
     // one, and Claude cannot be connected there yet — a button that always
     // ends in "not available" is a dead end wearing an affordance.
     const cloudHost = !!(state.hostCaps && state.hostCaps.remoteAgentSignOut);
+    // On a cloud machine the agents are named as products and ranked: Grok
+    // Build is the one this environment is built around, and Claude Code is
+    // not connectable here yet, so it is stated rather than offered.
+    const CLOUD_NAMES = { grok: "Grok Build", codex: "Codex", claude: "Claude Code" };
     const buttons = offer
       .map((id) => {
         if (cloudHost && id === "claude") {
-          return `<p class="onb-desc onb-agent-note">Claude Code isn't available on cloud machines yet — we're working on adding it.</p>`;
+          return `<p class="onb-desc onb-agent-note">Claude Code — we're working on adding it, not available yet.</p>`;
         }
+        const label = cloudHost ? CLOUD_NAMES[id] : NAMES[id];
         const rec = cloudHost && id === "grok" ? " (recommended)" : "";
-        return `<button class="onb-action" type="button" data-act="connectRemote" data-provider="${id}">Connect ${NAMES[id]}${rec}</button>`;
+        return `<button class="onb-action" type="button" data-act="connectRemote" data-provider="${id}">Connect ${label}${rec}</button>`;
       })
       .join("");
     return `<div class="onb">` +

@@ -1233,6 +1233,15 @@ textarea.settings-routine-prompt {
   user-select: all;
 }
 .settings-action-quiet { opacity: 0.75; }
+.settings-deviceflow-hint { margin-top: 0.35rem; }
+.settings-deviceflow-steps {
+  margin: 0.45rem 0 0;
+  padding-left: 1.15rem;
+  font-size: 0.85em;
+  line-height: 1.55;
+  color: var(--vscode-descriptionForeground, #9aa0a6);
+}
+.settings-deviceflow-steps li + li { margin-top: 0.15rem; }
 .settings-deviceflow .settings-row-control {
   display: flex;
   align-items: center;
