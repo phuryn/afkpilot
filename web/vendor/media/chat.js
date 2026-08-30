@@ -15079,10 +15079,18 @@
         for (const provider of state.providers) {
           const mirrored = state.deviceLoginByProvider[provider.id];
           if (!mirrored) continue;
-          // Connected: the snapshot is now the truth, so a finished flow has
-          // nothing left to say. Disconnected: a signed-out account must not
-          // keep a "Connected" card from an earlier session in this tab.
-          if (provider.connected ? mirrored.status === "done" : mirrored.status !== "waiting" && mirrored.status !== "starting" && mirrored.status !== "verifying") {
+          // A terminal "done" can always lie: connected, it is redundant with
+          // the snapshot; disconnected, it claims an account the user just
+          // signed out of. A `failed` or `unavailable` mirror is the
+          // explanation for what just happened, so it survives the refresh
+          // Providers sends on open (round 2) — but only while the provider is
+          // still unhealthy. Once a snapshot says the account is connected and
+          // working, that explanation is history, and keeping it left a row
+          // offering Sign out above the reason a previous attempt failed
+          // (round 3).
+          var healthy = provider.connected && provider.needsLogin !== true;
+          var terminal = mirrored.status === "failed" || mirrored.status === "unavailable";
+          if (mirrored.status === "done" || (healthy && terminal)) {
             delete state.deviceLoginByProvider[provider.id];
           }
         }
@@ -15090,11 +15098,6 @@
         // sends no frame at all, and a locally-set flag would spin forever.
         // Absent means idle, which is also what every pre-refresh host means.
         state.providersChecking = msg.checking === true;
-        // The page that ASKED for this refresh has to show its result. On a
-        // cloud machine that page is the only one there is, and without this
-        // the Refresh button sat still and the rows kept their old answer
-        // until the overlay was reopened (review, 2026-08-31).
-        refreshSettingsOverlay();
         // Connecting an additional account happens from the gear while the
         // current transcript stays mounted. The login/recovery view temporarily
         // borrows the welcome overlay; dismiss it when the provider it was
