@@ -1234,6 +1234,16 @@ textarea.settings-routine-prompt {
 }
 .settings-action-quiet { opacity: 0.75; }
 .settings-deviceflow-hint { margin-top: 0.35rem; }
+.settings-deviceflow-step {
+  margin-top: 0.3rem;
+  font-weight: 600;
+  color: var(--vscode-foreground, #ccc);
+}
+.settings-deviceflow-note {
+  margin-top: 0.35rem;
+  border-left: 2px solid var(--vscode-charts-yellow, #d7ba7d);
+  padding-left: 0.5rem;
+}
 .settings-deviceflow-steps {
   margin: 0.45rem 0 0;
   padding-left: 1.15rem;

@@ -7468,6 +7468,11 @@
       worktreeSupported: state.worktreeSupported !== false,
       inWorktree: !!state.isWorktree,
       altAgentConnected: !state.providersKnown || altConnected,
+      // A cloud machine can connect agents from here and cannot connect Claude
+      // Code at all; both change what the providers tip should say and whether
+      // it may be shown.
+      cloudHost: !!(state.hostCaps && state.hostCaps.remoteAgentSignOut),
+      remoteCanConnectAgents: !!(state.hostCaps && state.hostCaps.remoteAgentSignIn),
       routineCount: host.routineCount,
       connectorCount: host.connectorCount,
       // A phone's read-aloud is its own client-side preference, not the desk's.
@@ -7650,7 +7655,9 @@
     if (existing && existing.dataset.tip === tip.id) return;
     drop();
 
-    const parts = helpers.splitWelcomeTipCopy(tip.copy);
+    const parts = helpers.splitWelcomeTipCopy(
+      typeof helpers.welcomeTipCopy === "function" ? helpers.welcomeTipCopy(tip, welcomeTipFacts()) : tip.copy,
+    );
     const el = document.createElement("p");
     el.id = "welcome-tip";
     el.className = "welcome-tip welcome-advice muted";
@@ -8483,7 +8490,12 @@
     if (device && device.status === "waiting" && device.url) {
       status("Confirm the code");
       return `<div class="onb">` +
-        `<p class="onb-heading">Finish signing in to ${escapeHtml(name)}</p>` +
+        `<p class="onb-heading">Step 2 of 2 &mdash; confirm the code</p>` +
+        // The vendor's own page warns that device codes are used in phishing
+        // and to continue only if the CLI started the sign-in. Saying that
+        // BEFORE they meet it turns an alarming page into an expected one
+        // (owner, with the screenshot, 2026-08-31).
+        (device.note ? `<p class="onb-desc onb-note">${escapeHtml(device.note)}</p>` : "") +
         (device.code
           ? `<p class="onb-desc">Open the link, then confirm this code:</p>` +
             // Same markup as every other copyable value in this panel, so it
@@ -8550,7 +8562,7 @@
         .map((s) => `<li>${escapeHtml(String(s)).replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")}</li>`)
         .join("");
       return `<div class="onb">` +
-        `<p class="onb-heading">Turn on device sign-in for ${escapeHtml(name)}</p>` +
+        `<p class="onb-heading">${escapeHtml(pf.title || `Turn on device sign-in for ${name}`)}</p>` +
         `<p class="onb-desc">${escapeHtml(pf.reason || "")}</p>` +
         (steps ? `<ol class="onb-steps">${steps}</ol>` : "") +
         (pf.url
@@ -8558,7 +8570,7 @@
           : "") +
         // Still offered, because the setting may already be on — and because a
         // screen that only sends you elsewhere is a dead end with a link on it.
-        `<button class="onb-action onb-secondary" type="button" data-act="connectRemote" data-provider="${escapeHtml(provider)}">I've turned it on — connect</button>` +
+        `<button class="onb-action onb-secondary" type="button" data-act="connectRemote" data-provider="${escapeHtml(provider)}">${escapeHtml(pf.continueLabel || "I've turned it on — connect")}</button>` +
       `</div>`;
     }
 

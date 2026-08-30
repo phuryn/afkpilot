@@ -217,12 +217,24 @@
     return Array.isArray(steps) ? steps : [];
   }
 
+  /** The step heading, when the host gave one ("Step 1 of 2 — …"). */
+  function deviceFlowTitle(flow) {
+    if (!flow) return "";
+    if (flow.status === "unavailable" && flow.preflight && flow.preflight.title) return flow.preflight.title;
+    // Only a flow that HAD a first step gets a second one's number. Grok's
+    // sign-in is a single step and numbering it invents a step that never
+    // happened (seen in the state matrix, 2026-08-31).
+    if (flow.status === "waiting" && flow.preflight) return "Step 2 of 2 — confirm the code";
+    return "";
+  }
+
   function deviceFlowHint(flow) {
     return (flow && flow.preflight && flow.preflight.reason) || "";
   }
 
   function deviceFlowDescription(flow) {
     if (!flow) return "";
+    if (flow.status === "unavailable" && flow.preflight) return flow.preflight.reason || "";
     if (flow.status === "starting") return "Asking the CLI for a sign-in code…";
     if (flow.status === "waiting") {
       return "Open the sign-in page and confirm the code. It finishes on its own — keep this page open.";
@@ -242,6 +254,10 @@
   function deviceFlowRowVisible(s, env, id) {
     const flow = deviceLoginFlow(env, id);
     if (!flow) return false;
+    // Step 1 of 2 lives in this row too, or a Connect clicked here would send
+    // the reader to a card they cannot see (the transcript's onboarding panel
+    // refuses to paint over a conversation).
+    if (flow.status === "unavailable" && flow.preflight) return true;
     if (flow.status === "starting" || flow.status === "waiting" || flow.status === "verifying") return true;
     if (flow.status === "done") {
       const provider = providerOf(s, id);
@@ -442,7 +458,9 @@
       description: TELEMETRY_COPY,
       kind: "toggle",
       defaultValue: true,
-      visible: (s, env) => !!(env && env.isDesktop && !env.isRemote),
+      // A cloud remote is the machine's only surface, so the toggle belongs
+      // there too; a desk remote still shows the read-only row below.
+      visible: (s, env) => !!(env && ((env.isDesktop && !env.isRemote) || hostIsCloud(env))),
       get: (s) => !s || s.telemetryEnabled !== false,
       message: (value) => ({ type: "setTelemetryEnabled", value }),
     },
@@ -462,7 +480,7 @@
       title: "Anonymous usage stats",
       description: "",
       kind: "status",
-      visible: (s, env) => !!(env && env.isRemote),
+      visible: (s, env) => !!(env && env.isRemote && !hostIsCloud(env)),
       describe: (s) => {
         const known = s && typeof s.telemetryEnabled === "boolean";
         const state = known ? (s.telemetryEnabled ? "On. " : "Off. ") : "";
@@ -476,7 +494,7 @@
       description: THUMBS_COPY,
       kind: "toggle",
       defaultValue: false,
-      visible: (s, env) => !env || !env.isRemote,
+      visible: (s, env) => !env || !env.isRemote || hostIsCloud(env),
       get: (s) => !!(s && s.thumbsFeedback),
       message: (value) => ({ type: "setThumbsFeedback", value }),
     },
@@ -486,7 +504,7 @@
       title: "Thumbs feedback to SpaceXAI",
       description: "",
       kind: "status",
-      visible: (s, env) => !!(env && env.isRemote),
+      visible: (s, env) => !!(env && env.isRemote && !hostIsCloud(env)),
       describe: (s) => {
         const known = s && typeof s.thumbsFeedback === "boolean";
         const state = known ? (s.thumbsFeedback ? "On. " : "Off. ") : "";
@@ -2621,13 +2639,31 @@
     } else if (row.kind === "deviceflow") {
       const flow = (row.flow ? row.flow(snapshot, env) : undefined) || {};
       el.classList.add("settings-deviceflow");
-      const live = flow.status === "starting" || flow.status === "waiting" || flow.status === "verifying";
-      const hint = live ? deviceFlowHint(flow) : "";
+      const preflightStep = flow.status === "unavailable" && !!flow.preflight;
+      const live = preflightStep || flow.status === "starting" || flow.status === "waiting" || flow.status === "verifying";
+      const stepTitle = deviceFlowTitle(flow);
+      if (stepTitle) {
+        const heading = document.createElement("div");
+        heading.className = "settings-row-desc settings-deviceflow-step";
+        heading.textContent = stepTitle;
+        // Above the description, not after it: the row builds copy as
+        // name → desc, and appending here put the heading under its own body.
+        title.insertBefore(heading, desc);
+      }
+      // Step 1 shows the reason as the row description already; step 2 keeps
+      // the setting visible beside the code it gates.
+      const hint = preflightStep ? "" : (live ? deviceFlowHint(flow) : "");
       const steps = live ? deviceFlowSteps(flow) : [];
       if (hint) {
         const note = document.createElement("div");
         note.className = "settings-row-desc settings-deviceflow-hint";
         note.textContent = hint;
+        title.appendChild(note);
+      }
+      if (flow.note) {
+        const note = document.createElement("div");
+        note.className = "settings-row-desc settings-deviceflow-note";
+        note.textContent = flow.note;
         title.appendChild(note);
       }
       if (steps.length) {
@@ -2651,6 +2687,22 @@
           list.appendChild(li);
         }
         title.appendChild(list);
+      }
+      if (preflightStep) {
+        if (flow.preflight.url) {
+          const open = document.createElement("button");
+          open.type = "button";
+          open.className = "settings-action settings-action-quiet";
+          open.dataset.deviceOpen = flow.preflight.url;
+          open.textContent = "Open settings";
+          control.appendChild(open);
+        }
+        const go = document.createElement("button");
+        go.type = "button";
+        go.className = "settings-action";
+        go.dataset.deviceContinue = row.providerId || "";
+        go.textContent = flow.preflight.continueLabel || "Done — continue";
+        control.appendChild(go);
       }
       if (flow.status === "waiting") {
         if (flow.code) {
@@ -3238,6 +3290,13 @@
                 copy.textContent = "Copied";
                 setTimeout(() => { copy.textContent = "Copy"; }, 1500);
               } catch { /* clipboard denied — the code is still selectable */ }
+            };
+          }
+          const go = el.querySelector("[data-device-continue]");
+          if (go) {
+            go.onclick = (e) => {
+              e.stopPropagation();
+              post({ type: "runGrokLogin", provider: go.dataset.deviceContinue });
             };
           }
           const cancelBtn = el.querySelector("[data-device-cancel]");

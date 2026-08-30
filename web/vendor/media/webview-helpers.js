@@ -1918,8 +1918,17 @@
     {
       id: "providers",
       copy: "Grok isn’t your only agent. {Connect Codex or Claude Code} and pick one per conversation.",
+      // On a cloud machine Claude Code cannot be connected yet, so the tip
+      // names only what will actually work there.
+      copyWhen: (f) => (f.cloudHost
+        ? "Grok isn’t your only agent here. {Connect Codex} and pick one per conversation."
+        : undefined),
       target: "settings:providers",
-      deskOnly: true,
+      // Was deskOnly, on the rule that a remote may not sign an agent in. It
+      // can since 3.19.x, and on a cloud machine this is the only surface
+      // there is (owner asked why it never appears, 2026-08-31).
+      deskOnly: false,
+      remoteNeedsSignIn: true,
       // Not "fewer than all three": the moment a SECOND agent exists the user
       // has discovered that agents are interchangeable here, which is the only
       // thing this tip was ever teaching.
@@ -1969,6 +1978,10 @@
       // wide, and no amount of padding turns that into a finger-sized target
       // without visibly shoving the sentence around it.
       copy: "{Mention a file with @}, or drop one onto the composer.",
+      // Dropping a file works in the host's own webview only: the browser's
+      // drop handler reads file:// URIs and posts HOST paths, which a phone
+      // does not have. Advising it there is advice that cannot be taken.
+      copyWhen: (f) => (f.isRemote ? "{Mention a file with @} to bring it into the conversation." : undefined),
       target: "mention",
       deskOnly: false,
       eligible: () => true,
@@ -1994,6 +2007,15 @@
   function welcomeTipById(id) {
     for (const tip of WELCOME_TIPS) if (tip.id === id) return tip;
     return undefined;
+  }
+
+  /** A tip's copy for these facts: some tips say something different where the
+   *  action behind them differs (a cloud machine cannot connect Claude Code; a
+   *  browser cannot drop a file onto the composer). */
+  function welcomeTipCopy(tip, facts) {
+    if (!tip) return "";
+    const variant = typeof tip.copyWhen === "function" ? tip.copyWhen(facts || {}) : undefined;
+    return typeof variant === "string" && variant ? variant : tip.copy;
   }
 
   /**
@@ -2030,12 +2052,18 @@
       // here would have hidden the tip on every host that never mentions it.
       worktreeSupported: f.worktreeSupported !== false,
       inWorktree: !!f.inWorktree,
+      cloudHost: !!f.cloudHost,
+      remoteCanConnectAgents: !!f.remoteCanConnectAgents,
       remoteLinked: f.remoteLinked === true ? true : f.remoteLinked === false ? false : null,
     };
     return WELCOME_TIPS.filter((tip) => {
       if (dismissed.has(tip.id)) return false;
       if (shownToday.has(tip.id)) return false;
       if (known.isRemote && tip.deskOnly) return false;
+      // A tip whose action needs a capability this remote does not have is the
+      // same dead end deskOnly was invented to prevent — just decided by what
+      // the host advertises rather than by where the reader is standing.
+      if (known.isRemote && tip.remoteNeedsSignIn && !known.remoteCanConnectAgents) return false;
       // -1 is "the host never told us" — see the doc comment.
       if (tip.id === "routines" && known.routineCount < 0) return false;
       if (tip.id === "connectors" && known.connectorCount < 0) return false;
@@ -2302,7 +2330,7 @@
     return `${hr}h ${min % 60}m`;
   }
 
-  const api = { WELCOME_TIPS, welcomeTipById, welcomeTipsFor, splitWelcomeTipCopy, addProjectMenuItems, addProjectFolderPreview, addProjectForm, formatWaitElapsed, FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, composerHasSendIntent, explicitVisibleChips, normalizeQueuedSends, queuedSendsText, queuedSendsChips, contextOverheadTokens, nextContextBreakdown, contextBreakdownIsCurrent, createPendingOverlay, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, highlightQueryParts, appendHighlightedText, commandProgramLabel, commandTextPreview, MAX_COMMAND_OUTPUT_CHARS, capCommandOutput, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents, flattenHistoryMessages, splitHistoryWindow, countHistoryReplayCounters, partitionHistoryCards };
+  const api = { WELCOME_TIPS, welcomeTipById, welcomeTipsFor, welcomeTipCopy, splitWelcomeTipCopy, addProjectMenuItems, addProjectFolderPreview, addProjectForm, formatWaitElapsed, FILE_EXTS, HOST_MESSAGE_TYPES, WEBVIEW_MESSAGE_TYPES, isKnownHostMessage, composerHasSendIntent, explicitVisibleChips, normalizeQueuedSends, queuedSendsText, queuedSendsChips, contextOverheadTokens, nextContextBreakdown, contextBreakdownIsCurrent, createPendingOverlay, getMentionQuery, applyMentionPick, looksLikeFileRef, formatRelativeTime, modelPickerLabel, modelDisplayName, MIC_STATES, nextMicState, trailingSendPhrase, versionedSiblingUrl, buildQuestionAnswers, isFreeTextOptionLabel, isSubagentToolCall, subagentLabel, cleanSubagentOutput, parseSubagentTaskResult, shouldStickToBottom, stickThresholdPx, splitMath, stripUnsupportedTex, toolFailureText, isMediaGenToolCall, mediaGenZeroRetentionHint, TOOL_LABEL_MAX, middleElide, isAdvertisedSkill, getSlashQuery, applySlashPick, filterCommands, highlightQueryParts, appendHighlightedText, commandProgramLabel, commandTextPreview, MAX_COMMAND_OUTPUT_CHARS, capCommandOutput, extractToolResultOutput, commandOutputWasCancelled, commandOutputTruncationNote, computeLineDiff, parseAttachmentContext, parseSelectionBlocks, parseImageTags, orderPermissionOptions, defaultPermissionIndex, shouldFocusPermissionCard, isTypeThroughKey, isInterjectionText, stripInterjectionEnvelope, spokenTextFromMarkdown, isRelaySendRejection, panelReclampOnResizeAllowed, wireFullscreenSafeReclamp, distributeSidePanelWidths, chatZoomFactor, unzoomClientPx, exportSessionMarkdown, exportSessionFilename, isExportableSessionEvent, replayedUserBubbleVerdict, truncateExportEvents, flattenHistoryMessages, splitHistoryWindow, countHistoryReplayCounters, partitionHistoryCards };
 
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
