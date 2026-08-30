@@ -1233,3 +1233,10 @@ textarea.settings-routine-prompt {
   user-select: all;
 }
 .settings-action-quiet { opacity: 0.75; }
+.settings-deviceflow .settings-row-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}

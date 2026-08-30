@@ -8510,6 +8510,14 @@
       `</div>`;
     }
 
+    if (device && device.status === "verifying") {
+      status("Confirming sign-in");
+      return `<div class="onb">` +
+        `<p class="onb-heading">Almost there</p>` +
+        `<p class="onb-desc">Signed in — confirming the credential on this machine…</p>` +
+      `</div>`;
+    }
+
     if (device && device.status === "done") {
       status("Connected");
       return `<div class="onb">` +
@@ -8566,8 +8574,18 @@
     // answers `unavailable` with a reason for any that cannot.
     status("Connect an agent");
     const offer = provider ? [provider] : ["grok", "codex", "claude"];
+    // A cloud machine's three agents are not equal offers: Grok is the native
+    // one, and Claude cannot be connected there yet — a button that always
+    // ends in "not available" is a dead end wearing an affordance.
+    const cloudHost = !!(state.hostCaps && state.hostCaps.remoteAgentSignOut);
     const buttons = offer
-      .map((id) => `<button class="onb-action" type="button" data-act="connectRemote" data-provider="${id}">Connect ${NAMES[id]}</button>`)
+      .map((id) => {
+        if (cloudHost && id === "claude") {
+          return `<p class="onb-desc onb-agent-note">Claude Code isn't available on cloud machines yet — we're working on adding it.</p>`;
+        }
+        const rec = cloudHost && id === "grok" ? " (recommended)" : "";
+        return `<button class="onb-action" type="button" data-act="connectRemote" data-provider="${id}">Connect ${NAMES[id]}${rec}</button>`;
+      })
       .join("");
     return `<div class="onb">` +
       `<p class="onb-heading">${provider ? `Connect ${escapeHtml(name)}` : "Connect an agent"}</p>` +
@@ -15013,6 +15031,15 @@
         state.providersKnown = true;
         state.providers = Array.isArray(msg.providers) ? msg.providers.filter((provider) =>
           provider && (provider.id === "grok" || provider.id === "codex" || provider.id === "claude")) : [];
+        // A confirmed account retires its device-flow mirror. Without this the
+        // "Connected" flow row would resurface in Settings after a later
+        // sign-out, describing a connection that no longer exists.
+        for (const provider of state.providers) {
+          const mirrored = state.deviceLoginByProvider[provider.id];
+          if (provider.connected && mirrored && mirrored.status === "done") {
+            delete state.deviceLoginByProvider[provider.id];
+          }
+        }
         // Read, never latched on click: a host too old to know `refreshProviders`
         // sends no frame at all, and a locally-set flag would spin forever.
         // Absent means idle, which is also what every pre-refresh host means.
