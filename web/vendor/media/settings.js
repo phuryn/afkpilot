@@ -178,6 +178,29 @@
     return provider.connected === true && provider.needsLogin !== true;
   }
 
+  /**
+   * Whether a remote may sign an agent OUT here. Cloud environments only: the
+   * remote is that host's only surface, so a credential it can grant and never
+   * revoke is the worse answer. Everywhere else `logout` is host-local and the
+   * row stays a status line. Field presence, never a version check.
+   */
+  function canSignOutFromRemote(env) {
+    return !!(env && env.hostCaps && env.hostCaps.remoteAgentSignOut);
+  }
+
+  /**
+   * Does this remote row have a button, or is it just a status line?
+   *
+   * Connected and healthy, the useful action is signing OUT; anything else, it
+   * is connecting. Each is gated on its own capability, so a host that offers
+   * one and not the other renders exactly what it can actually do.
+   */
+  function remoteProviderActionable(snapshot, env, id) {
+    return remoteProviderIsSettled(snapshot, id)
+      ? canSignOutFromRemote(env)
+      : canSignInFromRemote(env);
+  }
+
   function providerAction(provider) {
     const connected = provider.connected === true;
     const needsLogin = connected && provider.needsLogin === true;
@@ -563,7 +586,7 @@
       description: "",
       kind: "status",
       visible: (s, env) => !!(env && env.isRemote && env.providersKnown
-        && (remoteProviderIsSettled(s, "grok") || !canSignInFromRemote(env))),
+        && !remoteProviderActionable(s, env, "grok")),
       describe: (s) => providerDescription(providerOf(s, "grok")),
     },
     {
@@ -574,11 +597,18 @@
       description: "",
       kind: "action",
       visible: (s, env) => !!(env && env.isRemote && env.providersKnown
-        && canSignInFromRemote(env) && !remoteProviderIsSettled(s, "grok")),
+        && remoteProviderActionable(s, env, "grok")),
       describe: (s) => providerDescription(providerOf(s, "grok")),
       actionLabel: (s) => providerAction(providerOf(s, "grok")),
-      // Never `logout` — that stays desk-only. See remoteProviderIsSettled.
-      message: () => ({ type: "runGrokLogin", provider: "grok" }),
+      // Same two messages the desk row sends, reached through the same test.
+      // Which one is offered is decided by visibility above, so this cannot
+      // send `logout` to a host that did not advertise remoteAgentSignOut.
+      message: (s) => {
+        const provider = providerOf(s, "grok");
+        return provider.connected && provider.needsLogin !== true
+          ? { type: "logout", provider: "grok" }
+          : { type: "runGrokLogin", provider: "grok" };
+      },
     },
     {
       id: "providerCodexStatus",
@@ -588,7 +618,7 @@
       description: "",
       kind: "status",
       visible: (s, env) => !!(env && env.isRemote && env.providersKnown
-        && (remoteProviderIsSettled(s, "codex") || !canSignInFromRemote(env))),
+        && !remoteProviderActionable(s, env, "codex")),
       describe: (s) => providerDescription(providerOf(s, "codex")),
     },
     {
@@ -599,11 +629,18 @@
       description: "",
       kind: "action",
       visible: (s, env) => !!(env && env.isRemote && env.providersKnown
-        && canSignInFromRemote(env) && !remoteProviderIsSettled(s, "codex")),
+        && remoteProviderActionable(s, env, "codex")),
       describe: (s) => providerDescription(providerOf(s, "codex")),
       actionLabel: (s) => providerAction(providerOf(s, "codex")),
-      // Never `logout` — that stays desk-only. See remoteProviderIsSettled.
-      message: () => ({ type: "runGrokLogin", provider: "codex" }),
+      // Same two messages the desk row sends, reached through the same test.
+      // Which one is offered is decided by visibility above, so this cannot
+      // send `logout` to a host that did not advertise remoteAgentSignOut.
+      message: (s) => {
+        const provider = providerOf(s, "codex");
+        return provider.connected && provider.needsLogin !== true
+          ? { type: "logout", provider: "codex" }
+          : { type: "runGrokLogin", provider: "codex" };
+      },
     },
     {
       id: "providerClaudeStatus",
@@ -613,7 +650,7 @@
       description: "",
       kind: "status",
       visible: (s, env) => !!(env && env.isRemote && env.providersKnown
-        && (remoteProviderIsSettled(s, "claude") || !canSignInFromRemote(env))),
+        && !remoteProviderActionable(s, env, "claude")),
       describe: (s) => providerDescription(providerOf(s, "claude")),
     },
     {
@@ -624,11 +661,18 @@
       description: "",
       kind: "action",
       visible: (s, env) => !!(env && env.isRemote && env.providersKnown
-        && canSignInFromRemote(env) && !remoteProviderIsSettled(s, "claude")),
+        && remoteProviderActionable(s, env, "claude")),
       describe: (s) => providerDescription(providerOf(s, "claude")),
       actionLabel: (s) => providerAction(providerOf(s, "claude")),
-      // Never `logout` — that stays desk-only. See remoteProviderIsSettled.
-      message: () => ({ type: "runGrokLogin", provider: "claude" }),
+      // Same two messages the desk row sends, reached through the same test.
+      // Which one is offered is decided by visibility above, so this cannot
+      // send `logout` to a host that did not advertise remoteAgentSignOut.
+      message: (s) => {
+        const provider = providerOf(s, "claude");
+        return provider.connected && provider.needsLogin !== true
+          ? { type: "logout", provider: "claude" }
+          : { type: "runGrokLogin", provider: "claude" };
+      },
     },
     {
       id: "continueRemotely",

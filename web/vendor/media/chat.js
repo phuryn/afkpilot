@@ -8521,8 +8521,13 @@
     if (device && device.preflight) {
       status("One setting first");
       const pf = device.preflight;
+      // Escape FIRST, then allow `**bold**` — never the other way round. The
+      // step strings come from the host, and the point of the escape is that
+      // nothing in them can become markup; re-admitting one tag afterwards, on
+      // text that is already inert, keeps that true. One step needs it: the
+      // setting people cannot find sits at the bottom of a long page.
       const steps = (pf.steps || [])
-        .map((s) => `<li>${escapeHtml(String(s))}</li>`)
+        .map((s) => `<li>${escapeHtml(String(s)).replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")}</li>`)
         .join("");
       return `<div class="onb">` +
         `<p class="onb-heading">Turn on device sign-in for ${escapeHtml(name)}</p>` +
