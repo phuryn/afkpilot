@@ -2009,6 +2009,24 @@ window.grokRemoteClient = true;
   var voiceTransportReady = false;
   var interruptingVoice = false;
   var DEVICE_OFFLINE_GRACE_MS = 12000;
+  // A cloud environment that has NEVER attached is not offline, it is BOOTING.
+  //
+  // The 12s grace above is calibrated for a reconnect: a host whose uplink
+  // dropped is usually back inside it. A machine that was just created or reset
+  // has to be provisioned first, which measured ~50s on our own image, so the
+  // grace expires while everything is working perfectly and the page says the
+  // environment is not responding. That is the wrong word for "not there yet",
+  // and it is the first thing a new user sees.
+  //
+  // So the first notice for that case is calm and says what is happening, and
+  // only a machine that stays away past this second window is called a failure.
+  // The cost of the longer window is that a genuinely broken first boot takes
+  // this long to say so; the cost of not having it is telling everybody their
+  // brand-new environment is broken.
+  var CLOUD_FIRST_BOOT_ERROR_MS = 90000;
+  var firstBootErrorTimer = null;
+  /** Has any inbound frame ever proved this device's host was alive? */
+  var everSawHost = false;
   var IDENTITY_RESTORE_TIMEOUT_MS = 15000;
   var IDENTITY_RESTORE_FAIL_MS = 60000;
   function deviceOfflineGraceMs() {
@@ -3036,6 +3054,11 @@ window.grokRemoteClient = true;
   }
 
   function applyInboundDeviceAlive(data) {
+    // Proof the HOST is there, which is different from our socket to the relay
+    // being open. Latched, because "has it ever arrived" is what separates a
+    // machine that is still booting from one that went away.
+    everSawHost = true;
+    if (firstBootErrorTimer) { clearTimeout(firstBootErrorTimer); firstBootErrorTimer = null; }
     var wasHeld = !!offlineHold || deviceOffline;
     hostReturnDuringCapture = null;
     clearOfflineGrace();
@@ -3115,12 +3138,29 @@ window.grokRemoteClient = true;
     var queuedNote = !held ? "" : held === 1
       ? " Your unsent message is saved and will be sent when " + reconnects + "."
       : " Your unsent messages are saved and will be sent when " + reconnects + ".";
-    var offlineText = isCloudDevice
-      ? "Your cloud environment isn't responding. It should come back on its own — this page will connect when it does."
-      : "Device offline — open VS Code on that machine and this page will connect by itself.";
+    var stillBooting = isCloudDevice && !everSawHost;
+    var offlineText = stillBooting
+      ? "Setting up your cloud environment. A new machine takes about a minute to come up — this page will connect on its own."
+      : isCloudDevice
+        ? "Your cloud environment isn't responding. It should come back on its own — this page will connect when it does."
+        : "Device offline — open VS Code on that machine and this page will connect by itself.";
     window.dispatchEvent(new MessageEvent("message", {
       data: { type: "error", text: offlineText + queuedNote },
     }));
+    // Calm now, honest later. A first boot that never finishes is a real
+    // failure and must eventually say so rather than reassure for ever.
+    if (stillBooting && !firstBootErrorTimer) {
+      firstBootErrorTimer = setTimeout(function () {
+        firstBootErrorTimer = null;
+        if (everSawHost || !deviceOffline) return;
+        window.dispatchEvent(new MessageEvent("message", {
+          data: {
+            type: "error",
+            text: "Your cloud environment still hasn't come up. Try reopening it, or reset it from the device picker if this keeps happening.",
+          },
+        }));
+      }, CLOUD_FIRST_BOOT_ERROR_MS);
+    }
   }
 
   function beginDeviceOfflineGrace() {
