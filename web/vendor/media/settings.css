@@ -1220,3 +1220,16 @@ textarea.settings-routine-prompt {
   color: var(--vscode-descriptionForeground);
   padding: 20px 2px;
 }
+
+/* Device sign-in in flight (Settings → Providers). The code is the thing the
+   person is about to type somewhere else — selectable as a unit, legible. */
+.settings-devicecode {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.35));
+  border-radius: 4px;
+  user-select: all;
+}
+.settings-action-quiet { opacity: 0.75; }

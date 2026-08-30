@@ -315,6 +315,9 @@
     providersChecking: false,
     onboardingMode: null,
     onboardingInfo: {},
+    /** provider -> the device-login card last sent by the host. Mirrored into
+     *  Settings so a connect started there reports where the click happened. */
+    deviceLoginByProvider: {},
     codexInstall: { phase: "idle", receivedBytes: 0, totalBytes: 0, reason: "" },
     availableModels: [],
     currentModeId: "agent",
@@ -2628,6 +2631,7 @@
     return {
       isRemote: IS_REMOTE,
       isDesktop: isDesktopHostCaps(),
+      deviceLogin: state.deviceLoginByProvider,
       clientOwnsFontScale: CLIENT_OWNS_FONT_SCALE,
       ttsAvailable,
       steerSupported: state.steerSupported !== false,
@@ -16283,6 +16287,14 @@
           showOnboarding(msg.state, { platform: msg.platform, reason: msg.reason, provider: msg.provider, device: msg.device }, () => {
             if (msg.launched) markOnboardingLaunchedByHost(msg.provider);
           });
+          // Mirror the device flow into Settings → Providers. The welcome card
+          // above cannot render over a painted conversation, so for a click
+          // made from the settings overlay this mirror IS the feedback.
+          if (msg.provider) {
+            if (msg.device) state.deviceLoginByProvider[msg.provider] = msg.device;
+            else delete state.deviceLoginByProvider[msg.provider];
+            refreshSettingsOverlay();
+          }
         break;
       case "error":
         // The relay bounces a quota-refused frame as a plain error, which
