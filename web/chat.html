@@ -2023,10 +2023,25 @@ window.grokRemoteClient = true;
   // The cost of the longer window is that a genuinely broken first boot takes
   // this long to say so; the cost of not having it is telling everybody their
   // brand-new environment is broken.
-  var CLOUD_FIRST_BOOT_ERROR_MS = 90000;
+  // How long a machine that has NEVER attached may stay quiet before the page
+  // stops reassuring and starts explaining. The first window is short because
+  // a pooled machine is handed over in seconds; the second is long because a
+  // COLD build — an empty pool — is documented at up to twenty-five minutes,
+  // and telling somebody to reset a machine that is still installing is how a
+  // working product looks broken (review, 2026-08-31).
+  var CLOUD_FIRST_BOOT_NOTE_MS = 90000;
+  var CLOUD_FIRST_BOOT_ERROR_MS = 25 * 60 * 1000;
+  var firstBootNoteTimer = null;
   var firstBootErrorTimer = null;
-  /** Has any inbound frame ever proved this device's host was alive? */
-  var everSawHost = false;
+  /** Has any inbound frame ever proved this device's host was alive?
+   *
+   *  Remembered per device, not per page: a reload is not evidence that a
+   *  machine which has worked for days is suddenly a first boot, and treating
+   *  it as one delayed the honest offline message by the whole first window. */
+  var everSawHostKey = "afk.sawHost." + (device || "unknown");
+  var everSawHost = (function () {
+    try { return window.localStorage.getItem(everSawHostKey) === "1"; } catch (e) { return false; }
+  })();
   var IDENTITY_RESTORE_TIMEOUT_MS = 15000;
   var IDENTITY_RESTORE_FAIL_MS = 60000;
   function deviceOfflineGraceMs() {
@@ -3058,6 +3073,8 @@ window.grokRemoteClient = true;
     // being open. Latched, because "has it ever arrived" is what separates a
     // machine that is still booting from one that went away.
     everSawHost = true;
+    try { window.localStorage.setItem(everSawHostKey, "1"); } catch (e) { /* private mode: page-local is still correct */ }
+    if (firstBootNoteTimer) { clearTimeout(firstBootNoteTimer); firstBootNoteTimer = null; }
     if (firstBootErrorTimer) { clearTimeout(firstBootErrorTimer); firstBootErrorTimer = null; }
     var wasHeld = !!offlineHold || deviceOffline;
     hostReturnDuringCapture = null;
@@ -3158,6 +3175,22 @@ window.grokRemoteClient = true;
     if (stillBooting) markBootingNotice();
     // Calm now, honest later. A first boot that never finishes is a real
     // failure and must eventually say so rather than reassure for ever.
+    if (stillBooting && !firstBootNoteTimer) {
+      // Still calm, and now honest about the range: a machine handed out of the
+      // pool is seconds, a cold build is minutes, and the person deserves to
+      // know which world they are in before they start pressing things.
+      firstBootNoteTimer = setTimeout(function () {
+        firstBootNoteTimer = null;
+        if (everSawHost || !deviceOffline) return;
+        window.dispatchEvent(new MessageEvent("message", {
+          data: {
+            type: "hostNotice",
+            text: "Still setting up. A machine built from scratch can take up to 25 minutes the first time — you can close this page and come back; it keeps going.",
+          },
+        }));
+        markBootingNotice();
+      }, CLOUD_FIRST_BOOT_NOTE_MS);
+    }
     if (stillBooting && !firstBootErrorTimer) {
       firstBootErrorTimer = setTimeout(function () {
         firstBootErrorTimer = null;

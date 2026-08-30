@@ -15078,7 +15078,11 @@
         // sign-out, describing a connection that no longer exists.
         for (const provider of state.providers) {
           const mirrored = state.deviceLoginByProvider[provider.id];
-          if (provider.connected && mirrored && mirrored.status === "done") {
+          if (!mirrored) continue;
+          // Connected: the snapshot is now the truth, so a finished flow has
+          // nothing left to say. Disconnected: a signed-out account must not
+          // keep a "Connected" card from an earlier session in this tab.
+          if (provider.connected ? mirrored.status === "done" : mirrored.status !== "waiting" && mirrored.status !== "starting" && mirrored.status !== "verifying") {
             delete state.deviceLoginByProvider[provider.id];
           }
         }
@@ -15086,6 +15090,11 @@
         // sends no frame at all, and a locally-set flag would spin forever.
         // Absent means idle, which is also what every pre-refresh host means.
         state.providersChecking = msg.checking === true;
+        // The page that ASKED for this refresh has to show its result. On a
+        // cloud machine that page is the only one there is, and without this
+        // the Refresh button sat still and the rows kept their old answer
+        // until the overlay was reopened (review, 2026-08-31).
+        refreshSettingsOverlay();
         // Connecting an additional account happens from the gear while the
         // current transcript stays mounted. The login/recovery view temporarily
         // borrows the welcome overlay; dismiss it when the provider it was
@@ -16360,8 +16369,21 @@
           // above cannot render over a painted conversation, so for a click
           // made from the settings overlay this mirror IS the feedback.
           if (msg.provider) {
-            if (msg.device) state.deviceLoginByProvider[msg.provider] = msg.device;
-            else delete state.deviceLoginByProvider[msg.provider];
+            // A terminal "done" is only worth mirroring while the snapshot has
+            // not caught up. Storing it unconditionally left a latent card that
+            // reappeared as "Connected" after a later sign-out in the same tab,
+            // hiding the real Connect row (review, 2026-08-31) -- providerState
+            // can arrive BEFORE this frame, so the retirement below cannot be
+            // the only cure.
+            var settledDone = msg.device && msg.device.status === "done";
+            var alreadyConnected = (state.providers || []).some(function (p) {
+              return p && p.id === msg.provider && p.connected;
+            });
+            if (msg.device && !(settledDone && alreadyConnected)) {
+              state.deviceLoginByProvider[msg.provider] = msg.device;
+            } else {
+              delete state.deviceLoginByProvider[msg.provider];
+            }
             refreshSettingsOverlay();
           }
         break;
