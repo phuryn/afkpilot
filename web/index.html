@@ -43,15 +43,15 @@
     };
   })();
 </script>
-<title>AFK Pilot — your Grok agent from any browser</title>
-<meta name="description" content="AFK Pilot connects the Grok Build for VS Code (Community) agent to any browser. Pair once with a one-time code, then chat and steer your agent from your phone, tablet, or another laptop." />
+<title>AFK Pilot — Grok, Codex &amp; Claude from any browser</title>
+<meta name="description" content="AFK Pilot puts your coding agents in any browser — Grok, OpenAI Codex and Claude Code, on your own machine or on a dedicated cloud dev machine with nothing to install. Pair once, then chat and steer from your phone." />
 <meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)" />
 <meta name="theme-color" content="#fbfbfc" media="(prefers-color-scheme: light)" />
 <meta property="og:type" content="website" />
 <link rel="canonical" href="https://afkpilot.com/" />
 <meta property="og:url" content="https://afkpilot.com/" />
-<meta property="og:title" content="AFK Pilot — your Grok agent from any browser" />
-<meta property="og:description" content="Pair your Grok agent with a one-time code and chat with it from any browser. Messages are relayed in memory — never stored on our servers." />
+<meta property="og:title" content="AFK Pilot — Grok, Codex &amp; Claude from any browser" />
+<meta property="og:description" content="Steer Grok, Codex and Claude Code from any browser — on your own machine, or on a dedicated cloud dev machine with nothing to install. Messages are relayed in memory — never stored." />
 <meta property="og:image" content="https://afkpilot.com/og-home.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
@@ -307,6 +307,16 @@
   .feature h3 { font-size: var(--step-1); margin: 0.7rem 0 0.5rem; letter-spacing: -0.01em; }
   .feature p { margin: 0; color: var(--muted); font-size: 0.95rem; line-height: 1.55; }
 
+  /* ---------------- cloud band ----------------
+     The broader bet gets its own room right under the hero: a dedicated VM,
+     every harness, nothing to install. Reuses .feature cards so the rhythm
+     matches the grid below it. */
+  .cloudband { border-top: 1px solid var(--border-soft); padding-block: clamp(2.5rem, 6vw, 4.5rem); }
+  .cloudband-head h2 { font-size: var(--step-3); letter-spacing: -0.015em; margin: 0.7rem 0 0; max-width: 26ch; }
+  .cloudband-head p { color: var(--muted); margin: 0.75rem 0 0; max-width: 62ch; }
+  .cloudband-grid { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: clamp(1.5rem, 4vw, 2.5rem); }
+  .cloudband-note { margin-top: 1.5rem; font-family: var(--font-mono); font-size: 0.72rem; color: var(--faint); }
+
   /* ---------------- get started: three steps ---------------- */
   .steps-section { padding-block: clamp(2.5rem, 6vw, 4.5rem); }
   .steps-head h2 { font-size: var(--step-2); letter-spacing: -0.02em; margin: 0.5rem 0 0; max-width: 22ch; }
@@ -453,6 +463,24 @@
   .usage-label b { color: var(--heading); font-weight: 600; }
   .usage-devices { font-family: var(--font-mono); font-size: var(--step--1); color: var(--faint); }
   .usage-upgrade { margin-left: auto; font-size: var(--step--1); }
+
+  /* "Preview" markers: one on the pricing bullet, one on cloud device rows.
+     Same shape, so the eye learns it once. */
+  .plan-tag, .preview-chip {
+    display: inline-block;
+    flex: none;
+    margin-left: 0.5rem;
+    padding: 0.08rem 0.5rem;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    vertical-align: middle;
+    white-space: nowrap;
+  }
   .usage-bar { margin-top: 0.7rem; height: 5px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
   .usage-fill { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 0.4s ease; }
   .usage-fill.is-high { background: var(--red); }
@@ -876,6 +904,7 @@
   }
   @media (max-width: 720px) {
     .features-grid { grid-template-columns: 1fr; gap: 2rem; }
+    .cloudband-grid { grid-template-columns: 1fr; gap: 2rem; }
     .steps-grid { grid-template-columns: 1fr; }
     .feature { padding-inline: 0; }
     .feature:not(:first-child) { border-left: 0; border-top: 1px solid var(--border-soft); padding-top: 2rem; }
@@ -935,9 +964,9 @@
       <section class="hero">
         <div class="wrap hero-grid">
           <div class="hero-copy">
-            <p class="eyebrow reveal d1">Grok Build (Community) — remote control</p>
-            <h1 class="reveal d2">Your Grok agent from any browser.</h1>
-            <p class="hero-sub reveal d3">AFK Pilot links your Grok Build agent to a browser on any device — running in <b>VS Code</b> or in the standalone <b>Grok Build Desktop</b>. Pair once with a one-time code, then chat, review, and steer it from your phone, tablet, or the next room.</p>
+            <p class="eyebrow reveal d1">Grok Build (Community) — remote control &amp; cloud</p>
+            <h1 class="reveal d2">Your coding agents, from any browser.</h1>
+            <p class="hero-sub reveal d3">AFK Pilot links your coding agents — Grok, OpenAI Codex and Claude Code — to a browser on any device. Run them in <b>VS Code</b>, in <b>Grok Build Desktop</b>, or on a <b>cloud machine we run for you</b>. Pair once, then chat, review, and steer from your phone, tablet, or the next room.</p>
             <div class="hero-cta reveal d4">
               <button class="btn btn-primary js-signin" type="button">Start free</button>
               <a class="btn btn-secondary" href="#pricing-section">See pricing</a>
@@ -950,6 +979,34 @@
             <img class="hero-shot reveal d3" src="/hero-phone.png" width="758" height="1500"
                  alt="The AFK Pilot chat client running on a phone" />
           </div>
+        </div>
+      </section>
+
+      <section class="cloudband">
+        <div class="wrap">
+          <div class="cloudband-head">
+            <p class="eyebrow">Cloud · free preview</p>
+            <h2>A dev machine in the cloud, ready in one click.</h2>
+            <p>Subscribers get a dedicated Linux machine with Grok Build already on it — open it from any browser and start working. Nothing to install, no computer left running at home.</p>
+          </div>
+          <div class="cloudband-grid">
+            <div class="feature">
+              <span class="kw">dedicated</span>
+              <h3>Yours, not shared</h3>
+              <p>Your own VM — 8 CPU cores, 8 GB RAM, ~100 GB of storage — created the first time you open it, usually in seconds.</p>
+            </div>
+            <div class="feature">
+              <span class="kw">persistent</span>
+              <h3>What you install stays</h3>
+              <p>Not a throwaway container: your repos, packages and agent sign-ins are still there tomorrow.</p>
+            </div>
+            <div class="feature">
+              <span class="kw">efficient</span>
+              <h3>Sleeps when you do</h3>
+              <p>It naps between sessions and picks up where it left off — built to cost only when it works.</p>
+            </div>
+          </div>
+          <p class="cloudband-note">In preview, included free with Remote Max. Later it graduates to its own plan, from $5/mo.</p>
         </div>
       </section>
 
@@ -982,13 +1039,13 @@
           <ol class="steps-grid">
             <li class="step-card">
               <span class="step-num">1</span>
-              <h3>Install a host</h3>
-              <p>Already in an editor? <b>Grok Build for VS Code (Community)</b> from the <a href="https://marketplace.visualstudio.com/items?itemName=PawelHuryn.grok-vscode-phuryn" target="_blank" rel="noopener">VS Code Marketplace</a> or <a href="https://open-vsx.org/extension/PawelHuryn/grok-vscode-phuryn" target="_blank" rel="noopener">Open VSX</a> (Cursor, Windsurf, …).<br>Rather not install one? <b><a href="/desktop">Grok Build Desktop</a></b>, for Windows and macOS.</p>
+              <h3>Get a machine</h3>
+              <p>The quick way: subscribers open their <b>Cloud machine</b> from the device list — nothing to install.<br>Your own computer instead? <b>Grok Build for VS Code (Community)</b> from the <a href="https://marketplace.visualstudio.com/items?itemName=PawelHuryn.grok-vscode-phuryn" target="_blank" rel="noopener">VS Code Marketplace</a> or <a href="https://open-vsx.org/extension/PawelHuryn/grok-vscode-phuryn" target="_blank" rel="noopener">Open VSX</a> (Cursor, Windsurf, …), or <b><a href="/desktop">Grok Build Desktop</a></b> for Windows and macOS.</p>
             </li>
             <li class="step-card">
               <span class="step-num">2</span>
               <h3>Link this device</h3>
-              <p>In your host, open <b>Sign in (link this device)</b> from the gear menu. It opens the approval page for you.</p>
+              <p>A Cloud machine is linked from the start. On your own machine, open <b>Sign in (link this device)</b> from the gear menu — it opens the approval page for you.</p>
             </li>
             <li class="step-card">
               <span class="step-num">3</span>
@@ -1032,13 +1089,14 @@
               <ul>
                 <li>Unlimited linked devices</li>
                 <li>Unlimited remote messages</li>
+                <li>Cloud dev machine <span class="plan-tag">free preview</span></li>
                 <li>Everything in Free</li>
               </ul>
               <button class="btn btn-primary js-signin" type="button">Sign in to upgrade</button>
               <p class="plan-fine">Monthly or annual billing · secure checkout after you sign in.</p>
             </div>
           </div>
-          <p class="pricing-note">Fair-use burst cap of 20 messages/minute applies to all plans.</p>
+          <p class="pricing-note">Fair-use burst cap of 20 messages/minute applies to all plans. Cloud machines are in preview — included with Remote Max today, graduating to their own plan (from $5/mo) later.</p>
         </div>
       </section>
     </div>
@@ -1078,7 +1136,8 @@
             <!-- Two hosts, named and parallel. The desktop app used to be a
                  trailing "or…" clause here, which reads as a footnote to the
                  extension rather than the other way to do this. -->
-            <li><b>Install a host</b> — either one works.<br>
+            <li><b>Fastest: your Cloud machine.</b> Subscribers open it at the top of the list above — nothing to install, and it links itself.</li>
+            <li><b>Prefer your own machine? Install a host</b> — either one works.<br>
               <b>Grok Build for VS Code (Community)</b>, if you already work in an editor — from the <a href="https://marketplace.visualstudio.com/items?itemName=PawelHuryn.grok-vscode-phuryn" target="_blank" rel="noopener">VS Code Marketplace</a> or <a href="https://open-vsx.org/extension/PawelHuryn/grok-vscode-phuryn" target="_blank" rel="noopener">Open VSX</a> (Cursor, Windsurf, …).<br>
               <b><a href="/desktop">Grok Build Desktop</a></b>, if you would rather not install an editor at all.</li>
             <li><b>Link this device.</b> In the extension, open the <b>gear icon → Sign in (link this device)</b> — your browser opens the approval page automatically. If the code shows on another machine, open <a href="/link">/link</a> here and type it in.</li>
@@ -1123,6 +1182,7 @@
                         <li>Send prompts and steer a run mid-turn</li>
                         <li>Dictate with your voice, then say “grok send”</li>
                         <li>Approve file writes, commands and plans</li>
+                        <li>Connect Grok or Codex to a machine with a device code</li>
                         <li>Stop, queue and fork a turn</li>
                         <li>Switch model, mode and thinking effort</li>
                         <li>Choose which repository each tab works in</li>
@@ -1144,7 +1204,7 @@
                       <ul>
                         <li>Dragging a file onto the composer</li>
                         <li>Adding a project folder — that opens a file picker on the machine itself</li>
-                        <li>Connecting or signing out of an agent account — Grok, Codex and Claude Code all sign in through their own CLI on the machine, so the browser shows you which are connected but cannot change it</li>
+                        <li>Connecting Claude Code, and signing agents out of your own machine — Grok and Codex connect from the browser with a device code, and a Cloud machine can be signed out remotely, but the rest still happens at the machine itself</li>
                         <li>Linking a new machine — that starts in the extension or Desktop app</li>
                         <li>Video — images cross the wire, video never does</li>
                         <li>Photos attached before you installed this version — their previews were not kept</li>
@@ -1158,14 +1218,15 @@
                 <summary>Does it work with Codex and Claude Code?</summary>
                 <div class="faq-body">
                   <p>Yes — both. Grok Build — the VS Code extension and the desktop app — connects <b>OpenAI Codex</b> and <b>Claude Code</b> alongside Grok. Models from every connected agent appear in one picker, and each conversation keeps the agent it started with, so you can run all three side by side. Connect or sign out in Settings → Providers; if the Codex CLI isn't installed, the app offers to install it for you.</p>
-                  <p>From the browser, AFK Pilot shows which agents are connected and drives conversations on any of them. Signing in and out stays at the desk, since each agent authenticates through its own CLI on that machine.</p>
+                  <p>From the browser, AFK Pilot drives conversations on any of them — and it can also <b>connect Grok or Codex</b> to a machine with a device code, no terminal needed. Claude Code still signs in at the machine itself.</p>
                 </div>
               </details>
 
               <details class="faq-item" name="faq">
                 <summary>Do I need to leave my computer on?</summary>
                 <div class="faq-body">
-                  <p>Yes. The agent runs on your machine, in either Grok Build for VS Code (Community) or Grok Build Desktop (Community), with your own model access — AFK Pilot is only the wire between it and your browser. Leave the host running and the workspace linked.</p>
+                  <p><b>Not if you use a Cloud machine</b> — that one runs in our cloud and sleeps on its own, so your laptop can stay shut.</p>
+                  <p>For an agent on your own machine, yes. It runs there, in either Grok Build for VS Code (Community) or Grok Build Desktop (Community), with your own model access — AFK Pilot is only the wire between it and your browser. Leave the host running and the workspace linked.</p>
                   <p>In VS Code, you do not have to leave the Grok panel open, but you do have to <b>open it once after you start VS Code</b>: that is what dials the connection. In Desktop, open the app and link it from its AFK Pilot controls. After that, the local panel can be out of the way while the link stays up.</p>
                   <p>While a device is linked, the extension holds your operating system's own wake lock so the machine will not idle-sleep and drop the connection while you are away. Your screen still goes dark, and <code>grok.remote.keepAwake</code> turns the whole thing off. If the machine does go down, the device simply shows as offline and reconnects by itself when it comes back.</p>
                 </div>
@@ -1175,6 +1236,35 @@
                 <summary>Is my phone one of my linked devices?</summary>
                 <div class="faq-body">
                   <p>No. A linked device is a <b>machine running a host</b> — VS Code or Grok Build Desktop — and that is what the Free plan's one-device limit counts. Running <i>both</i> hosts on the same computer still counts as one device. Open the browser client on as many phones, tablets and laptops as you like; they all reach the same workspace, and two of them can watch the same run at once.</p>
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <div class="faq-group">
+            <h3 class="faq-name">Your cloud machine</h3>
+            <div class="faq-list">
+              <details class="faq-item" name="faq">
+                <summary>What exactly is a Cloud machine?</summary>
+                <div class="faq-body">
+                  <p>A dedicated Linux dev machine we run for you — <b>8 CPU cores, 8 GB RAM and roughly 100 GB of storage</b> — with Grok Build already installed and linked to your account. It sits at the top of your device list; opening it the first time is what creates it, usually in seconds.</p>
+                  <p>It is in <b>preview</b>: included with Remote Max while we learn how people use it. Later it graduates to a plan of its own, from $5/mo.</p>
+                </div>
+              </details>
+
+              <details class="faq-item" name="faq">
+                <summary>Does what I install stay?</summary>
+                <div class="faq-body">
+                  <p>Yes. It is a persistent machine, not a per-session container: cloned repos, installed packages, dotfiles and agent sign-ins are all still there next time. Between sessions it goes to sleep and picks up where it left off.</p>
+                  <p>The one thing that wipes it is <b>Reset my Cloud</b> in the row's menu — that trades your machine for a brand-new one, and asks first.</p>
+                </div>
+              </details>
+
+              <details class="faq-item" name="faq">
+                <summary>Which agents can it run?</summary>
+                <div class="faq-body">
+                  <p><b>Grok</b> and <b>OpenAI Codex</b> connect right from the browser with a device code. For Codex, first turn on <i>Device code authorization for Codex</i> in your ChatGPT security settings — it is at the very bottom of the page.</p>
+                  <p><b>Claude Code</b> is installed on the machine, but signing it in still needs a terminal there, so it cannot be connected from the browser yet. MCP connectors are also not available on a Cloud machine during the preview.</p>
                 </div>
               </details>
             </div>
@@ -1631,6 +1721,15 @@
         text.appendChild(meta);
       }
       head.appendChild(text);
+
+      if (isCloud) {
+        // "Preview" lives in the row, not the badge: the badge carries STATE
+        // ("ready", "creating"), while preview is what the feature is.
+        const chip = document.createElement("span");
+        chip.className = "preview-chip";
+        chip.textContent = "Preview";
+        head.appendChild(chip);
+      }
 
       const badge = document.createElement("span");
       badge.className = "device-badge";
