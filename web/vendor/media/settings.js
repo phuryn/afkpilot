@@ -2802,7 +2802,7 @@
       // Sign-out is the one with nothing else to show for it: a sign-in opens
       // the wizard, and this page sits behind that.
       let marked = false;
-      if (message && message.type === "logout" && message.provider) {
+      if (message && message.type === "logout" && message.provider && env.isRemote) {
         PROVIDER_PENDING.id = message.provider;
         PROVIDER_PENDING.label = "Disconnecting…";
         PROVIDER_PENDING.wanted = false;
