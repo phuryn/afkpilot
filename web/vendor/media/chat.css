@@ -4472,6 +4472,13 @@ mjx-container[display="true"] {
   overflow-y: auto;
   min-height: 0;
 }
+/* The panel is the container now, so the card inside it stops imposing the
+   width and the top margin it needs when it sits in the welcome screen —
+   widening the dialog did nothing while this capped the content at 320px. */
+.connect-wizard-body .onb {
+  max-width: none;
+  margin-top: 0;
+}
 /* The panel's own actions already read as the flow's controls; the dialog's
    footer button is the way OUT of the window, so it stays quiet and last. */
 .connect-wizard-panel .confirm-actions { margin-top: 10px; }
