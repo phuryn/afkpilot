@@ -748,7 +748,12 @@
       local: (s, env) => (env && env.isRemote && !providerConnectedNow(s, "claude")
         ? "connectWizard:claude"
         : ""),
-      describe: (s, env) => providerRemoteDescribe(s, env, "claude"),
+      describe: (s, env) => (hostIsCloud(env) && providerConnectedNow(s, "claude")
+        // Signing out here is one-way: Claude's sign-in needs a terminal and a
+        // cloud machine has none, while the cloud override permits logout for
+        // every provider (found while documenting the matrices, 2026-08-31).
+        ? "Connected. Signing out here cannot be undone from this page — Claude Code needs a terminal to sign in again."
+        : providerRemoteDescribe(s, env, "claude")),
       actionLabel: (s) => providerAction(providerOf(s, "claude")),
       // Same two messages the desk row sends, reached through the same test.
       // Which one is offered is decided by visibility above, so this cannot
