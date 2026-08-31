@@ -1524,12 +1524,19 @@ body.thinking-hidden .msg.thinking.find-reveal { display: block; }
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
+/* A row, not a block with a button floated on top of it. As a block the code
+   sat 7px high in its own field and the copy button — absolutely positioned at
+   top: 4px — was 2px off centre; both were measured on a phone (owner,
+   2026-08-31). Centring is structural here: the field centres its children,
+   so a taller code string or a different icon size cannot re-break it. */
 .onb-cmd {
-  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   background: var(--vscode-textCodeBlock-background);
   border: 1px solid var(--vscode-editorWidget-border);
   border-radius: 4px;
-  padding: 8px 36px 8px 10px;
+  padding: 6px 6px 6px 10px;
   font-family: var(--vscode-editor-font-family);
   font-size: 12px;
   word-break: break-all;
@@ -1541,9 +1548,10 @@ body.thinking-hidden .msg.thinking.find-reveal { display: block; }
   font-size: 12px;
 }
 .onb-copy {
-  position: absolute;
-  top: 4px;
-  right: 4px;
+  /* A flex item beside the code, pushed to the end — the absolute position it
+     used to have could only ever be centred by luck. */
+  margin-left: auto;
+  flex: 0 0 auto;
   background: transparent;
   border: none;
   color: var(--vscode-descriptionForeground);
