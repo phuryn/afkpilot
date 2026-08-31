@@ -67,6 +67,16 @@ These optional variables adjust local harnesses; they are not relay production c
 | `SCREENS_PORT` | `8799` | Local screenshot-check server port. |
 | `SCREENS_DIR` | `.screens` | Screenshot-check output directory. |
 
+## Not read by anything
+
+`FLY_IO_ORG` appears in some older `.env` files and is **not used**. Nothing in
+this repository reads it — the cloud path authenticates with `SPRITES_TOKEN`,
+addresses the control plane through `SPRITES_API_BASE`, and attributes machines
+with `SPRITES_LABELS`; the organization is implied by the token. It predates the
+Sprites API having its own credentials. Setting it anywhere, production
+included, does nothing, and carrying it forward into a new environment invites
+somebody to debug it later. Delete it when you see it.
+
 ## Committed identity constants
 
 The extension's `src/remote-frames.ts` commits `REMOTE_RELAY_URL = "wss://afkpilot.com"`. Published extension and desktop builds use this public identity and expose no user-facing endpoint setting. `GROK_RELAY_URL` is an extension-side environment override for source development only and is ignored in production host modes.
