@@ -771,8 +771,16 @@
   .install-cta { display: inline-flex; align-items: center; gap: 0.45rem; white-space: nowrap; }
   .install-cta svg { width: 1rem; height: 1rem; flex: none; }
   @media (max-width: 560px) {
-    /* Phone: the header carries brand + install + theme + profile — tighten. */
+    /* Phone: the header carries brand + install + theme + identity + avatar,
+       and at 412px all three text runs wrapped onto second lines — a two-line
+       wordmark beside a two-line email, which is most of the screen spent on
+       saying who you are (owner, 2026-08-31).
+       The avatar IS the account control; the address next to it is a caption
+       for a face you already recognise, and tapping the avatar shows it. The
+       mark carries the brand without the wordmark. Both come back at 561px. */
     .site-header { gap: 0.5rem; }
+    .site-header .wordmark { display: none; }
+    .signed-in-as { display: none; }
     #install-btn { padding-inline: 0.7rem; }
     .setup-steps li { padding-left: 1.9rem; }
   }
