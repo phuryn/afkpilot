@@ -322,7 +322,7 @@
 
   .cloudband { border-top: 1px solid var(--border-soft); padding-block: clamp(2.5rem, 6vw, 4.5rem); }
   .cloudband-head h2 { font-size: var(--step-3); letter-spacing: -0.015em; margin: 0.7rem 0 0; max-width: 26ch; }
-  .cloudband-head p { color: var(--muted); margin: 0.75rem 0 0; max-width: 62ch; }
+  .cloudband-head p:not(.eyebrow) { color: var(--muted); margin: 0.75rem 0 0; max-width: 62ch; }
   .cloudband-grid { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: clamp(1.5rem, 4vw, 2.5rem); }
   .cloudband-note { margin-top: 1.5rem; font-family: var(--font-mono); font-size: 0.72rem; color: var(--faint); }
 
@@ -363,7 +363,7 @@
   .pricing { border-top: 1px solid var(--border-soft); padding-block: clamp(2.75rem, 7vw, 5rem); }
   .pricing-head { text-align: center; max-width: 40ch; margin-inline: auto; }
   .pricing-head h2 { font-size: var(--step-3); letter-spacing: -0.015em; margin: 0.7rem 0 0; }
-  .pricing-head p { color: var(--muted); margin: 0.75rem 0 0; }
+  .pricing-head p:not(.eyebrow) { color: var(--muted); margin: 0.75rem 0 0; }
   .plans {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
@@ -690,6 +690,25 @@
     color: var(--muted);
   }
   #add-device .setup-head { margin: 1.35rem 0 0.3rem; font-size: 0.95rem; letter-spacing: -0.01em; }
+  /* The local path is a detour for most readers now, so it folds away —
+     open it and it is the same three steps it always was. */
+  #add-device .setup-local > summary {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    cursor: pointer;
+    list-style: none;
+  }
+  #add-device .setup-local > summary::-webkit-details-marker { display: none; }
+  #add-device .setup-local > summary::after {
+    content: "+";
+    margin-left: auto;
+    color: var(--faint);
+    font-family: var(--font-mono);
+  }
+  #add-device .setup-local[open] > summary::after { content: "\2013"; }
+  #add-device .setup-local > summary h3 { margin-bottom: 0; }
+  #add-device .setup-more { font-family: var(--font-mono); font-size: 0.72rem; color: var(--faint); }
   #add-device .setup-head:first-child { margin-top: 1rem; }
   #add-device .setup-cloud { margin: 0; color: var(--muted); font-size: 0.9rem; line-height: 1.55; }
   .setup-steps {
@@ -1003,14 +1022,14 @@
         <div class="wrap">
           <div class="cloudband-head">
             <p class="eyebrow">Cloud · free preview</p>
-            <h2>A dev machine in the cloud, ready in one click.</h2>
-            <p>Subscribers get a dedicated Linux machine with all three agents — Grok, Codex and Claude Code — preinstalled. Open it from any browser and start working: nothing to install, no computer left running at home.</p>
+            <h2>A dev machine in the cloud, with nothing to install.</h2>
+            <p>Subscribers get a dedicated Linux machine with all three agents preinstalled. Sign in to <b>Grok</b> or <b>Codex</b> from the browser and start working — nothing to install, no computer left running at home. You bring your own agent subscriptions, and Claude Code needs a terminal to sign in, so it waits.</p>
           </div>
           <div class="cloudband-grid">
             <div class="feature">
               <span class="kw">dedicated</span>
               <h3>Yours, not shared</h3>
-              <p>Your own VM — 8 CPU cores, 8 GB RAM, ~100 GB of storage — created the first time you open it, usually in seconds.</p>
+              <p>Your own VM — 8 CPU cores, 8 GB RAM, ~100 GB of storage. Opening it the first time is what creates it: usually seconds, and up to 25 minutes if one has to be built from scratch.</p>
             </div>
             <div class="feature">
               <span class="kw">persistent</span>
@@ -1158,7 +1177,8 @@
           <div class="setup-col">
             <h3 class="setup-head">Fastest: your Cloud machine</h3>
             <p class="setup-cloud">Subscribers open it at the top of the list above — nothing to install, and it links itself to your account.</p>
-            <h3 class="setup-head">Your local machine</h3>
+            <details class="setup-local">
+            <summary><h3 class="setup-head">Your own machine — VS Code or Desktop</h3><span class="setup-more">Three steps</span></summary>
             <ol class="setup-steps">
               <li><b>Install a host</b> — either one works.<br>
                 <b>Grok Build for VS Code (Community)</b>, if you already work in an editor — from the <a href="https://marketplace.visualstudio.com/items?itemName=PawelHuryn.grok-vscode-phuryn" target="_blank" rel="noopener">VS Code Marketplace</a> or <a href="https://open-vsx.org/extension/PawelHuryn/grok-vscode-phuryn" target="_blank" rel="noopener">Open VSX</a> (Cursor, Windsurf, …).<br>
@@ -1166,6 +1186,7 @@
               <li><b>Link this device.</b> In the extension, open the <b>gear icon → Sign in (link this device)</b> — your browser opens the approval page automatically. If the code shows on another machine, open <a href="/link">/link</a> here and type it in.</li>
               <li><b>Open on your phone.</b> Visit <b class="js-origin">this site</b> on your phone, sign in, and tap <b>Install app</b> to keep your agent one tap away.</li>
             </ol>
+            </details>
           </div>
           <img class="setup-shot" src="/hero-phone.png" width="758" height="1500" alt="AFK Pilot chat running on a phone" />
         </div>
@@ -1198,7 +1219,7 @@
               <details class="faq-item" name="faq">
                 <summary>What exactly is a Cloud machine?</summary>
                 <div class="faq-body">
-                  <p>A dedicated Linux dev machine we run for you — <b>8 CPU cores, 8 GB RAM and roughly 100 GB of storage</b> — with Grok Build and the agents preinstalled. It sits at the top of your device list; opening it the first time is what creates it and links it to your account, usually in seconds.</p>
+                  <p>A dedicated Linux dev machine we run for you — <b>8 CPU cores, 8 GB RAM and roughly 100 GB of storage</b> — with Grok Build and the agents preinstalled. It sits at the top of your device list; opening it the first time is what creates it and links it to your account. Usually that takes seconds, because machines are kept ready; when one has to be built from scratch it can take up to 25 minutes, and the page says so while it works.</p>
                   <p>It is in <b>preview</b>: included with Remote Max while we learn how people use it. Later it graduates to a plan of its own, from $5/mo.</p>
                 </div>
               </details>
@@ -1207,7 +1228,7 @@
                 <summary>Does what I install stay?</summary>
                 <div class="faq-body">
                   <p>Yes. It is a persistent machine, not a per-session container: cloned repos, installed packages, dotfiles and agent sign-ins are all still there next time. Between sessions it goes to sleep and picks up where it left off.</p>
-                  <p>The one thing that wipes it is <b>Reset my Cloud</b> in the row's menu — that trades your machine for a brand-new one, and asks first.</p>
+                  <p><b>Reset my Cloud</b> in the row's menu trades it for a brand-new one, and asks first. It is not the only way the disk goes: there are no automatic backups, and a machine can be rebuilt or reclaimed — when a preview ends, a subscription lapses, or maintenance needs it. Push anything you care about to your own repositories.</p>
                 </div>
               </details>
 
@@ -1234,7 +1255,7 @@
                       <ul>
                         <li>Send prompts, then steer, stop, queue or fork a run</li>
                         <li>Approve file writes, commands and plans</li>
-                        <li>Dictate with your voice, and have replies read aloud</li>
+                        <li>Dictate with your voice where the host has voice set up, and have replies read aloud</li>
                         <li>Switch model, mode and effort — and the repository each tab works in</li>
                         <li>See every project and its conversations; resume, rename, delete or archive them</li>
                         <li>Open, edit and save project files, syntax-highlighted</li>
@@ -1303,6 +1324,7 @@
                   <p>Both hops are encrypted: browser to relay, and relay to your machine, each over TLS. Nothing crosses the network in the clear.</p>
                   <p>It is still not end-to-end, and we would rather say so than imply otherwise: the relay terminates both hops to route between them, so a message is briefly in plaintext in its memory as it passes through. Nothing is written down — prompts and code are never stored, on the relay or in its database.</p>
                   <p>What the relay cannot do is act on your editor. It is policy-free by design: the gate deciding which messages may touch your machine lives in the extension, on your machine. Even a compromised relay cannot make your host open a file, run a picker, or change your settings.</p>
+                  <p>A <b>Cloud machine</b> is the exception worth stating plainly: there the host runs on hardware we operate, so the separation above is a policy we keep rather than a wall you own. Keep anything that needs that wall on your own computer.</p>
                 </div>
               </details>
             </div>
@@ -1335,7 +1357,7 @@
               <details class="faq-item" name="faq">
                 <summary>What happens when I hit the free limit?</summary>
                 <div class="faq-body">
-                  <p>Sending from the browser pauses until your weekly window resets, and the usage meter shows the countdown once you pass 80%. Nothing is lost — the agent, your sessions and VS Code carry on exactly as normal at the desk. The one-device limit works the same way: link a second machine and you will be asked to upgrade rather than cut off.</p>
+                  <p>Sending from the browser pauses until your weekly window resets — Tuesdays at 17:00 Europe/Warsaw — and the usage meter shows the countdown once you pass 80%. Nothing is lost — the agent, your sessions and VS Code carry on exactly as normal at the desk. The one-device limit works the same way: link a second machine and you will be asked to upgrade rather than cut off.</p>
                 </div>
               </details>
 
@@ -1350,7 +1372,7 @@
               <details class="faq-item" name="faq">
                 <summary>How do I cancel?</summary>
                 <div class="faq-body">
-                  <p>From your account page, any time, in one click. Access runs to the end of the period you have paid for and then drops back to Free — your linked devices and your sessions stay where they are.</p>
+                  <p>From your account page, any time. Access runs to the end of the period you have paid for and then drops back to Free — your linked devices and your sessions stay where they are. A <b>Cloud machine</b> stops being reachable when the plan that included it ends, and may be reclaimed after that, so move anything you want to keep off it first.</p>
                 </div>
               </details>
             </div>

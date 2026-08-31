@@ -44,20 +44,21 @@
       <p class="eyebrow">Privacy</p>
       <h1>Privacy Policy</h1>
       <p class="lede">AFK Pilot passes messages between your VS Code agent and your browser. The design goal is that the content of those messages never touches our storage.</p>
-      <p class="effective">Effective 2026-07-18</p>
+      <p class="effective">Effective 2026-08-31</p>
 
       <h2>What we store</h2>
       <p>We keep the minimum needed to run your account and your device links:</p>
       <ul>
         <li><strong>Your account</strong> — your email and authentication identity, held by Clerk, our sign-in provider.</li>
         <li><strong>Device records</strong> — a device name you choose, a key identifier, and an HMAC used to verify a device on connect. We never store the device token secret itself.</li>
-        <li><strong>Cloud machine records</strong> — if you use a hosted cloud machine: its identifier and lifecycle timestamps, tied to your account. The machine's disk is yours — we do not read it, and what you put on it (code, credentials you add, agent sign-ins) lives on that machine and is deleted when the machine is reset or removed.</li>
+        <li><strong>Cloud machine records</strong> — if you use a hosted cloud machine: its identifier and provider name, lifecycle timestamps, and the next wake time your host asks us to schedule (the time only — never the routine or its prompt). Your workspace, your files and your agent sign-ins live on that machine, not in our database. We can run commands on it because we operate it — that is how it is built, claimed and woken — so treat it as a machine we host for you rather than a private vault. Resetting, reclaiming or removing it destroys the disk.</li>
         <li><strong>Billing state</strong> — your plan and subscription status live with Clerk and Stripe. We do not see or store your card details.</li>
         <li><strong>A usage counter</strong> — on the free plan, one number per account: how many messages you have sent in the current weekly window. Not the messages, not their times, not their sizes — a single count, replaced each week.</li>
       </ul>
 
       <h2>What we do not store</h2>
-      <p>We do not persist the content you send or receive. Prompts, code, files, and images are relayed in memory between your VS Code workspace and your browser, then dropped. There is no chat history on our servers, because there is no chat log on our servers. Videos are never transferred at all — images only.</p>
+      <p>We do not persist the content you send or receive. Prompts, code, files, and images are relayed in memory between your host — the VS Code or Cursor extension, Grok Build Desktop, or a cloud machine — and your browser, then dropped. There is no chat history on our servers, because there is no chat log on our servers. Videos are never transferred at all — images only.</p>
+      <p>Your <em>host</em> is a different matter, and the distinction matters most on a cloud machine: conversations, code and agent credentials live on that machine's own disk, the same way they live on your laptop. What this section promises is that none of it reaches our database.</p>
 
       <p>One thing worth being precise about, since it happens on your own device rather than ours: if you send a message while the connection is down, your browser holds that unsent message in its own tab storage until it can be delivered, so a dropped signal or a reload doesn't lose what you typed. It never leaves your device until it is sent, it is cleared once delivered, and it is gone when you close the tab. Attachments and voice audio are never held this way. Nothing about this queue reaches our servers.</p>
 
@@ -70,11 +71,13 @@
         <li><strong>Clerk</strong> — authentication and billing management.</li>
         <li><strong>Stripe</strong> — payment processing.</li>
         <li><strong>Supabase</strong> — the device registry (device names and key identifiers).</li>
-        <li><strong>Hosting provider</strong> — to be confirmed before public launch; it runs the relay and never receives persisted message content.</li>
+        <li><strong>Railway</strong> — runs the relay itself. It carries your traffic in transit and never receives persisted message content.</li>
+        <li><strong>Fly.io (Sprites)</strong> — runs cloud machines, if you use one. The machine’s disk holds whatever you and your agents put on it: your workspace, your files, and the agent credentials you sign in with.</li>
       </ul>
 
       <h2>Data deletion</h2>
-      <p>You can unlink a device at any time, which revokes it server-side. To delete your account and its device records, email us and we will remove them. Because we never store message content, there is nothing further for us to purge.</p>
+      <p>You can unlink a device at any time, which revokes it server-side. To delete your account, email <a href="mailto:support@productcompass.pm">support@productcompass.pm</a>: we remove your account, its device records and its cloud-machine records, and <strong>destroy any cloud machine along with its disk</strong>. Because we never store message content, there is nothing further for us to purge.</p>
+      <p>Signing in sets a session cookie through Clerk, our sign-in provider. It keeps you signed in and is not used for advertising.</p>
 
       <h2>Who we are</h2>
       <p>AFK Pilot is operated by, and the data controller for the account data described above is:</p>

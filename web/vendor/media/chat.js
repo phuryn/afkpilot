@@ -2807,6 +2807,11 @@
       onLocal: (name) => {
         if (name === "explainRemote") showRemoteExplainer();
         if (name === "openDeviceManager") window.open("/", "_blank", "noopener");
+        // Settings → Providers → Connect. The overlay stays open behind the
+        // wizard so closing it returns the reader where they were.
+        if (typeof name === "string" && name.indexOf("connectWizard:") === 0) {
+          openConnectWizard(name.slice("connectWizard:".length));
+        }
       },
       closeOnAction: true,
       onClose: closeSettingsOverlay,
@@ -8490,7 +8495,7 @@
     if (device && device.status === "waiting" && device.url) {
       status("Confirm the code");
       return `<div class="onb">` +
-        `<p class="onb-heading">Step 2 of 2 &mdash; confirm the code</p>` +
+        `<p class="onb-heading">${device.preflight ? "Step 2 of 2 &mdash; confirm the code" : `Finish signing in to ${escapeHtml(name)}`}</p>` +
         // The vendor's own page warns that device codes are used in phishing
         // and to continue only if the CLI started the sign-in. Saying that
         // BEFORE they meet it turns an alarming page into an expected one
@@ -8628,6 +8633,115 @@
 
   /** `beforeRender` runs after the mode is set and before markup is built, so a
    *  host-launched terminal can be recorded against the panel it belongs to. */
+  /**
+   * Connecting an agent, in ONE place.
+   *
+   * There used to be two renderers for this flow: the transcript's onboarding
+   * card, and a set of rows inside Settings → Providers. The second existed
+   * only because the first cannot paint over a conversation
+   * (`revealWelcome` holds while `.msg` nodes exist), so a Connect clicked in
+   * Settings had nowhere to report. Two implementations of one auth flow is
+   * one too many to keep true (owner, 2026-08-31).
+   *
+   * A dialog is subject to no such hold, so the flow lives here and both
+   * surfaces become entry points. The markup is the SAME builder the welcome
+   * card uses, and the document-level `.onb-action` delegation already wires
+   * every button inside it, so there is nothing to duplicate and nothing to
+   * keep in step.
+   */
+  let connectWizard = null;
+
+  function connectWizardProvider() {
+    return connectWizard ? connectWizard.provider : "";
+  }
+
+  function closeConnectWizard() {
+    if (!connectWizard) return;
+    document.removeEventListener("keydown", connectWizard.onKey, true);
+    connectWizard.overlay.remove();
+    const opener = connectWizard.opener;
+    connectWizard = null;
+    if (opener && typeof opener.focus === "function" && document.contains(opener)) {
+      try { opener.focus(); } catch { /* the opener may have gone with a repaint */ }
+    }
+  }
+
+  function openConnectWizard(provider, opener) {
+    if (connectWizard && connectWizard.provider === provider) {
+      renderConnectWizard();
+      return;
+    }
+    closeConnectWizard();
+    const overlay = document.createElement("div");
+    overlay.className = "confirm-overlay connect-wizard-overlay";
+    const panel = document.createElement("div");
+    panel.className = "confirm-panel connect-wizard-panel";
+    const body = document.createElement("div");
+    body.className = "connect-wizard-body";
+    panel.appendChild(body);
+    const actions = document.createElement("div");
+    actions.className = "confirm-actions";
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "confirm-btn";
+    closeBtn.textContent = "Close";
+    // Closing the window never cancels the sign-in: the flow lives on the host
+    // and finishes on its own, which is exactly what the card promises.
+    // Cancelling is a separate, explicit button inside the panel.
+    closeBtn.onclick = (e) => { e.stopPropagation(); closeConnectWizard(); };
+    actions.appendChild(closeBtn);
+    panel.appendChild(actions);
+    overlay.appendChild(panel);
+    overlay.onclick = (e) => { if (e.target === overlay) { e.stopPropagation(); closeConnectWizard(); } };
+    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); closeConnectWizard(); } };
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(overlay);
+    connectWizard = { provider, overlay, panel, body, onKey, opener: opener || document.activeElement };
+    renderConnectWizard();
+    const focusTarget = body.querySelector(".onb-action") || closeBtn;
+    try { focusTarget.focus(); } catch { /* focus is a courtesy, never a failure */ }
+  }
+
+  /** Paint the wizard from the flow state the host last sent. */
+  function renderConnectWizard() {
+    if (!connectWizard) return;
+    const provider = connectWizard.provider;
+    const device = state.deviceLoginByProvider[provider];
+    // `ver` is null on purpose: the welcome status line belongs to the welcome
+    // card, and a modal must not rewrite it.
+    connectWizard.body.innerHTML = remoteConnectPanel(
+      "auth-required",
+      { provider, device, platform: state.onboardingInfo && state.onboardingInfo.platform },
+      null,
+    );
+  }
+
+  /**
+   * Keep the wizard in step with the host, and open it when a flow begins
+   * wherever the click came from — the card, Settings, or another tab.
+   */
+  function syncConnectWizard(provider, device) {
+    if (!IS_REMOTE || !provider) return;
+    const live = !!device && (device.status === "starting" || device.status === "waiting"
+      || device.status === "verifying" || device.status === "failed"
+      || device.status === "unavailable" || !!device.preflight);
+    if (live) {
+      openConnectWizard(provider);
+      return;
+    }
+    if (!connectWizard || connectWizard.provider !== provider) return;
+    if (device && device.status === "done") {
+      // Show the confirmation, then get out of the way. The account is
+      // connected; keeping a dialog up over it is make-work.
+      renderConnectWizard();
+      setTimeout(() => {
+        if (connectWizard && connectWizard.provider === provider) closeConnectWizard();
+      }, 1600);
+      return;
+    }
+    renderConnectWizard();
+  }
+
   function showOnboarding(mode, info, beforeRender) {
     info = info || {};
     state.onboardingMode = mode;
@@ -8647,7 +8761,13 @@
     const ver = $("welcome-version");
     if (!onb) return;
     if (IS_REMOTE && (mode === "connect-agent" || mode === "codex-login" || mode === "claude-login" || mode === "auth-required")) {
-      onb.innerHTML = remoteConnectPanel(mode, info, ver);
+      // The card is an ENTRY POINT, not a second renderer: a live flow belongs
+      // to the wizard, so the card keeps showing the offer underneath it.
+      const wizardOwnsIt = !!connectWizard && info && info.provider === connectWizard.provider;
+      const forCard = wizardOwnsIt && info.device
+        ? Object.assign({}, info, { device: undefined })
+        : info;
+      onb.innerHTML = remoteConnectPanel(mode, forCard, ver);
       return;
     }
     if (mode === "no-project") {
@@ -16400,6 +16520,10 @@
               delete state.deviceLoginByProvider[msg.provider];
             }
             refreshSettingsOverlay();
+            // AFTER the mirror: renderConnectWizard reads it, and syncing
+            // first painted the previous state every time (caught by driving
+            // the states in a browser, 2026-08-31).
+            syncConnectWizard(msg.provider, msg.device);
           }
         break;
       case "error":
