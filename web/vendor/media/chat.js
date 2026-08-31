@@ -8732,9 +8732,14 @@
    */
   function syncConnectWizard(provider, device) {
     if (!IS_REMOTE || !provider) return;
+    // Only a RUNNING flow opens a wizard. A settled outcome renders wherever
+    // the reader already is: in this dialog when one is open (which it is
+    // whenever they got here by clicking Connect), and in the card otherwise.
+    // Opening one for `failed` meant the card and the dialog both painted the
+    // same retry button — the relay's sign-in check found it as a strict-mode
+    // locator violation, which is a person seeing the same panel twice.
     const live = !!device && (device.status === "starting" || device.status === "waiting"
-      || device.status === "verifying" || device.status === "failed"
-      || device.status === "unavailable" || !!device.preflight);
+      || device.status === "verifying" || !!device.preflight);
     if (live) {
       openConnectWizard(provider);
       if (connectWizard) connectWizard.lastDevice = device;
@@ -8756,6 +8761,14 @@
     // there is a window where the mirror is already gone, and repainting in
     // it turned a success into an offer to start over.
     if (connectWizard.settled) return;
+    // No flow left to show — a cancel, or a bare frame after one ends. The
+    // wizard exists to RUN a flow, so with nothing to run it gets out of the
+    // way rather than repainting itself as an invitation to start another;
+    // the card underneath is the entry point and is already offering one.
+    if (!device) {
+      closeConnectWizard();
+      return;
+    }
     renderConnectWizard();
   }
 
@@ -8780,8 +8793,20 @@
     if (IS_REMOTE && (mode === "connect-agent" || mode === "codex-login" || mode === "claude-login" || mode === "auth-required")) {
       // The card is an ENTRY POINT, not a second renderer: a live flow belongs
       // to the wizard, so the card keeps showing the offer underneath it.
+      // The card NEVER renders a live flow. Stripping it only while the wizard
+      // was already open left a window -- this function runs before
+      // syncConnectWizard on the very frame that starts a flow -- where both
+      // painted it, so the code and its Cancel existed twice on the page. The
+      // relay's own sign-in check caught that as a strict-mode locator
+      // violation; a person would have seen it by closing the dialog.
+      //
+      // A SETTLED outcome still lands here when no wizard is open, so nothing
+      // is lost if the reader closed it.
+      const device = info && info.device;
+      const liveFlow = !!device && (device.status === "starting" || device.status === "waiting"
+        || device.status === "verifying" || !!device.preflight);
       const wizardOwnsIt = !!connectWizard && info && info.provider === connectWizard.provider;
-      const forCard = wizardOwnsIt && info.device
+      const forCard = device && (liveFlow || wizardOwnsIt)
         ? Object.assign({}, info, { device: undefined })
         : info;
       onb.innerHTML = remoteConnectPanel(mode, forCard, ver);
@@ -17250,7 +17275,14 @@
       // remote request means the headless flow — so there is one capability
       // here, not two, and nothing new for the policy table to gate.
       else if (act === "connectRemote") vscode.postMessage({ type: "runGrokLogin", provider: onbAction.dataset.provider });
-      else if (act === "cancelDeviceLogin") vscode.postMessage({ type: "cancelDeviceLogin", provider: onbAction.dataset.provider });
+      else if (act === "cancelDeviceLogin") {
+        vscode.postMessage({ type: "cancelDeviceLogin", provider: onbAction.dataset.provider });
+        // Close on the click, not on the host's answer. The person has said
+        // they are done; leaving the dialog up until a frame comes back makes
+        // Cancel feel ignored, and if the answer never comes it stays up over
+        // a flow that is already gone.
+        if (connectWizardProvider() === onbAction.dataset.provider) closeConnectWizard();
+      }
       else if (act === "addProjectFolder") openAddProjectMenu(onbAction);
       return;
     }

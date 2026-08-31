@@ -139,12 +139,44 @@ try {
   await page.goto(`${BASE}/chat?device=${encodeURIComponent(deviceId)}&linked=1`, { waitUntil: "load" });
 
   await waitFor(async () => clientId, "the browser to attach");
-  const connectBtn = page.locator('[data-act="connectRemote"][data-provider="grok"]');
+  // Where the flow is. Since 3.19.9 a RUNNING sign-in renders in the connect
+  // wizard — a dialog, because the welcome card cannot paint over a
+  // conversation — while the card behind it goes back to offering. Both are
+  // legitimate and both are in the document, so these locators name BOTH
+  // surfaces: `.first()` where we are waiting on or driving the control, and
+  // the unfiltered set where the assertion is "how many of these exist
+  // anywhere", which is the question worth keeping strict.
+  const FLOW = ".connect-wizard-body, #welcome-onboarding";
+  const inFlowAll = (selector) => page.locator(
+    `.connect-wizard-body ${selector}, #welcome-onboarding ${selector}`,
+  );
+  // Waiting on or driving a control: either surface will do, and `.first()`
+  // avoids a race with the dialog mounting a tick after the frame.
+  const inFlow = (selector) => inFlowAll(selector).first();
+  // Counting and reading, though, must ask about the surface the reader is
+  // actually looking at — the dialog when it is up, the card behind it
+  // otherwise. "How many ways to proceed does this offer" is a question about
+  // one panel, not about the document.
+  const ownerSel = async () =>
+    ((await page.locator(".connect-wizard-body").isVisible()) ? ".connect-wizard-body" : "#welcome-onboarding");
+  const inOwner = async (selector) => page.locator(`${await ownerSel()} ${selector}`);
+  const flowText = async () => page.locator(await ownerSel()).innerText();
+  // Scenarios below are independent, and a person moving between them would
+  // have closed the dialog. Without this, a wizard left open by one scenario is
+  // still bound to ITS provider when the next one settles.
+  const dismissWizard = async () => {
+    if (await page.locator(".connect-wizard-overlay").isVisible()) {
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(150);
+    }
+  };
+
+  const connectBtn = page.locator('#welcome-onboarding [data-act="connectRemote"][data-provider="grok"]');
   await connectBtn.waitFor({ state: "visible", timeout: 15000 });
   log("the panel offers a sign-in");
 
   // The dead end this replaces. If that copy is back, the feature is off.
-  const panelText = await page.locator("#welcome-onboarding").innerText();
+  const panelText = await flowText();
   assert.ok(
     !/only be connected on the computer/i.test(panelText),
     `the panel still says sign-in is impossible here:\n${panelText}`,
@@ -167,7 +199,7 @@ try {
     type: "onboarding", state: "auth-required", platform: "linux", provider: "grok",
     launched: true, device: { status: "starting" },
   });
-  await page.locator('[data-act="cancelDeviceLogin"]').waitFor({ state: "visible", timeout: 8000 });
+  await (inFlow('[data-act="cancelDeviceLogin"]')).waitFor({ state: "visible", timeout: 8000 });
   await page.screenshot({ path: join(OUT, "signin", "2-starting.png") });
   log("the waiting state is on screen");
 
@@ -175,11 +207,11 @@ try {
     type: "onboarding", state: "auth-required", platform: "linux", provider: "grok",
     launched: true, device: { status: "waiting", url: REAL_URL, code: REAL_CODE },
   });
-  const codeEl = page.locator(".onb-cmd code");
+  const codeEl = inFlow(".onb-cmd code");
   await codeEl.waitFor({ state: "visible", timeout: 8000 });
   assert.equal((await codeEl.innerText()).trim(), REAL_CODE, "the code must be the one the CLI printed");
 
-  const link = page.locator("a.onb-action");
+  const link = inFlow("a.onb-action");
   assert.equal(await link.getAttribute("href"), REAL_URL, "the link must be the URL the CLI printed");
   assert.equal(await link.getAttribute("target"), "_blank", "a phone has to leave this page to authorise");
 
@@ -230,7 +262,7 @@ try {
   // 3. Cancel has to reach the host too, or the only person who can see the
   //    panel cannot close it.
   fromClient.length = 0;
-  await page.locator('[data-act="cancelDeviceLogin"]').click();
+  await (inFlow('[data-act="cancelDeviceLogin"]')).click();
   const cancelled = await waitFor(
     () => fromClient.find((m) => m.type === "cancelDeviceLogin"),
     "cancelDeviceLogin to reach the host",
@@ -238,6 +270,7 @@ try {
   assert.equal(cancelled.provider, "grok");
   log("cancel reached the host");
 
+  await dismissWizard();
   // 4. A provider that cannot work here says so, and offers no retry — a dead
   //    end disguised as a loop is worse than a dead end.
   host(clientId, {
@@ -248,25 +281,27 @@ try {
     },
   });
   await waitFor(
-    async () => (await page.locator("#welcome-onboarding").innerText()).includes("real terminal"),
+    async () => (await flowText()).includes("real terminal"),
     "the unavailable explanation",
   );
   assert.equal(
-    await page.locator('[data-act="connectRemote"]').count(), 0,
+    await (await inOwner('[data-act="connectRemote"]')).count(), 0,
     "an unavailable provider must not offer a retry",
   );
   await page.screenshot({ path: join(OUT, "signin", "4-unavailable.png") });
   log("an impossible provider explains itself and offers no retry");
 
+  await dismissWizard();
   // 5. A failure that retrying could fix DOES offer one.
   host(clientId, {
     type: "onboarding", state: "auth-required", platform: "linux", provider: "grok",
     device: { status: "failed", message: "Grok sign-in did not complete. The code may have expired — try again." },
   });
-  await page.locator('[data-act="connectRemote"]').waitFor({ state: "visible", timeout: 8000 });
+  await (inFlow('[data-act="connectRemote"]')).waitFor({ state: "visible", timeout: 8000 });
   await page.screenshot({ path: join(OUT, "signin", "5-failed.png") });
   log("a retryable failure offers a retry");
 
+  await dismissWizard();
   // 6. THE CODEX PRE-FLIGHT. Device-code sign-in is off by default on every
   //    account, so the first attempt fails for almost everyone — and the fix
   //    takes fifteen seconds if you are told where. Shown BEFORE the button
@@ -288,27 +323,28 @@ try {
     },
   });
   await waitFor(
-    async () => (await page.locator("#welcome-onboarding").innerText()).includes("Device code authorization"),
+    async () => (await flowText()).includes("Device code authorization"),
     "the codex pre-flight",
   );
   {
-    const steps = await page.locator(".onb-steps li").count();
+    const steps = await (await inOwner(".onb-steps li")).count();
     assert.equal(steps, 3, "the pre-flight lists the steps, in order");
     // Still offered: the setting may already be on, and a screen that only
     // sends you elsewhere is a dead end with a link on it.
-    assert.equal(await page.locator('[data-act="connectRemote"]').count(), 1,
+    assert.equal(await (await inOwner('[data-act="connectRemote"]')).count(), 1,
       "the pre-flight must still let somebody proceed");
     await page.screenshot({ path: join(OUT, "signin", "8-codex-preflight.png") });
     log("the codex setting is explained before anything is attempted");
   }
 
+  await dismissWizard();
   // 7. And success closes it out.
   host(clientId, {
     type: "onboarding", state: "auth-required", platform: "linux", provider: "grok",
     device: { status: "done" },
   });
   await waitFor(
-    async () => (await page.locator("#welcome-onboarding").innerText()).includes("connected"),
+    async () => (await flowText()).includes("connected"),
     "the connected confirmation",
   );
   await page.screenshot({ path: join(OUT, "signin", "6-done.png") });
@@ -323,11 +359,11 @@ try {
   await page.reload({ waitUntil: "load" });
   await page.locator("#welcome-onboarding").waitFor({ state: "visible", timeout: 15000 });
   await waitFor(
-    async () => (await page.locator("#welcome-onboarding").innerText()).includes("only be connected on the computer"),
+    async () => (await flowText()).includes("only be connected on the computer"),
     "the older-host fallback",
   );
   assert.equal(
-    await page.locator('[data-act="connectRemote"]').count(), 0,
+    await (await inOwner('[data-act="connectRemote"]')).count(), 0,
     "a host that does not advertise remoteAgentSignIn must not be offered Connect",
   );
   await page.screenshot({ path: join(OUT, "signin", "7-legacy-host.png") });
