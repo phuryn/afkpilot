@@ -4,18 +4,18 @@
     "repository": "grok-build-vscode",
     "revision": "03dc0942433c8865c5d0cada29ba576f59a07b50",
     "appVersion": "3.19.8",
-    "filesMatchRevision": true
+    "filesMatchRevision": false
   },
   "artifacts": [
     {
       "source": "media/chat.css",
       "destination": "media/chat.css",
-      "sha256": "de49d9f1b5556aca514dda69999237f2aca144f9a538c9b4b72c62e85d6c5401"
+      "sha256": "6c1a08810cb3da0a326906a9ebe4c14ae5cd4955de187a2a6107a8ab3cf0d201"
     },
     {
       "source": "media/chat.js",
       "destination": "media/chat.js",
-      "sha256": "2d143f31e4b104cefba7af2d558b90bd9a35239ac56f6192c051a5446dbc241d"
+      "sha256": "c35f1d513955d84b4eafc64c82c8cd87d6ecee9184cc0ec364b833c78ef59cf4"
     },
     {
       "source": "media/file-panel.css",
@@ -45,12 +45,12 @@
     {
       "source": "media/settings.css",
       "destination": "media/settings.css",
-      "sha256": "bc44606df1cd534b380034c5ca5d896e5e3e8a522a9d6ce801361c2fe6458fb2"
+      "sha256": "671f804ba3e2b3ea4a1663770e02455c5eb7c2d5519c7285510f9dc1ce4be74e"
     },
     {
       "source": "media/settings.js",
       "destination": "media/settings.js",
-      "sha256": "d7a8df347a0188f574775d6e6d60717e52951af5e69b5148e6acbf70eb9f78a4"
+      "sha256": "431f2ae8c6af5cb5e94ccc201a695c5258a8b42811ac13a45bef1e3eaa7a18ab"
     },
     {
       "source": "media/connector-logos",

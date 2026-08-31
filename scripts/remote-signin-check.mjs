@@ -221,6 +221,34 @@ try {
   const linkBox = await link.boundingBox();
   assert.ok(linkBox && linkBox.height >= 28, `the sign-in link is not a tappable size: ${JSON.stringify(linkBox)}`);
 
+  // Centred, not merely inside. The code and its copy glyph have each shipped
+  // riding high in this field, twice, because a block-level default beat the
+  // class meant to centre them — and screenshots are a poor instrument for
+  // 3px. Measured here so it cannot drift back unnoticed.
+  const centring = await page.evaluate((flow) => {
+    const cmd = document.querySelector(flow.split(", ").map((s) => s + " .onb-cmd").join(", "));
+    if (!cmd) return null;
+    const field = cmd.getBoundingClientRect();
+    const off = (r) => Math.round(((r.top - field.top) - (field.bottom - r.bottom)) * 10) / 10;
+    const code = cmd.querySelector("code");
+    const range = document.createRange();
+    range.selectNodeContents(code);
+    const glyph = cmd.querySelector(".onb-copy svg") || cmd.querySelector(".onb-copy");
+    return {
+      code: off(range.getBoundingClientRect()),
+      glyph: glyph ? off(glyph.getBoundingClientRect()) : null,
+    };
+  }, FLOW);
+  assert.ok(centring, "the code field is not on the page");
+  assert.ok(
+    Math.abs(centring.code) <= 1.5,
+    `the code sits ${centring.code}px off centre in its field`,
+  );
+  assert.ok(
+    centring.glyph === null || Math.abs(centring.glyph) <= 1.5,
+    `the copy glyph sits ${centring.glyph}px off centre in the field`,
+  );
+
   // The primary action has to be READABLE, which is not the same as present.
   // It shipped once as dark link-blue text on the blue button fill, because the
   // client's global `a { color: textLink-foreground }` was beating the button

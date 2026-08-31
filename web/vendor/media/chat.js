@@ -8468,11 +8468,25 @@
    * with a sentence saying so. That way a CLI that grows the flow starts working
    * without a client change, and one that loses it stops lying.
    */
+  /** Host-supplied panel text: escaped, then `**bold**` and `[label](https://…)`
+   *  re-admitted. Never the other way round — see the note on the steps below. */
+  function onbRich(text) {
+    return escapeHtml(String(text == null ? "" : text))
+      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+      .replace(
+        /\[([^\]\n]+)\]\((https:\/\/[^\s)]+)\)/g,
+        (_m, label, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`,
+      );
+  }
+
   function remoteConnectPanel(mode, info, ver) {
     const device = info.device;
     const provider = info.provider
       || (mode === "codex-login" ? "codex" : mode === "claude-login" ? "claude" : mode === "auth-required" ? "grok" : "");
-    const NAMES = { grok: "Grok", codex: "Codex", claude: "Claude" };
+    // The products' own names, everywhere this panel speaks. Not "Grok": that
+    // is the model, the extension is Grok Build, and a heading that disagrees
+    // with the button beneath it reads as two different things to connect.
+    const NAMES = { grok: "Grok Build", codex: "Codex", claude: "Claude Code" };
     const name = NAMES[provider] || "an agent";
     const status = (text) => { if (ver) setWelcomeStatus(text, false); };
 
@@ -8500,7 +8514,7 @@
         // and to continue only if the CLI started the sign-in. Saying that
         // BEFORE they meet it turns an alarming page into an expected one
         // (owner, with the screenshot, 2026-08-31).
-        (device.note ? `<p class="onb-desc onb-note">${escapeHtml(device.note)}</p>` : "") +
+        (device.note ? `<p class="onb-desc onb-note">${onbRich(device.note)}</p>` : "") +
         (device.code
           ? `<p class="onb-desc">Open the link, then confirm this code:</p>` +
             // Same markup as every other copyable value in this panel, so it
@@ -8514,9 +8528,9 @@
         // The setting to check, beside the code it gates — not on a screen
         // before it that cost an extra click to get past.
         (device.preflight && Array.isArray(device.preflight.steps) && device.preflight.steps.length
-          ? `<p class="onb-desc">${escapeHtml(device.preflight.reason || "")}</p>` +
+          ? `<p class="onb-desc">${onbRich(device.preflight.reason || "")}</p>` +
             `<ol class="onb-steps">${device.preflight.steps
-              .map((s) => `<li>${escapeHtml(String(s)).replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")}</li>`)
+              .map((s) => `<li>${onbRich(s)}</li>`)
               .join("")}</ol>`
           : "") +
         cancel +
@@ -8558,17 +8572,18 @@
     if (device && device.preflight) {
       status("One setting first");
       const pf = device.preflight;
-      // Escape FIRST, then allow `**bold**` — never the other way round. The
-      // step strings come from the host, and the point of the escape is that
-      // nothing in them can become markup; re-admitting one tag afterwards, on
-      // text that is already inert, keeps that true. One step needs it: the
-      // setting people cannot find sits at the bottom of a long page.
+      // Escape FIRST, then allow `**bold**` and one link — never the other way
+      // round. The step strings come from the host, and the point of the escape
+      // is that nothing in them can become markup; re-admitting two shapes
+      // afterwards, on text that is already inert, keeps that true. Both are
+      // needed here: the setting people cannot find sits at the bottom of a
+      // long page, and the page it sits on should be one tap away.
       const steps = (pf.steps || [])
-        .map((s) => `<li>${escapeHtml(String(s)).replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")}</li>`)
+        .map((s) => `<li>${onbRich(s)}</li>`)
         .join("");
       return `<div class="onb">` +
         `<p class="onb-heading">${escapeHtml(pf.title || `Turn on device sign-in for ${name}`)}</p>` +
-        `<p class="onb-desc">${escapeHtml(pf.reason || "")}</p>` +
+        `<p class="onb-desc">${onbRich(pf.reason || "")}</p>` +
         (steps ? `<ol class="onb-steps">${steps}</ol>` : "") +
         (pf.url
           ? `<a class="onb-action" href="${escapeHtml(pf.url)}" target="_blank" rel="noopener noreferrer">Open ${escapeHtml(name)} settings</a>`
@@ -8610,18 +8625,20 @@
     // one, and Claude cannot be connected there yet — a button that always
     // ends in "not available" is a dead end wearing an affordance.
     const cloudHost = !!(state.hostCaps && state.hostCaps.remoteAgentSignOut);
-    // On a cloud machine the agents are named as products and ranked: Grok
-    // Build is the one this environment is built around, and Claude Code is
-    // not connectable here yet, so it is stated rather than offered.
-    const CLOUD_NAMES = { grok: "Grok Build", codex: "Codex", claude: "Claude Code" };
+    // Ranking is the cloud-only part: Grok Build is the agent this environment
+    // is built around, and Claude Code cannot be connected here yet, so it is
+    // stated rather than offered. The NAMES above are the same everywhere.
     const buttons = offer
       .map((id) => {
         if (cloudHost && id === "claude") {
           return `<p class="onb-desc onb-agent-note">Claude Code — we're working on adding it, not available yet.</p>`;
         }
-        const label = cloudHost ? CLOUD_NAMES[id] : NAMES[id];
         const rec = cloudHost && id === "grok" ? " (recommended)" : "";
-        return `<button class="onb-action" type="button" data-act="connectRemote" data-provider="${id}">Connect ${label}${rec}</button>`;
+        // The mark the reader already knows from the model picker and the
+        // provider rows. currentColor, so it takes the button's foreground.
+        return `<button class="onb-action" type="button" data-act="connectRemote" data-provider="${id}">`
+          + providerLogoMarkup(id)
+          + `<span>Connect ${NAMES[id]}${rec}</span></button>`;
       })
       .join("");
     return `<div class="onb">` +
@@ -8704,6 +8721,11 @@
     document.body.dataset.modalAbove = "connect-wizard";
     document.body.appendChild(overlay);
     connectWizard = { provider, overlay, panel, body, onKey, opener: opener || document.activeElement };
+    // Nothing has come back from the host yet — and on a cloud machine the
+    // first frame is seconds away. Open on "starting" rather than repainting
+    // the offer that was just clicked, which read as a click that did nothing
+    // (owner, 2026-08-31). A real frame replaces this on arrival.
+    if (!state.deviceLoginByProvider[provider]) connectWizard.lastDevice = { status: "starting" };
     renderConnectWizard();
     const focusTarget = body.querySelector(".onb-action") || closeBtn;
     try { focusTarget.focus(); } catch { /* focus is a courtesy, never a failure */ }

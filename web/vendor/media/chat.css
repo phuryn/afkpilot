@@ -1566,6 +1566,14 @@ body.thinking-hidden .msg.thinking.find-reveal { display: block; }
   color: var(--vscode-foreground);
 }
 .onb-copy.copied { color: var(--vscode-charts-green, #4ec9b0); }
+/* A provider mark inside a connect button. .provider-logo is sized by its
+   glyph box elsewhere (100%/100%), so it needs its own size here. */
+.onb-action .provider-logo {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
 .onb-action {
   background: var(--vscode-button-background);
   color: var(--vscode-button-foreground);
@@ -1581,6 +1589,7 @@ body.thinking-hidden .msg.thinking.find-reveal { display: block; }
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   min-height: 32px;
   line-height: 1.25;
   text-align: center;

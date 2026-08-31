@@ -374,6 +374,14 @@ body.settings-page .settings-surface {
   gap: 8px;
 }
 
+/* Whose product this is, beside its name. The row's 600 belongs to "Codex",
+   not to "by OpenAI" — and the flex gap is the mark's, not this one's. */
+.settings-row-vendor {
+  font-weight: 400;
+  color: var(--vscode-descriptionForeground);
+  margin-left: -3px;
+}
+
 .settings-row-logo {
   display: inline-flex;
   flex: 0 0 auto;

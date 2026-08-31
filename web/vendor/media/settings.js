@@ -563,7 +563,9 @@
       id: "providerGrok",
       category: "providers",
       logo: "grok",
-      title: "Grok",
+      provider: "grok",
+      title: "Grok Build",
+      vendor: "SpaceXAI",
       description: "",
       kind: "action",
       visible: (s, env) => !!(env && !env.isRemote && env.providersKnown),
@@ -580,7 +582,9 @@
       id: "providerCodex",
       category: "providers",
       logo: "codex",
+      provider: "codex",
       title: "Codex",
+      vendor: "OpenAI",
       description: "",
       kind: "action",
       visible: (s, env) => !!(env && !env.isRemote && env.providersKnown),
@@ -597,7 +601,9 @@
       id: "providerClaude",
       category: "providers",
       logo: "claude",
-      title: "Claude",
+      provider: "claude",
+      title: "Claude Code",
+      vendor: "Anthropic",
       description: "",
       kind: "action",
       visible: (s, env) => !!(env && !env.isRemote && env.providersKnown),
@@ -620,7 +626,9 @@
       id: "providerGrokStatus",
       category: "providers",
       logo: "grok",
-      title: "Grok",
+      provider: "grok",
+      title: "Grok Build",
+      vendor: "SpaceXAI",
       description: "",
       kind: "status",
       visible: (s, env) => !!(env && env.isRemote && env.providersKnown
@@ -631,7 +639,9 @@
       id: "providerGrokRemote",
       category: "providers",
       logo: "grok",
-      title: "Grok",
+      provider: "grok",
+      title: "Grok Build",
+      vendor: "SpaceXAI",
       description: "",
       kind: "action",
       visible: (s, env) => !!(env && env.isRemote && env.providersKnown
@@ -663,7 +673,9 @@
       id: "providerCodexStatus",
       category: "providers",
       logo: "codex",
+      provider: "codex",
       title: "Codex",
+      vendor: "OpenAI",
       description: "",
       kind: "status",
       visible: (s, env) => !!(env && env.isRemote && env.providersKnown
@@ -674,7 +686,9 @@
       id: "providerCodexRemote",
       category: "providers",
       logo: "codex",
+      provider: "codex",
       title: "Codex",
+      vendor: "OpenAI",
       description: "",
       kind: "action",
       visible: (s, env) => !!(env && env.isRemote && env.providersKnown
@@ -706,7 +720,9 @@
       id: "providerClaudeStatus",
       category: "providers",
       logo: "claude",
-      title: "Claude",
+      provider: "claude",
+      title: "Claude Code",
+      vendor: "Anthropic",
       description: "",
       kind: "status",
       visible: (s, env) => !!(env && env.isRemote && env.providersKnown
@@ -721,7 +737,9 @@
       id: "providerClaudeCloud",
       category: "providers",
       logo: "claude",
-      title: "Claude",
+      provider: "claude",
+      title: "Claude Code",
+      vendor: "Anthropic",
       description: "Claude Code isn't available on cloud machines yet — we're working on adding it. Grok and Codex both sign in right here.",
       kind: "status",
       visible: (s, env) => !!(env && env.isRemote && env.providersKnown && hostIsCloud(env)
@@ -731,7 +749,9 @@
       id: "providerClaudeRemote",
       category: "providers",
       logo: "claude",
-      title: "Claude",
+      provider: "claude",
+      title: "Claude Code",
+      vendor: "Anthropic",
       description: "",
       kind: "action",
       visible: (s, env) => !!(env && env.isRemote && env.providersKnown
@@ -1911,6 +1931,31 @@
   // snapshot arriving mid-edit (another window saved something) re-renders the
   // list without throwing away what is half-typed here.
   const ROUTINE_UI = { open: "", draft: null, confirmRemove: "", pendingSave: false };
+
+  /** The provider row waiting on the host, if any. One at a time: it exists to
+   *  stop the second click, so a second pending row would be a contradiction. */
+  const PROVIDER_PENDING = { id: "", label: "", wanted: false, at: 0 };
+  /** Longer than the host's own 30s CLI timeout plus a relay round trip, so in
+   *  every case this covers, the real answer arrives first. */
+  const PROVIDER_PENDING_MS = 45000;
+
+  function clearProviderPending() {
+    PROVIDER_PENDING.id = "";
+    PROVIDER_PENDING.label = "";
+  }
+
+  /** Drop the pending label once the host has answered — or given up. */
+  function reconcileProviderPending(snapshot) {
+    if (!PROVIDER_PENDING.id) return;
+    if (Date.now() - PROVIDER_PENDING.at > PROVIDER_PENDING_MS) { clearProviderPending(); return; }
+    if (providerConnectedNow(snapshot, PROVIDER_PENDING.id) === PROVIDER_PENDING.wanted) {
+      clearProviderPending();
+    }
+  }
+
+  function providerPendingLabel(row) {
+    return row && row.provider && PROVIDER_PENDING.id === row.provider ? PROVIDER_PENDING.label : "";
+  }
   const NEW_ROUTINE = "__new__";
 
   const PROVIDER_LABELS = { grok: "Grok", codex: "Codex", claude: "Claude" };
@@ -2481,6 +2526,14 @@
     } else {
       name.textContent = rowTitle(row, snapshot, env);
     }
+    // Whose product this is, beside its name — provenance, not identity, so it
+    // does not take the title's weight.
+    if (row.vendor) {
+      const vendor = document.createElement("span");
+      vendor.className = "settings-row-vendor";
+      vendor.textContent = " by " + row.vendor;
+      name.appendChild(vendor);
+    }
     const desc = document.createElement("div");
     desc.className = "settings-row-desc";
     desc.textContent = rowDescription(row, snapshot, env);
@@ -2565,8 +2618,10 @@
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "settings-action";
-      btn.textContent = rowActionLabel(row, snapshot, env);
-      if (!enabled) btn.disabled = true;
+      const pending = providerPendingLabel(row);
+      btn.textContent = pending || rowActionLabel(row, snapshot, env);
+      if (!enabled || pending) btn.disabled = true;
+      if (pending) btn.setAttribute("aria-busy", "true");
       control.appendChild(btn);
     }
 
@@ -2744,7 +2799,23 @@
         return;
       }
       const message = rowMessage(row, undefined, snapshot);
+      // Sign-out is the one with nothing else to show for it: a sign-in opens
+      // the wizard, and this page sits behind that.
+      let marked = false;
+      if (message && message.type === "logout" && message.provider) {
+        PROVIDER_PENDING.id = message.provider;
+        PROVIDER_PENDING.label = "Disconnecting…";
+        PROVIDER_PENDING.wanted = false;
+        PROVIDER_PENDING.at = Date.now();
+        marked = true;
+        // The backstop paint. Every normal path clears this from the host's
+        // answer; this is the one where no answer ever comes.
+        setTimeout(() => { reconcileProviderPending(snapshot); paint(); }, PROVIDER_PENDING_MS + 500);
+      }
       if (message) post(message);
+      // Nothing else repaints until the host answers — which is the whole
+      // point: the label has to change on the click, not on the reply.
+      if (marked) paint();
       const keep = typeof row.keepOpen === "function" ? row.keepOpen(snapshot, env) : !!row.keepOpen;
       if (opts.closeOnAction && !keep && onClose) onClose();
     }
@@ -2768,12 +2839,16 @@
         // selected option. Deliberately not title/prompt: those change per
         // keystroke, and repainting would rebuild the input under the caret.
         routineDraft: ROUTINE_UI.draft
-          ? [ROUTINE_UI.draft.unit, ROUTINE_UI.draft.cwd, ROUTINE_UI.draft.provider, ROUTINE_UI.draft.model].join(" ")
+          ? [ROUTINE_UI.draft.unit, ROUTINE_UI.draft.cwd, ROUTINE_UI.draft.provider, ROUTINE_UI.draft.model].join(" ")
           : "",
+        // Which row is waiting on the host: local state that changes a label
+        // and a disabled attribute, so the key has to carry it.
+        providerPending: PROVIDER_PENDING.id + ":" + PROVIDER_PENDING.label,
       });
     }
 
     function paint() {
+      reconcileProviderPending(snapshot);
       const chrome = describeChrome(container);
       ensureCategory();
       maybeCheckAbout();
@@ -3432,6 +3507,10 @@
       update(nextSnapshot, nextEnv) {
         if (nextSnapshot) snapshot = defaultSnapshot({ ...snapshot, ...nextSnapshot });
         if (nextEnv) Object.assign(env, nextEnv);
+        // Before the key: the answer this was waiting for is usually IN this
+        // snapshot, and a stale "Disconnecting…" left in the key would make
+        // the repaint that clears it look like a no-op.
+        reconcileProviderPending(snapshot);
         if (container.firstChild && paintKey() === lastPaintedKey) return;
         if (describeChrome(container).navMenuOpen) {
           paintDeferred = true;
