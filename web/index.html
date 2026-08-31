@@ -1707,7 +1707,11 @@
       // no way back to it from the picker.
       const isCloud = !!d.environment || d.platform === "cloud";
       const usable = availability !== "offline" && cloudState !== "upgrade";
-      li.dataset.online = usable ? "true" : "false";
+      // NOT `usable`: an upgrade row is a live offer for a machine that would
+      // work, and rendering it at 60% opacity beside a switched-off laptop said
+      // the opposite. Dimming means "you cannot reach this"; the upgrade row's
+      // problem is a plan, and its button says so.
+      li.dataset.online = availability !== "offline" ? "true" : "false";
       li.dataset.availability = availability;
       // The row identifies itself. Anything looking for a specific row used to
       // reach through the remove button's data attribute, which broke the moment
@@ -1756,8 +1760,10 @@
       if (d.online) {
         badge.textContent = d.clients + " viewer" + (d.clients === 1 ? "" : "s");
       } else if (cloudState === "upgrade") {
-        badge.classList.add("is-offline");
-        badge.textContent = "upgrade";
+        // The same word an entitled account sees for the same situation: the
+        // machine does not exist yet and nothing is wrong. What differs is the
+        // button beside it, which is where the plan belongs.
+        badge.textContent = "ready";
       } else if (cloudState === "not-provisioned") {
         // Deliberately NOT "not created" or "inactive". Nothing has happened
         // yet and nothing needs to: opening it is the whole setup.
@@ -1870,12 +1876,21 @@
       rm.addEventListener("click", openUnlinkDialog);
 
       li.appendChild(body);
+      // Reset destroys a machine and builds a new one, so it is meaningless
+      // where there is no machine: a synthetic row (nobody has provisioned yet,
+      // or the plan does not include one) offered "Reset my Cloud" for
+      // something that does not exist — and to an unentitled account it offered
+      // to reset a machine they cannot even open. Found by rendering the
+      // picker's states rather than by clicking (2026-08-31).
+      const cloudExists = !!d.deviceId && cloudState !== "upgrade" && cloudState !== "not-provisioned";
       if (isCloud) {
         // A cloud environment has no ✕, deliberately. Unlinking one would leave
         // an account without a product it cannot get back on its own, and a gap
         // in a list that promises everyone has one. What it has instead is
-        // Reset: same account, same row, new machine, nothing kept.
-        li.appendChild(cloudMenu(d));
+        // Reset: same account, same row, new machine, nothing kept — and only
+        // once there is a machine to reset. A synthetic row gets neither
+        // control, because both would act on something that does not exist.
+        if (cloudExists) li.appendChild(cloudMenu(d));
       } else {
         li.appendChild(rm);
       }
