@@ -27,8 +27,29 @@ describe("the cloud first-boot message", () => {
     expect(chat).toMatch(/localStorage\.setItem\(everSawHostKey, "1"\)/);
   });
 
+  it("says nothing at all when a cloud machine is simply asleep", () => {
+    // Sleeping is the resting state this product sells — it wakes on the next
+    // send. Announcing it as a fault told the owner something was wrong while
+    // he was reading, gave him nothing to do, and was contradicted a minute
+    // later by the machine answering (2026-08-31).
+    expect(chat).toContain("var cloudAsleep = isCloudDevice && everSawHost;");
+    expect(chat).toContain("if (cloudAsleep && !held) return;");
+    // The old red sentence is gone.
+    expect(chat).not.toContain("Your cloud environment isn't responding.");
+  });
+
+  it("still says where a held message went, and says it calmly", () => {
+    // With something queued the person needs to know it is safe. Nothing has
+    // failed, so it goes through the notice channel, not the error one.
+    const at = chat.indexOf("var cloudAsleep = isCloudDevice && everSawHost;");
+    expect(at).toBeGreaterThan(-1);
+    const block = chat.slice(at, at + 1200);
+    expect(block).toContain("Your cloud machine is asleep.");
+    expect(chat).toContain('type: stillBooting || cloudAsleep ? "hostNotice" : "error"');
+  });
+
   it("uses the notice channel while booting and the error channel for real failures", () => {
-    expect(chat).toContain('type: stillBooting ? "hostNotice" : "error"');
+    expect(chat).toContain('type: stillBooting || cloudAsleep ? "hostNotice" : "error"');
     // The escalation after a boot that never finishes stays an error.
     expect(chat).toMatch(/still hasn't come up[\s\S]{0,200}?/);
     const escalation = chat.slice(chat.indexOf("firstBootErrorTimer = setTimeout"));

@@ -385,6 +385,16 @@ body.has-rail #messages,
 body.has-rail .composer,
 body.has-rail #quota-wall,
 body.has-rail #reconnecting-indicator { padding-inline: max(10px, calc((100% - 800px) / 2)); }
+/* A popover inside the composer is positioned against the composer's PADDING
+   BOX, so the centring above moves the text without moving the menu that
+   completes it. In a VS Code side panel the two agree — the padding is 8px,
+   which is what `left: var(--pad)` was written for — but in a browser tab the
+   gap is the whole centring inset, and it grows with the window: measured
+   104px at 1280 and 564px at 2200, which is why it looked zoom-dependent
+   (owner, 2026-08-31). Same expression as the padding, so they cannot drift.
+   The mention list spans the composer, so it needs the far edge too. */
+body.has-rail .slash-popover { left: max(10px, calc((100% - 800px) / 2)); }
+body.has-rail .mention-popover { right: max(10px, calc((100% - 800px) / 2)); }
 
 @media (min-width: 1152px) {
   /* The side borders framed a centred column. Full bleed has no column to frame
@@ -729,6 +739,20 @@ window.grokRemoteClient = true;
   // is no machine to walk up to and no VS Code to open, so the advice that is
   // right for a laptop is nonsense here.
   var isCloudDevice = new URLSearchParams(location.search).get("cloud") === "1";
+  // The rail normally waits for the host's `repos` frame, because an extension
+  // older than v2.0.5 never sends one and would get an empty sidebar. A cloud
+  // machine cannot BE that: the relay provisions it and installs the host on
+  // it, which is the same reason the desktop app paints its rail from the
+  // first frame. So this surface skips the wait — measured at 74ms on a
+  // desktop and 177ms on a phone with everything local and the host answering
+  // instantly, and the whole screen for as long as a sleeping machine takes to
+  // wake (owner, 2026-08-31). Set before chat.js loads.
+  //
+  // Worst case if `cloud=1` is forged onto a laptop: the rail chrome paints a
+  // moment early. On a host older than v2.0.5 that is an empty rail until the
+  // page is reloaded — the ordinary wait costs nothing there, so nobody has a
+  // reason to.
+  window.grokCloudHost = isCloudDevice;
   var ws, queue = [], saved = {};
   var pendingRepoOpen = null;
   var pendingRepoOpenAt = 0;
@@ -3156,11 +3180,23 @@ window.grokRemoteClient = true;
       ? " Your unsent message is saved and will be sent when " + reconnects + "."
       : " Your unsent messages are saved and will be sent when " + reconnects + ".";
     var stillBooting = isCloudDevice && !everSawHost;
+    // A cloud machine that HAS attached before and then goes quiet is asleep,
+    // which is the resting state this product sells — it wakes on the next
+    // send, in seconds. Announcing it as a fault told the owner something was
+    // wrong while he was reading, offered him nothing to do about it, and was
+    // contradicted a minute later by the machine simply answering (2026-08-31).
+    // The header's reconnect indicator still carries the state; the transcript
+    // stays out of it unless something is actually being held.
+    var cloudAsleep = isCloudDevice && everSawHost;
     var offlineText = stillBooting
       ? "Setting up your cloud environment. A new machine takes about a minute to come up — this page will connect on its own."
-      : isCloudDevice
-        ? "Your cloud environment isn't responding. It should come back on its own — this page will connect when it does."
+      : cloudAsleep
+        ? "Your cloud machine is asleep. It wakes as soon as you send something."
         : "Device offline — open VS Code on that machine and this page will connect by itself.";
+    // Nothing held, nothing to say: sleeping is not news. With a message
+    // waiting, the person needs to know it is safe — but as a notice, not an
+    // error, because nothing has failed.
+    if (cloudAsleep && !held) return;
     // A machine being BUILT is progress, not a fault, and red is the wrong
     // colour for a minute of ordinary waiting (owner, 2026-08-31). The notice
     // channel is already the calm one — blue rule, quiet background — and the
@@ -3168,7 +3204,7 @@ window.grokRemoteClient = true;
     // Everything that really is a failure keeps the error channel.
     window.dispatchEvent(new MessageEvent("message", {
       data: {
-        type: stillBooting ? "hostNotice" : "error",
+        type: stillBooting || cloudAsleep ? "hostNotice" : "error",
         text: offlineText + queuedNote,
       },
     }));
@@ -4488,6 +4524,10 @@ body.turn-busy .queued-steer,
   padding-left: calc(var(--pad) + 5px);
   padding-right: calc(var(--pad) + 5px);
 }
+/* And the popovers that hang off the composer, for the same reason as the
+   has-rail rule above: they are positioned against its padding box. */
+.slash-popover { left: calc(var(--pad) + 5px); }
+.mention-popover { right: calc(var(--pad) + 5px); }
 /* Desktop: widen the gutter to the header's own inline padding, so the message
    column, composer, and brand all sit on one shared left edge — the roomier
    feel Codex/Claude give a full-width window. */
@@ -4497,6 +4537,8 @@ body.turn-busy .queued-steer,
     padding-left: clamp(1.25rem, 4vw, 2.5rem);
     padding-right: clamp(1.25rem, 4vw, 2.5rem);
   }
+  .slash-popover { left: clamp(1.25rem, 4vw, 2.5rem); }
+  .mention-popover { right: clamp(1.25rem, 4vw, 2.5rem); }
 }
 /* A little air under the last line of typed text before the toolbar row. The
    highlight mirror must track the textarea's box exactly, so bump both. */

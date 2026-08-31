@@ -573,6 +573,44 @@ async function addProjectScreens(page, name) {
   })));
 }
 
+/**
+ * A menu that completes what you are typing has to start where the text does.
+ *
+ * The composer's content is centred to the reading measure with PADDING, and a
+ * popover inside it is positioned against the composer's padding box — so the
+ * two only agree at the vendored 8px. In a browser tab the slash menu hung off
+ * to the left by the whole centring inset, which grows with the window and so
+ * looked like it depended on zoom (owner, 2026-08-31: 104px at 1280, 564px at
+ * 2200).
+ */
+async function assertComposerPopoverAlignment(page, name) {
+  await page.evaluate(() => {
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "commandsUpdate", commands: [
+      { name: "screens-check-one", description: "A command, so the menu has something to show." },
+      { name: "screens-check-two", description: "And a second one." },
+    ] } }));
+  });
+  const input = page.locator("#input");
+  await input.click();
+  await input.fill("");
+  await input.type("/screens-check", { delay: 10 });
+  await page.waitForSelector(".slash-popover:not([hidden])", { timeout: 5000 });
+  const gap = await page.evaluate(() => {
+    const pop = document.querySelector(".slash-popover");
+    const field = document.querySelector("#input");
+    if (!pop || !field) return null;
+    return Math.round(field.getBoundingClientRect().left - pop.getBoundingClientRect().left);
+  });
+  assert.ok(gap !== null, `${name}: the slash menu did not open`);
+  assert.ok(
+    Math.abs(gap) <= 4,
+    `${name}: the slash menu starts ${gap}px from the text it completes`,
+  );
+  await input.fill("");
+  await page.keyboard.press("Escape");
+  log(`${name}: the slash menu lines up with the composer (${gap}px)`);
+}
+
 async function shot(page, name) {
   await page.screenshot({ path: join(OUT, `${name}.png`) });
   log(`captured ${name}.png`);
@@ -766,6 +804,7 @@ try {
     await page.waitForSelector("#files-browse-btn", { timeout: 30000 });
     await page.waitForTimeout(400);
     await shot(page, `${name}-1-chat`);
+    await assertComposerPopoverAlignment(page, name);
     await welcomeTipScreens(page, name);
     await addProjectScreens(page, name);
     // Done here, on a freshly loaded page, rather than at the end: the later

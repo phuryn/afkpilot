@@ -27,6 +27,10 @@
       : "default"
   );
   const REMOTE_SESSION_KEY = "grok.remote.tabSession:" + REMOTE_STORAGE_SUFFIX;
+  // Set by the relay's page before this file loads. Only ever says "the host on
+  // the other end is one the relay installed", which is why it can skip a
+  // compatibility wait rather than change any behaviour.
+  const IS_CLOUD_HOST = typeof window !== "undefined" && window.grokCloudHost === true;
   const REMOTE_TAB_TOKEN_KEY = "grok.remote.tabToken:" + REMOTE_STORAGE_SUFFIX;
   const REMOTE_TAB_OWNER_KEY = "grok.remote.tabOwner:" + REMOTE_STORAGE_SUFFIX;
   const REMOTE_TAB_CHANNEL = "grok.remote.tabClaim:" + REMOTE_STORAGE_SUFFIX;
@@ -4594,12 +4598,31 @@
     return document.body.classList.contains("desk") && !!railMount();
   }
 
+  /** A cloud machine, as the page that served this client was told by the
+   *  relay that provisioned it. */
+  function cloudHostLayout() {
+    return IS_CLOUD_HOST && !!railMount();
+  }
+
+  /**
+   * May this surface paint the rail chrome BEFORE the catalog arrives?
+   *
+   * Only where there is no host version skew to protect against. Desktop
+   * qualifies because renderer and host ship together; a cloud machine
+   * qualifies because the relay installed that host itself. Everything else
+   * waits for a `repos` frame, since an extension older than v2.0.5 never
+   * sends one and an empty sidebar is worse than a plain column.
+   */
+  function railChromeBeforeCatalog() {
+    return desktopLargeLayout() || cloudHostLayout();
+  }
+
   /**
    * Rail is live when the mount exists AND (desktop first-frame chrome, or the
    * host has proven it feeds a multi-repo catalog). Never gated on IS_REMOTE.
    */
   function railAvailable() {
-    return !!railMount() && (desktopLargeLayout() || state.reposKnown);
+    return !!railMount() && (railChromeBeforeCatalog() || state.reposKnown);
   }
 
   /** The list body. The browser page wraps the rail in fixed chrome (brand,
@@ -5677,7 +5700,7 @@
     // user most needs the rail, because it is where the only useful control
     // lives. Hiding it made the empty-state action unreachable and left the
     // File menu — which the desktop hides — as the sole route in.
-    const on = desktopLargeLayout() ||
+    const on = railChromeBeforeCatalog() ||
       (railAvailable() && (state.repos.length > 0 || canAddProjectFolder()));
     const panel = railPanel();
     if (panel) panel.hidden = !on;
@@ -5818,7 +5841,7 @@
     }
 
     if (!shownAnything) {
-      if (!state.reposKnown && desktopLargeLayout()) {
+      if (!state.reposKnown && railChromeBeforeCatalog()) {
         root.appendChild(railNote("Loading…"));
       } else if (!q && canAddProjectFolder()) {
         // An empty rail that only says "No projects yet" is a dead end on the
@@ -17040,9 +17063,12 @@
   }
   newBtn.onclick = () => beginNewSession();
   fillSessionHeadActions();
-  // Desktop ships the rail mount in the first HTML frame. Paint the skeleton
-  // before catalog frames arrive so the window never starts panel-less.
-  if (desktopLargeLayout()) renderRail();
+  // Desktop and cloud ship the rail mount in the first HTML frame. Paint the
+  // skeleton before catalog frames arrive so the window never starts
+  // panel-less — on a cloud machine that gap is however long the host takes to
+  // wake, and what showed instead was the layout this product had before it
+  // had a rail (owner, 2026-08-31).
+  if (railChromeBeforeCatalog()) renderRail();
   modeBtn.onclick = (e) => { e.stopPropagation(); if (state.busyLocked) return; openModePopover(); };
   gearBtn.onclick = (e) => { e.stopPropagation(); openGearPopover(); };
 
