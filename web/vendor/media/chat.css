@@ -1567,7 +1567,16 @@ body.thinking-hidden .msg.thinking.find-reveal { display: block; }
   font-family: inherit;
   font-size: 12px;
   cursor: pointer;
+  /* Centre the label in the box rather than leaving it to line-height: these
+     are <a> and <button> with the same class, and on a phone the text sat
+     visibly high in both (owner, 2026-08-31). */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  line-height: 1.25;
   text-align: center;
+  box-sizing: border-box;
 }
 .onb-action code {
   background: rgba(255,255,255,0.12);

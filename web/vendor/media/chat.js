@@ -8713,7 +8713,10 @@
   function renderConnectWizard() {
     if (!connectWizard) return;
     const provider = connectWizard.provider;
-    const device = state.deviceLoginByProvider[provider];
+    // The mirror is the live source, but a confirmed account retires its
+    // mirror, so a settled panel keeps its own copy of the last thing it was
+    // told rather than falling back to the empty-state offer.
+    const device = state.deviceLoginByProvider[provider] || connectWizard.lastDevice;
     // `ver` is null on purpose: the welcome status line belongs to the welcome
     // card, and a modal must not rewrite it.
     connectWizard.body.innerHTML = remoteConnectPanel(
@@ -8734,18 +8737,25 @@
       || device.status === "unavailable" || !!device.preflight);
     if (live) {
       openConnectWizard(provider);
+      if (connectWizard) connectWizard.lastDevice = device;
       return;
     }
     if (!connectWizard || connectWizard.provider !== provider) return;
     if (device && device.status === "done") {
       // Show the confirmation, then get out of the way. The account is
       // connected; keeping a dialog up over it is make-work.
+      connectWizard.lastDevice = device;
+      connectWizard.settled = true;
       renderConnectWizard();
       setTimeout(() => {
         if (connectWizard && connectWizard.provider === provider) closeConnectWizard();
       }, 1600);
       return;
     }
+    // Nothing repaints a finished panel. Between "connected" and the close
+    // there is a window where the mirror is already gone, and repainting in
+    // it turned a success into an offer to start over.
+    if (connectWizard.settled) return;
     renderConnectWizard();
   }
 
