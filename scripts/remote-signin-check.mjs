@@ -378,6 +378,68 @@ try {
   await page.screenshot({ path: join(OUT, "signin", "6-done.png") });
   log("success is confirmed");
 
+  // 7. WHAT HAPPENS AFTER "connected", which is where the owner's first real
+  //    cloud sign-in actually went wrong. The flow itself worked; the page then
+  //    sat there with an empty model picker and a card still offering to
+  //    connect the account that had just been connected, until it was reloaded
+  //    (2026-08-31). Both halves are frame sequences, so both belong here
+  //    rather than in a manual test.
+  host(clientId, {
+    type: "providerState",
+    providers: [
+      { id: "grok", connected: true },
+      { id: "codex", connected: false },
+      { id: "claude", connected: false },
+    ],
+  });
+  await waitFor(
+    async () => await page.locator("#welcome").evaluate((el) => el.hidden),
+    "the welcome card to stand down once an agent is connected",
+  );
+  assert.equal(
+    await page.locator('#welcome-onboarding [data-act="connectRemote"]:visible').count(), 0,
+    "a connected agent must not still be offered for connection",
+  );
+  log("a successful sign-in dismisses the card that asked for it");
+
+  // 8. A REFUSED RESTORE MUST NOT REARM ITSELF. The host reaps an untouched
+  //    session when its tab goes, so a remembered empty id comes back as
+  //    "could not restore". Keeping that id meant the next reload asked for the
+  //    same dead session and drew the same error — a loop the owner could only
+  //    escape by clicking New session.
+  const deadId = "dead-session-id";
+  // Remember it the way the page really does: a sessions frame naming an
+  // active conversation that HAS turns. Writing sessionStorage by hand would
+  // prove nothing — the client keeps the identity in memory too.
+  host(clientId, {
+    type: "sessions",
+    entries: [{ id: deadId, cwd: CWD, title: "A real conversation", numMessages: 4, updatedAt: 9, pinned: false }],
+    activeId: deadId,
+    total: 1,
+    dots: {},
+  });
+  await waitFor(async () => {
+    const kept = await page.evaluate(() => {
+      const key = Object.keys(sessionStorage).find((k) => k.indexOf("grok.remote.tabSession:") === 0);
+      return key ? sessionStorage.getItem(key) : null;
+    });
+    return !!kept && kept.includes(deadId);
+  }, "the tab to remember its conversation");
+
+  host(clientId, {
+    type: "error",
+    text: "Could not restore this tab's previous conversation. It may have been deleted, or its repository may no longer be available. Start a new session explicitly to continue.",
+    resumeFailed: { id: deadId },
+  });
+  await waitFor(async () => {
+    const kept = await page.evaluate(() => {
+      const key = Object.keys(sessionStorage).find((k) => k.indexOf("grok.remote.tabSession:") === 0);
+      return key ? sessionStorage.getItem(key) : null;
+    });
+    return !kept || !kept.includes(deadId);
+  }, "the refused conversation id to be forgotten");
+  log("a refused restore forgets the id, so a reload cannot ask again");
+
   // 7. THE COMPATIBILITY CONTRACT. The relay serves this page, so the moment it
   //    deploys, every user still on an older extension is running this client
   //    against a host that classifies `runGrokLogin` as host-local and drops it

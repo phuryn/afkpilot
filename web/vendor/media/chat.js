@@ -5618,6 +5618,8 @@
     railProbeTimer = setTimeout(() => {
       railProbeTimer = null;
       if (state.repoPreviewsSupported) return;
+      // A verdict, not a fact: nothing answered in time. Said out loud so the
+      // rail has something to show, and dropped on the next reconnect.
       state.repoPreviewsUnsupported = true;
       renderRail();
     }, ms);
@@ -5628,6 +5630,23 @@
    *  but that is a correction owed when the conversation ARRIVES, not a reason to
    *  refuse the fold forever. Keyed on the repo changing, so re-collapsing the
    *  project you are working in sticks until you go somewhere else. */
+  /**
+   * Forget an unanswered capability probe.
+   *
+   * `repoPreviewsUnsupported` is inferred from silence, so it is only ever as
+   * good as the moment it was measured. A reconnect may be a different host —
+   * or the same one, no longer busy — and without this the page carried
+   * "Sessions need a newer Grok Build" about a current host for as long as it
+   * stayed open (owner, on a cloud machine that had just run a CLI sign-out,
+   * 2026-08-31).
+   */
+  function forgetRailProbeVerdict() {
+    if (state.repoPreviewsSupported) return;
+    if (railProbeTimer) { clearTimeout(railProbeTimer); railProbeTimer = null; }
+    state.repoPreviewsUnsupported = false;
+    state.repoPreviewsAsked = {};
+  }
+
   function railFollowLiveRepo() {
     // Via the display target (confirmed or pending), not the host-confirmed
     // active cwd alone: a worktree conversation reports the WORKTREE as its
@@ -8792,6 +8811,36 @@
       return;
     }
     renderConnectWizard();
+  }
+
+  /** The onboarding modes that are asking for an account to be connected. */
+  const CONNECT_ONBOARDING_MODES = {
+    "connect-agent": true,
+    "codex-login": true,
+    "claude-login": true,
+    "auth-required": true,
+  };
+
+  /**
+   * Nothing in this transcript is a conversation.
+   *
+   * The second signal for "this session is empty, do not remember it". It used
+   * to be `welcomeVisible`, which an error bubble turns off — including the
+   * host's own sign-out notice, so an empty session was remembered, reaped, and
+   * then failed to restore on every refresh (owner, 2026-08-31). Errors and
+   * notices are momentary UI; a turn is the thing that makes a conversation
+   * worth restoring. Pending authored text still counts, because `numMessages`
+   * lags during the first send.
+   */
+  function transcriptHasNoTurns() {
+    const messages = $("messages");
+    if (!messages) return true;
+    // `.msg.error` is a notice and `.msg.thinking` is scaffolding; anything
+    // else in the transcript is somebody's conversation.
+    if (messages.querySelector(".msg:not(.error):not(.thinking)")) return false;
+    const input = $("input");
+    const typed = input && typeof input.value === "string" ? input.value.trim() : "";
+    return !typed;
   }
 
   function showOnboarding(mode, info, beforeRender) {
@@ -15206,6 +15255,10 @@
         // Field presence: an older host never sends this, and command View all
         // then omits language rather than inventing a dialect.
         state.commandLanguage = typeof msg.commandLanguage === "string" ? msg.commandLanguage : "";
+        // Every remote snapshot carries an initialState, so this is where a
+        // reconnect lands. Whatever the rail concluded from silence belongs to
+        // the host that was quiet, not to this one.
+        forgetRailProbeVerdict();
         restoreRememberedRemoteSession();
         // Capability field presence — never a version check. Local hosts ignore.
         ensureRemoteFilesBrowser();
@@ -15299,11 +15352,23 @@
         // borrows the welcome overlay; dismiss it when the provider it was
         // waiting for is now connected, without clearing or replaying messages.
         {
-          const pendingProvider = $("welcome-onboarding")?.querySelector(
+          // What the card is ASKING FOR, not which button it happens to draw.
+          // Keying on the recovery button meant a device-code card — the only
+          // way to connect from a phone or a cloud machine — was never
+          // dismissed by its own success (owner, 2026-08-31).
+          const onboardingProvider = $("welcome-onboarding")?.querySelector(
             '[data-act="recheckProvider"][data-provider], [data-act="recheck"][data-provider]',
-          )?.dataset?.provider;
-          if (pendingProvider && state.providers.some((provider) =>
-            provider.id === pendingProvider && provider.connected)) {
+          )?.dataset?.provider
+            || (CONNECT_ONBOARDING_MODES[state.onboardingMode]
+              ? (state.onboardingInfo && state.onboardingInfo.provider) || ""
+              : "");
+          const anyConnected = state.providers.some((provider) => provider.connected);
+          const askedForConnected = onboardingProvider && state.providers.some((provider) =>
+            provider.id === onboardingProvider && provider.connected);
+          // `connect-agent` names no provider: it is the "pick any of the
+          // three" card, so any connected account answers it.
+          const chooserAnswered = state.onboardingMode === "connect-agent" && anyConnected;
+          if ($("welcome-onboarding")?.childElementCount && (askedForConnected || chooserAnswered)) {
             clearWelcome();
           }
         }
@@ -16591,6 +16656,14 @@
           }
         break;
       case "error":
+        // The host refused to restore a specific conversation, and named it.
+        // Keeping that id meant the next reload asked for the same dead
+        // session, drew the same error, and re-armed itself — the owner could
+        // only escape by clicking New session (2026-08-31).
+        if (msg.resumeFailed && typeof msg.resumeFailed.id === "string"
+          && rememberedRemoteSession && rememberedRemoteSession.id === msg.resumeFailed.id) {
+          saveRememberedRemoteSession(null);
+        }
         // The relay bounces a quota-refused frame as a plain error, which
         // renders in the transcript — behind the settings overlay the reader is
         // looking at. At the paywall that made Create appear to do nothing, at
@@ -16729,7 +16802,7 @@
             // mean no restore attempt. Both signals have to agree — the host's
             // message count AND a blank view — so a refresh mid-first-turn,
             // where the count still lags at 0, keeps remembering.
-            if (activeEntry?.numMessages === 0 && state.welcomeVisible) {
+            if (activeEntry?.numMessages === 0 && transcriptHasNoTurns()) {
               saveRememberedRemoteSession(null);
             } else saveRememberedRemoteSession({
               id: state.activeSessionId,
