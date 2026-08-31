@@ -4,13 +4,13 @@
     "repository": "grok-build-vscode",
     "revision": "d586ffd321cae8f97937bda470b897e3f528ecc9",
     "appVersion": "3.19.8",
-    "filesMatchRevision": true
+    "filesMatchRevision": false
   },
   "artifacts": [
     {
       "source": "media/chat.css",
       "destination": "media/chat.css",
-      "sha256": "cf62753c92321d29b8cfcd590747b852ba0bfd9796d7d67bba4d6cb76966431a"
+      "sha256": "16466b44f4b96fc8baeb4287e5ef8baf9ee388d3a9c4fefd1c31aabe2c81f485"
     },
     {
       "source": "media/chat.js",

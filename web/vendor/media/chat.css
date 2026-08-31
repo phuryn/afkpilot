@@ -1596,7 +1596,14 @@ body.thinking-hidden .msg.thinking.find-reveal { display: block; }
    button fill — 1.12:1, an effectively blank button that every DOM assertion
    was happy with. scripts/remote-signin-check.mjs now measures the contrast. */
 a.onb-action {
-  display: block;
+  /* flex, not block: this element has the same class as the <button> beside
+     it and must look identical. `display: block` here beat the class's own
+     centring on specificity, so a link-button's label sat 13px high while
+     the button next to it was centred — measured, not eyeballed (owner,
+     2026-08-31). */
+  display: flex;
+  align-items: center;
+  justify-content: center;
   box-sizing: border-box;
   color: var(--vscode-button-foreground);
   text-decoration: none;
