@@ -225,6 +225,12 @@
     return base;
   }
 
+  /** The same test `message` uses to choose between logout and sign-in. */
+  function providerConnectedNow(snapshot, id) {
+    const provider = providerOf(snapshot, id);
+    return !!(provider && provider.connected && provider.needsLogin !== true);
+  }
+
   function remoteProviderActionable(snapshot, env, id) {
     return remoteProviderIsSettled(snapshot, id)
       ? canSignOutFromRemote(env)
@@ -635,7 +641,12 @@
       // conversation. This page stays put behind it, so closing the wizard
       // returns the reader exactly where they were.
       keepOpen: (s, env) => !!(env && env.isRemote),
-      local: (s, env) => (env && env.isRemote ? "connectWizard:grok" : ""),
+      // Only for the sign-IN message. This row sends `logout` when the
+      // account is connected, and opening a Connect wizard on a Sign out
+      // click is the opposite of what was asked (review, 2026-08-31).
+      local: (s, env) => (env && env.isRemote && !providerConnectedNow(s, "grok")
+        ? "connectWizard:grok"
+        : ""),
       describe: (s, env) => providerRemoteDescribe(s, env, "grok"),
       actionLabel: (s) => providerAction(providerOf(s, "grok")),
       // Same two messages the desk row sends, reached through the same test.
@@ -673,7 +684,12 @@
       // conversation. This page stays put behind it, so closing the wizard
       // returns the reader exactly where they were.
       keepOpen: (s, env) => !!(env && env.isRemote),
-      local: (s, env) => (env && env.isRemote ? "connectWizard:codex" : ""),
+      // Only for the sign-IN message. This row sends `logout` when the
+      // account is connected, and opening a Connect wizard on a Sign out
+      // click is the opposite of what was asked (review, 2026-08-31).
+      local: (s, env) => (env && env.isRemote && !providerConnectedNow(s, "codex")
+        ? "connectWizard:codex"
+        : ""),
       describe: (s, env) => providerRemoteDescribe(s, env, "codex"),
       actionLabel: (s) => providerAction(providerOf(s, "codex")),
       // Same two messages the desk row sends, reached through the same test.
@@ -726,7 +742,12 @@
       // conversation. This page stays put behind it, so closing the wizard
       // returns the reader exactly where they were.
       keepOpen: (s, env) => !!(env && env.isRemote),
-      local: (s, env) => (env && env.isRemote ? "connectWizard:claude" : ""),
+      // Only for the sign-IN message. This row sends `logout` when the
+      // account is connected, and opening a Connect wizard on a Sign out
+      // click is the opposite of what was asked (review, 2026-08-31).
+      local: (s, env) => (env && env.isRemote && !providerConnectedNow(s, "claude")
+        ? "connectWizard:claude"
+        : ""),
       describe: (s, env) => providerRemoteDescribe(s, env, "claude"),
       actionLabel: (s) => providerAction(providerOf(s, "claude")),
       // Same two messages the desk row sends, reached through the same test.
@@ -3340,6 +3361,11 @@
     }
 
     function onKey(e) {
+      // A dialog stacked above this page owns the keyboard. Both handlers are
+      // on document in capture and this one was registered first, so without
+      // standing down, Escape closed the page underneath the dialog and Tab
+      // pulled focus out of it (review, 2026-08-31).
+      if (document.body && document.body.dataset.modalAbove) return;
       if (e.key === "Escape") {
         e.stopPropagation();
         e.preventDefault();

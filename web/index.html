@@ -1103,7 +1103,7 @@
           <div class="pricing-head">
             <p class="eyebrow">Pricing</p>
             <h2>Start free. Upgrade when you outgrow it.</h2>
-            <p>One plan to try it, one to remove the limits.</p>
+            <p>One plan to try it, one without the device and weekly caps.</p>
           </div>
           <div class="plans">
             <div class="plan plan-free">
@@ -1127,7 +1127,7 @@
             <div class="plan plan-max">
               <span class="plan-name">Remote Max</span>
               <div class="plan-price"><span class="amt">$5</span><span class="per">/ month</span></div>
-              <p class="plan-lead">Everything in Free, without the limits.</p>
+              <p class="plan-lead">Everything in Free, without the device or weekly caps.</p>
               <ul>
                 <li>Unlimited linked devices</li>
                 <li>Unlimited remote messages</li>
@@ -1313,7 +1313,7 @@
               <details class="faq-item" name="faq">
                 <summary>Do you store my prompts or my code?</summary>
                 <div class="faq-body">
-                  <p>No. Prompts, replies, file contents and images pass through the relay in memory and are dropped. There is no chat history on our servers because there is no chat log on our servers — your sessions live on your own machine, the same as they did before.</p>
+                  <p>No. Prompts, replies, file contents and images pass through the relay in memory and are dropped. There is no chat history on our servers because there is no chat log on our servers — your sessions live on the machine running the agent, the same as they did before. On a <b>Cloud machine</b> that is the machine we host for you: the conversations and files are on its disk, and still not in our database.</p>
                   <p>What we do keep is the minimum to run an account: your sign-in identity, a device name and key identifier, and, on the Free plan, a single number — how many messages you have sent this week. The <a href="/privacy">privacy policy</a> lists all of it.</p>
                 </div>
               </details>
@@ -1782,10 +1782,13 @@
       if (d.online) {
         badge.textContent = d.clients + " viewer" + (d.clients === 1 ? "" : "s");
       } else if (cloudState === "upgrade") {
-        // The same word an entitled account sees for the same situation: the
-        // machine does not exist yet and nothing is wrong. What differs is the
-        // button beside it, which is where the plan belongs.
-        badge.textContent = "ready";
+        // Two different situations wear this state, and only one of them is
+        // "nothing exists yet". `cloudRowState` checks entitlement FIRST, so a
+        // machine that was provisioned while the plan was active and has since
+        // lapsed is also `upgrade` — and calling that one "ready" says it can
+        // be opened when it cannot (review, 2026-08-31). The deviceId is what
+        // separates them: a synthetic row has none.
+        badge.textContent = d.deviceId ? "locked" : "ready";
       } else if (cloudState === "not-provisioned") {
         // Deliberately NOT "not created" or "inactive". Nothing has happened
         // yet and nothing needs to: opening it is the whole setup.
@@ -1943,7 +1946,7 @@
       '<div class="usage-head">' +
         '<span class="usage-label">This week · <b>' + used + " / " + total + "</b> remote messages</span>" +
         resetNote;
-    if (pct >= 80 && !isAfkApp()) html += '<a class="usage-upgrade" href="#billing">Upgrade for unlimited →</a>';
+    if (pct >= 80 && !isAfkApp()) html += '<a class="usage-upgrade" href="#billing">Upgrade to lift the weekly cap →</a>';
     html += "</div>";
     html += '<div class="usage-bar"><span class="usage-fill' + (pct >= 90 ? " is-high" : "") +
       '" style="width:' + pct + '%"></span></div>';

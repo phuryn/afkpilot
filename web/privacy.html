@@ -64,6 +64,7 @@
 
       <h2>Transport and encryption</h2>
       <p>All traffic runs over TLS. AFK Pilot does not use end-to-end encryption: the relay is a trusted component that reads message envelopes to route them, so a message is briefly in plaintext in the relay's memory as it passes through. We state this plainly rather than imply a guarantee we do not provide. The relay is deliberately policy-free — it cannot drive host-local actions in your editor; capability gating stays on your machine.</p>
+      <p>A <strong>cloud machine</strong> is the exception, and it belongs here as much as in the FAQ: there the host runs on hardware we operate, so that separation is a policy we keep rather than a boundary you own.</p>
 
       <h2>Subprocessors</h2>
       <p>We rely on a small set of providers to operate the service:</p>

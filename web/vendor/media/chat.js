@@ -8658,6 +8658,7 @@
   function closeConnectWizard() {
     if (!connectWizard) return;
     document.removeEventListener("keydown", connectWizard.onKey, true);
+    delete document.body.dataset.modalAbove;
     connectWizard.overlay.remove();
     const opener = connectWizard.opener;
     connectWizard = null;
@@ -8676,6 +8677,9 @@
     overlay.className = "confirm-overlay connect-wizard-overlay";
     const panel = document.createElement("div");
     panel.className = "confirm-panel connect-wizard-panel";
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
+    panel.setAttribute("aria-label", `Connect ${provider}`);
     const body = document.createElement("div");
     body.className = "connect-wizard-body";
     panel.appendChild(body);
@@ -8695,6 +8699,9 @@
     overlay.onclick = (e) => { if (e.target === overlay) { e.stopPropagation(); closeConnectWizard(); } };
     const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); closeConnectWizard(); } };
     document.addEventListener("keydown", onKey, true);
+    // Tells any page underneath (the settings overlay has its own Escape and
+    // Tab trap) that a modal owns the keyboard while this is up.
+    document.body.dataset.modalAbove = "connect-wizard";
     document.body.appendChild(overlay);
     connectWizard = { provider, overlay, panel, body, onKey, opener: opener || document.activeElement };
     renderConnectWizard();

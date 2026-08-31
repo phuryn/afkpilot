@@ -4448,6 +4448,11 @@ mjx-container[display="true"] {
    two links and a set of steps. At the confirm dialog's 340px that stack ran
    to 600px tall and the code wrapped awkwardly. Wider, and scrollable rather
    than clipped on a short phone screen. */
+/* Above the settings overlay (z-index 120), because Settings is one of the two
+   places this is opened FROM. At the confirm dialog's 100 it opened behind the
+   page that launched it — the very failure the wizard replaced. */
+.connect-wizard-overlay { z-index: 200; }
+
 .confirm-panel.connect-wizard-panel {
   width: min(460px, 100%);
   max-height: min(88vh, 760px);
