@@ -312,6 +312,7 @@
      every harness, nothing to install. Reuses .feature cards so the rhythm
      matches the grid below it. */
   .features-head { margin-bottom: clamp(1.5rem, 4vw, 2.5rem); }
+  .features-head p:not(.eyebrow) { color: var(--muted); margin: 0.75rem 0 0; max-width: 62ch; }
   .features-head h2 { font-size: var(--step-3); letter-spacing: -0.015em; margin: 0.7rem 0 0; max-width: 30ch; }
 
   /* Grayed provider marks — the same Lobe Icons (MIT) paths the extension's
@@ -1051,6 +1052,7 @@
           <div class="features-head">
             <p class="eyebrow">Remote control</p>
             <h2>Bring your own machine, and your own subscriptions.</h2>
+            <p>The agents are the originals — the <b>Grok Build</b>, <b>Codex</b> and <b>Claude Code</b> command-line tools themselves, running on your machine under one interface. Nothing is re-implemented, and your usage counts against your own accounts.</p>
           </div>
           <div class="features-grid">
           <div class="feature">
@@ -1219,7 +1221,7 @@
               <details class="faq-item" name="faq">
                 <summary>What exactly is a Cloud machine?</summary>
                 <div class="faq-body">
-                  <p>A dedicated Linux dev machine we run for you — <b>8 CPU cores, 8 GB RAM and roughly 100 GB of storage</b> — with Grok Build and the agents preinstalled. It sits at the top of your device list; opening it the first time is what creates it and links it to your account. Usually that takes seconds, because machines are kept ready; when one has to be built from scratch it can take up to 25 minutes, and the page says so while it works.</p>
+                  <p>A dedicated Linux dev machine we run for you — <b>8 CPU cores, 8 GB RAM and roughly 100 GB of storage</b> — with the agents preinstalled. It sits at the top of your device list; opening it the first time is what creates it and links it to your account. Usually that takes seconds, because machines are kept ready; when one has to be built from scratch it can take up to 25 minutes, and the page says so while it works.</p>
                   <p>It is in <b>preview</b>: included with Remote Max while we learn how people use it. Later it graduates to a plan of its own, from $5/mo.</p>
                 </div>
               </details>
@@ -1283,6 +1285,7 @@
                 <summary>Does it work with Codex and Claude Code?</summary>
                 <div class="faq-body">
                   <p>Yes — both, alongside Grok. Models from every connected agent appear in one picker, and each conversation keeps the agent it started with, so you can run all three side by side.</p>
+                  <p><b>These are the original harnesses, not a re-implementation.</b> We run the vendors' own command-line agents — the <b>Grok Build CLI</b>, <b>OpenAI's Codex CLI</b> and <b>Anthropic's Claude Code CLI</b> — on your machine, and speak to them over the open <a href="https://agentclientprotocol.com" target="_blank" rel="noopener">Agent Client Protocol</a>. Each agent behaves exactly as it does in its own terminal, including its models, its tools and its updates; what this app adds is one interface over all three, and a browser you can reach it from. You sign in with your own accounts and your usage counts against your own subscriptions.</p>
                   <p><b>On a Cloud machine:</b> Grok and Codex connect right from the browser; Claude Code can't be connected there yet.</p>
                   <p><b>On your own machine:</b> all three connect in Settings → Providers (if the Codex CLI isn't installed, the app offers to install it) — and once connected, the browser drives any of them.</p>
                 </div>
