@@ -271,6 +271,35 @@ async function handle(sprite) {
     // returns early without the claim file. It picks the new build up on the
     // claim, which restarts the service — and its stamp is already cleared.
     if (!claimed || kind !== "appimage") {
+      // An unclaimed machine cannot refresh its HOST — but it is still holding a
+      // boot script from the day it was provisioned, and the claim restarts the
+      // service running THAT copy. So pool stock would be handed to the next
+      // customer with an old launch path in it; for the capability fix, that
+      // means handing over a machine that still dies on a missing icon.
+      //
+      // Replacing the file is enough and is the safe half: no restart, so the
+      // readiness report is not re-sent and nothing racing the claim is
+      // disturbed. The claim's own restart picks the new script up.
+      if (bootStale && APPLY && claimed === false) {
+        const r = (await sh(
+          sprite.name,
+          `curl -fsSL --max-time 60 ${RELAY_HTTP}/api/environment/pool-bootstrap.sh ` +
+          "-o \"$HOME/afkpilot-boot.next\" " +
+          "&& chmod +x \"$HOME/afkpilot-boot.next\" " +
+          "&& mv \"$HOME/afkpilot-boot.next\" \"$HOME/afkpilot-boot.sh\"; " +
+          "rm -f \"$HOME/afkpilot-boot.next\"; " +
+          "echo NEW=$(sha256sum \"$HOME/afkpilot-boot.sh\" 2>/dev/null | cut -d' ' -f1)",
+        )).output || "";
+        const ok = (r.match(/NEW=(\S+)/)?.[1] ?? "") === bootHash;
+        if (!ok) failed++;
+        return `  ${sprite.name}  [${sprite.state}]  ` +
+          (ok ? "unclaimed — boot script replaced, ready for its claim"
+              : "unclaimed — COULD NOT REPLACE boot script");
+      }
+      if (bootStale && !APPLY && !claimed) {
+        skipped++;
+        return `  ${sprite.name}  [${sprite.state}]  unclaimed — would replace its stale boot script`;
+      }
       skipped++;
       return `  ${sprite.name}  [${sprite.state}]  ${!claimed ? "unclaimed — updates when claimed" : "not an AppImage install"}`;
     }
