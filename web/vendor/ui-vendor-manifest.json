@@ -2,7 +2,7 @@
   "version": 1,
   "source": {
     "repository": "grok-build-vscode",
-    "revision": "f6efd64bc084d2da63ce10d7053c19b3009fbdff",
+    "revision": "35942bc1bb593997f26616e3458f51b5cbf692ad",
     "appVersion": "4.0.0",
     "filesMatchRevision": true
   },
@@ -10,12 +10,12 @@
     {
       "source": "media/chat.css",
       "destination": "media/chat.css",
-      "sha256": "422ea4d8121511a3f3868903036984aa00ce0e42f919d732fc2f8398972e4cc2"
+      "sha256": "4b361e5ae0b445928497408924cc52dca3684a064f79f1d69161fb335cd98165"
     },
     {
       "source": "media/chat.js",
       "destination": "media/chat.js",
-      "sha256": "493fba4cb2b0e1bb162e50665d0ee284e53f55e8132acee9a50292ab08f1e198"
+      "sha256": "5ce51f5124535f60f048ae4efe672ff68ad86408ca01f7688c5cf35688758351"
     },
     {
       "source": "media/file-panel.css",
@@ -60,7 +60,7 @@
     {
       "source": "media/webview-helpers.js",
       "destination": "media/webview-helpers.js",
-      "sha256": "ecb8588b9b0729f68d20958da582c64d37d89d5f495a64a332319be79ed1fb44"
+      "sha256": "e255ec1a828f28d57d5aac496e8aa9b31145d578b44a50a194ce0e373ee2ffbd"
     },
     {
       "source": "media/mathjax/tex-svg-full.js",

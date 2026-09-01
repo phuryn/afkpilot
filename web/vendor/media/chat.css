@@ -5131,6 +5131,74 @@ body.vscode-light .preview-overlay {
 }
 .add-project-fix:hover { filter: brightness(1.15); }
 .add-project-fix[hidden] { display: none; }
+.add-project-github {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.add-project-github[hidden],
+.add-project-github-cmd[hidden],
+.add-project-github-open[hidden],
+.add-project-github-desc[hidden],
+.add-project-github-note[hidden] { display: none; }
+.add-project-github-heading { font-size: 13px; font-weight: 600; line-height: 1.3; }
+.add-project-github-desc,
+.add-project-github-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--vscode-descriptionForeground, currentColor);
+}
+.add-project-github-cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--vscode-textCodeBlock-background);
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, currentColor));
+  border-radius: 4px;
+  padding: 6px 6px 6px 10px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+}
+.add-project-github-cmd code {
+  background: none;
+  padding: 0;
+  color: var(--vscode-foreground, CanvasText);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+.add-project-github-copy {
+  margin-left: auto;
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--vscode-descriptionForeground, currentColor);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 3px;
+  font: inherit;
+  font-size: 12px;
+}
+.add-project-github-copy:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+  color: var(--vscode-foreground, CanvasText);
+}
+.add-project-github-copy.copied { color: var(--vscode-charts-green); }
+.add-project-github-open {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 7px 10px;
+  border-radius: 4px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  text-decoration: none;
+  font-size: 12px;
+  box-sizing: border-box;
+}
+.add-project-github-open:hover { background: var(--vscode-button-hoverBackground, var(--vscode-button-background)); }
 .add-project-actions {
   display: flex;
   justify-content: flex-end;
@@ -5158,7 +5226,8 @@ body.vscode-light .preview-overlay {
 
 /* Touch: the universal 36px floor, same as every other control. */
 @media (hover: none), (pointer: coarse) {
-  .add-project-btn, .add-project-fix, .add-project-input { min-height: 36px; }
+  .add-project-btn, .add-project-fix, .add-project-input,
+  .add-project-github-copy, .add-project-github-open { min-height: 36px; }
 }
 /* The pre-flight step list. Numbered because these are steps in an order, and
    the reader is following them in another window. */

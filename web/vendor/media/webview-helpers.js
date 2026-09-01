@@ -2230,6 +2230,53 @@
     fixBtn.hidden = true;
     el.appendChild(fixBtn);
 
+    // Headless GitHub sign-in. Same wording as the agent connect card: a
+    // code, a copy button, a link that opens the vendor page in a new tab.
+    // Only the clone form ever receives `projectSetup.github`.
+    const githubBox = doc.createElement("div");
+    githubBox.className = "add-project-github";
+    githubBox.hidden = true;
+    const githubHeading = doc.createElement("div");
+    githubHeading.className = "add-project-github-heading";
+    const githubDesc = doc.createElement("p");
+    githubDesc.className = "add-project-github-desc";
+    const githubCmd = doc.createElement("div");
+    githubCmd.className = "add-project-github-cmd";
+    const githubCode = doc.createElement("code");
+    const githubCopy = doc.createElement("button");
+    githubCopy.type = "button";
+    githubCopy.className = "add-project-github-copy";
+    githubCopy.title = "Copy";
+    githubCopy.textContent = "Copy";
+    githubCmd.appendChild(githubCode);
+    githubCmd.appendChild(githubCopy);
+    const githubOpen = doc.createElement("a");
+    githubOpen.className = "add-project-github-open";
+    githubOpen.target = "_blank";
+    githubOpen.rel = "noopener noreferrer";
+    githubOpen.textContent = "Open the sign-in page";
+    const githubNote = doc.createElement("p");
+    githubNote.className = "add-project-github-note";
+    githubBox.appendChild(githubHeading);
+    githubBox.appendChild(githubDesc);
+    githubBox.appendChild(githubCmd);
+    githubBox.appendChild(githubOpen);
+    githubBox.appendChild(githubNote);
+    el.appendChild(githubBox);
+
+    githubCopy.addEventListener("click", function () {
+      const code = githubCopy.dataset.cmd || "";
+      if (!code || !navigator.clipboard || typeof navigator.clipboard.writeText !== "function") return;
+      navigator.clipboard.writeText(code).then(function () {
+        githubCopy.textContent = "Copied";
+        githubCopy.classList.add("copied");
+        setTimeout(function () {
+          githubCopy.textContent = "Copy";
+          githubCopy.classList.remove("copied");
+        }, 1500);
+      }).catch(function () { /* clipboard blocked */ });
+    });
+
     const actions = doc.createElement("div");
     actions.className = "add-project-actions";
     const cancel = doc.createElement("button");
@@ -2270,6 +2317,62 @@
       if (typeof o.onFix === "function") o.onFix(fixBtn.dataset.fix);
     });
 
+    function paintGithub(s) {
+      const g = (kind === "clone" && s.github && typeof s.github === "object") ? s.github : null;
+      const status = g && typeof g.status === "string" ? g.status : "";
+      if (!status) {
+        githubBox.hidden = true;
+        return false;
+      }
+      githubBox.hidden = false;
+      githubBox.dataset.status = status;
+      const url = typeof g.url === "string" && /^https?:\/\//i.test(g.url) ? g.url : "";
+      const code = typeof g.code === "string" ? g.code : "";
+      if (status === "starting") {
+        githubHeading.textContent = "Connecting GitHub";
+        githubDesc.textContent = "Asking the GitHub CLI for a sign-in code…";
+        githubDesc.hidden = false;
+        githubCmd.hidden = true;
+        githubOpen.hidden = true;
+        githubNote.hidden = true;
+      } else if (status === "waiting" && url) {
+        githubHeading.textContent = "Finish signing in to GitHub";
+        githubDesc.textContent = code
+          ? "Open the link, then confirm this code:"
+          : "Open the link to finish signing in.";
+        githubDesc.hidden = false;
+        githubCmd.hidden = !code;
+        githubCode.textContent = code;
+        githubCopy.dataset.cmd = code;
+        githubCopy.textContent = "Copy";
+        githubCopy.classList.remove("copied");
+        githubOpen.hidden = false;
+        githubOpen.href = url;
+        githubNote.hidden = false;
+        githubNote.textContent = "Keep this page open — it finishes on its own.";
+      } else if (status === "done") {
+        githubHeading.textContent = "GitHub connected";
+        githubDesc.textContent = typeof g.message === "string" && g.message
+          ? g.message
+          : "Signed in to GitHub. Clone again.";
+        githubDesc.hidden = false;
+        githubCmd.hidden = true;
+        githubOpen.hidden = true;
+        githubNote.hidden = true;
+      } else if (status === "failed") {
+        githubHeading.textContent = "Could not connect GitHub";
+        githubDesc.textContent = typeof g.message === "string" ? g.message : "";
+        githubDesc.hidden = !githubDesc.textContent;
+        githubCmd.hidden = true;
+        githubOpen.hidden = true;
+        githubNote.hidden = true;
+      } else {
+        githubBox.hidden = true;
+        return false;
+      }
+      return status === "starting" || status === "waiting";
+    }
+
     /** Apply a `projectSetup` frame. Everything the host says, in one place. */
     function update(state) {
       const s = state || {};
@@ -2278,12 +2381,13 @@
       input.disabled = busy;
       submit.textContent = busy ? copy.busy : copy.confirm;
       el.classList.toggle("is-busy", busy);
-      const message = busy ? "" : (typeof s.error === "string" ? s.error : "");
+      const githubLive = paintGithub(s);
+      const message = busy || githubLive ? "" : (typeof s.error === "string" ? s.error : "");
       problem.textContent = message;
       problem.hidden = !message;
       // The fix button only ever appears with the failure that earned it, so a
       // stale "Sign in to GitHub" cannot outlive the error it belonged to.
-      const fix = busy || !message ? "" : (s.fix || "");
+      const fix = busy || githubLive || !message ? "" : (s.fix || "");
       fixBtn.hidden = !fix;
       fixBtn.dataset.fix = fix || "";
       if (fix === "auth-gh") fixBtn.textContent = "Sign in to GitHub";

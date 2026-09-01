@@ -744,6 +744,9 @@
     // the Add project form shows the destination as you type, so it needs this
     // before anyone has typed anything.
     projectRoot: "",
+    // Last `projectSetup.github` from the host, so a reconnect can reopen the
+    // clone form onto the code the CLI is still polling.
+    projectGithub: null,
     // Empty-state tip facts from the host (`welcomeTips`): the two counts the
     // chat client never receives on its own plus the retired ids. null until
     // the frame lands, which suppresses the count-dependent tips rather than
@@ -6097,12 +6100,31 @@
         );
       },
       onCancel: closeAddProjectForm,
-      // Host-local, and the form stays open behind it: signing in happens in a
-      // terminal on the desk, and the user comes back here to try again.
-      onFix: (fix) => vscode.postMessage({
-        type: "setupGithubCli",
-        action: fix === "install-gh" ? "install" : "auth",
-      }),
+      // Local: signing in happens in a terminal, and the form stays open so
+      // they can clone again afterwards.
+      //
+      // Remote: older hosts classify `setupGithubCli` as host-local and DROP
+      // it silently. A new host advertises `remoteGithubSignIn` and runs the
+      // headless device-code flow into this form. Capability, never a version
+      // check — the same reason Connect is gated on `remoteAgentSignIn`.
+      onFix: (fix) => {
+        if (IS_REMOTE && !(state.hostCaps && state.hostCaps.remoteGithubSignIn)) {
+          const cloud = IS_CLOUD_HOST;
+          if (addProjectFormApi) {
+            addProjectFormApi.update({
+              error: cloud
+                ? "Signing in to GitHub needs a terminal, and a cloud machine has none. "
+                  + "Public repositories clone as they are; private ones need this, and it is coming."
+                : "Sign in to GitHub on the computer running this workspace — a terminal opens there — then try again here.",
+            });
+          }
+          return;
+        }
+        vscode.postMessage({
+          type: "setupGithubCli",
+          action: fix === "install-gh" ? "install" : "auth",
+        });
+      },
     });
     if (!api) return;
     const scrim = document.createElement("div");
@@ -6119,7 +6141,7 @@
       closeAddProjectForm();
     };
     document.addEventListener("keydown", addProjectFormKeydown, true);
-    api.update({ root: state.projectRoot });
+    api.update({ root: state.projectRoot, github: state.projectGithub || undefined });
     api.focus();
   }
 
@@ -8588,9 +8610,16 @@
             `<button class="onb-copy" type="button" title="Copy" data-cmd="${escapeHtml(device.code)}">${ICON.copy}</button>` +
           `</div>`
         : (!paste ? `<p class="onb-desc">Open the link to finish signing in.</p>` : "");
+      // Paste-code is a SEQUENCE, and the card now reads in that order: what
+      // you are about to do, the link that does it, then the field for what it
+      // gives you back. The field used to sit ABOVE the link, so the first
+      // thing on screen was somewhere to paste a code you had no way to have
+      // yet (owner, 2026-09-01).
+      const pasteIntro = paste && !device.submitted
+        ? `<p class="onb-desc">Open the sign-in page, sign in, then paste the code it shows you:</p>`
+        : "";
       const pasteEntry = paste && !device.submitted
-        ? `<p class="onb-desc">Open the link, sign in, then paste the code the page shows you:</p>` +
-          `<div class="onb-cmd onb-code-entry">` +
+        ? `<div class="onb-cmd onb-code-entry">` +
             `<input class="onb-code-input" type="text" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste code" aria-label="Paste sign-in code">` +
             `<button class="onb-action" type="button" data-act="submitDeviceLoginCode" data-provider="${escapeHtml(provider)}">Submit</button>` +
           `</div>`
@@ -8603,8 +8632,10 @@
         // (owner, with the screenshot, 2026-08-31).
         (device.note ? `<p class="onb-desc onb-note">${onbRich(device.note)}</p>` : "") +
         codeChip +
-        pasteEntry +
+        pasteIntro +
         `<a class="onb-action" href="${escapeHtml(device.url)}" target="_blank" rel="noopener noreferrer">Open the sign-in page</a>` +
+        // AFTER the link: you cannot have a code until you have been there.
+        pasteEntry +
         // The setting to check, beside the code it gates — not on a screen
         // before it that cost an extra click to get past.
         (device.preflight && Array.isArray(device.preflight.steps) && device.preflight.steps.length
@@ -11027,6 +11058,26 @@
   function enterSessionSuperseded(id, cwd) {
     if (!id) return;
     state.sessionSuperseded = { id, cwd: cwd || sessionSupersededCwd(id) };
+    // STOP THE MICROPHONE FIRST, and treat a takeover as a cancel.
+    //
+    // The frozen card hides the composer, and the mic button lives in it — so
+    // the only in-page way to stop a capture goes away with it. A start already
+    // waiting on the browser's permission prompt is worse: it resumes after the
+    // takeover, checks only its own `cancelled` flag, installs the capture and
+    // starts streaming. The tab would then be recording with no visible control
+    // and nothing but the 120-second timer to end it.
+    //
+    // Both halves of that were introduced here — admitting voice without a
+    // bound session, and hiding the composer — so both are closed here.
+    if (IS_REMOTE) {
+      if (remoteMicStart) remoteMicStart.cancelled = true;
+      if (remoteMic) stopBrowserMic(true);
+      else if (remoteMicStart) remoteMicStart = null;
+      state.mic = "idle";
+      clearVoiceInsertion();
+      state.voiceLive = false;
+      renderMic();
+    }
     renderSessionSupersededBanner();
   }
 
@@ -15467,8 +15518,20 @@
         // `done` is the only close signal. Silence is not one: a failed attempt
         // also stops being busy, and closing on that would throw away the error
         // the user needs to read.
-        if (msg.done) { closeAddProjectForm(); break; }
-        if (addProjectFormApi) addProjectFormApi.update(msg);
+        if (msg.done) {
+          state.projectGithub = null;
+          closeAddProjectForm();
+          break;
+        }
+        if (msg.busy) state.projectGithub = null;
+        else if (msg.github && typeof msg.github === "object") state.projectGithub = msg.github;
+        else if (msg.error) state.projectGithub = null;
+        // Reconnect: the form is gone, the CLI is still polling, and the
+        // snapshot carried the code. Reopen the clone form so they can finish.
+        if (!addProjectFormApi && msg.github && (msg.github.status === "starting" || msg.github.status === "waiting")) {
+          openAddProjectForm("clone");
+        }
+        if (addProjectFormApi) addProjectFormApi.update({ ...msg, github: state.projectGithub || msg.github });
         break;
       case "welcomeTips":
         // Deliberately NOT an advance: this frame arrives on startup and after
