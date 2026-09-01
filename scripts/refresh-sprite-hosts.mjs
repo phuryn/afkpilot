@@ -152,8 +152,25 @@ console.log(APPLY ? "mode: APPLY\n" : "mode: report only (pass --apply to act)\n
 let current = 0;
 let behind = 0;
 let failed = 0;
+let skipped = 0;
 
-for (const sprite of sprites) {
+/**
+ * How many machines to work on at once.
+ *
+ * The wake dominates everything else here — a cold machine takes 20-40s to come
+ * up and then ~2s to answer — and the machines are independent: no shared
+ * state, no ordering, one exec each. Sequentially that made a 31-machine
+ * production sweep ~15 minutes of mostly waiting.
+ *
+ * Bounded rather than unbounded because this wakes real VMs and talks to one
+ * API; 8 is enough to make the wall-clock the slowest machine rather than the
+ * sum, without opening 31 WebSockets at once.
+ */
+const CONCURRENCY = 8;
+
+/** Run one machine. Returns its report line; never throws, so one dead machine
+ * cannot abandon the other thirty. */
+async function handle(sprite) {
   // `.afkpilot-asset` is the URL the machine last installed, written by the
   // bootstrap. Comparing URLs is how the bootstrap itself decides, so this
   // reports exactly what it would do.
@@ -166,18 +183,27 @@ for (const sprite of sprites) {
     // Report what is missing first, so a dry run says something useful.
     const probe = await sh(
       sprite.name,
+      "echo GTKSTACK=$(ls -d /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0 >/dev/null 2>&1 && echo yes || echo no); " +
       "echo SVG=$(ls /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/*/loaders/ 2>/dev/null | grep -c svg)",
     );
-    const hasSvg = ((probe.output || "").match(/SVG=(\d+)/)?.[1] ?? "0") !== "0";
+    const out = probe.output || "";
+    // A machine with no gdk-pixbuf loader DIRECTORY does not have the GTK stack
+    // at all, which means it is not running the desktop host — production
+    // carries one such machine (`web-terminal`). It cannot hit the icon crash
+    // and cannot be given a loader, so calling it "STILL MISSING" reported a
+    // failed production change that had not happened. Not in scope, and said so.
+    if (!/GTKSTACK=yes/.test(out)) {
+      skipped++;
+      return `  ${sprite.name}  [${sprite.state}]  no desktop host here — not in scope`;
+    }
+    const hasSvg = (out.match(/SVG=(\d+)/)?.[1] ?? "0") !== "0";
     if (hasSvg) {
-      console.log(`  ${sprite.name}  [${sprite.state}]  image ok`);
       current++;
-      continue;
+      return `  ${sprite.name}  [${sprite.state}]  image ok`;
     }
     behind++;
     if (!APPLY) {
-      console.log(`  ${sprite.name}  [${sprite.state}]  NEEDS ${IMAGE_FIX_PACKAGES.join(" ")}`);
-      continue;
+      return `  ${sprite.name}  [${sprite.state}]  NEEDS ${IMAGE_FIX_PACKAGES.join(" ")}`;
     }
     const fix = await sh(
       sprite.name,
@@ -187,8 +213,7 @@ for (const sprite of sprites) {
     );
     const ok = ((fix.output || "").match(/SVG=(\d+)/)?.[1] ?? "0") !== "0";
     if (!ok) failed++;
-    console.log(`  ${sprite.name}  [${sprite.state}]  ${ok ? "IMAGE FIXED" : "STILL MISSING"}`);
-    continue;
+    return `  ${sprite.name}  [${sprite.state}]  ${ok ? "IMAGE FIXED" : "STILL MISSING"}`;
   }
 
   const read = await sh(
@@ -205,12 +230,10 @@ for (const sprite of sprites) {
 
   if (!APPLY) {
     const label = upToDate ? "current" : have === "NONE" ? "no record" : "behind";
-    console.log(`  ${sprite.name}  [${sprite.state}, ${who}]  ${label}`);
-    continue;
+    return `  ${sprite.name}  [${sprite.state}, ${who}]  ${label}`;
   }
   if (upToDate) {
-    console.log(`  ${sprite.name}  [${sprite.state}, ${who}]  current — nothing to do`);
-    continue;
+    return `  ${sprite.name}  [${sprite.state}, ${who}]  current — nothing to do`;
   }
   // Clear the weekly stamp and stop there. The bootstrap's own gate is the only
   // reason it would not refresh on the next boot, and its update path is
@@ -224,15 +247,37 @@ for (const sprite of sprites) {
   );
   const ok = (run.output || "").match(/STAMP=(\S+)/)?.[1] === "cleared";
   if (!ok) failed++;
-  console.log(
-    `  ${sprite.name}  [${sprite.state}, ${who}]  ` +
-    (ok ? "armed — refreshes on next boot" : "COULD NOT ARM"),
-  );
+  return `  ${sprite.name}  [${sprite.state}, ${who}]  ` +
+    (ok ? "armed — refreshes on next boot" : "COULD NOT ARM");
 }
+
+// Fixed pool of workers over a shared cursor: simpler than batching, and it
+// keeps every worker busy instead of waiting for the slowest machine in a batch.
+// Report lines are collected by index and printed in list order at the end, so
+// the output reads the same as it did when this was sequential.
+const lines = new Array(sprites.length);
+let cursor = 0;
+await Promise.all(
+  Array.from({ length: Math.min(CONCURRENCY, sprites.length) }, async () => {
+    for (;;) {
+      const i = cursor++;
+      if (i >= sprites.length) return;
+      try {
+        lines[i] = await handle(sprites[i]);
+      } catch (err) {
+        // One unreachable machine must not abandon the rest of the estate.
+        failed++;
+        lines[i] = `  ${sprites[i].name}  [${sprites[i].state}]  ERROR ${err?.message ?? err}`;
+      }
+    }
+  }),
+);
+for (const line of lines) console.log(line);
 
 console.log(
   `\n${APPLY ? "armed" : "surveyed"}: ${sprites.length} machines · ` +
   `${current} already current · ${behind} behind` +
+  (skipped ? ` · ${skipped} not in scope` : "") +
   (APPLY ? ` · ${failed} could not be armed` : ""),
 );
 if (APPLY && behind > 0) {
