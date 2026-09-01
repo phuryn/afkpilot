@@ -1915,9 +1915,12 @@
     // tool definitions cost, and "Context used 12,400 / 128,000 (10%)" plus a
     // way to compact is the whole of what the donut is being asked.
     //
-    // Deliberately an early return rather than a wrapper: the sections below
-    // are independent and a wrapper would have to be threaded through each.
-    if (!isCodingPurpose()) return;
+    // The two lines that make the popover VISIBLE are the last thing this
+    // function does, so returning early skipped them and the donut simply did
+    // nothing in the default mode. Found by review; my own test read
+    // textContent off the hidden element and passed, which is the same mistake
+    // as proving a package exists instead of proving the thing works.
+    if (!isCodingPurpose()) { showContextPopover(); return; }
 
     // Snapshot addends are internally consistent (overhead from snapshot.used).
     // Occupancy that has moved does not hide the group: an open popover
@@ -2021,6 +2024,12 @@
       : "Counted by the CLI at the end of each turn.";
     contextPopover.appendChild(fine);
 
+    showContextPopover();
+  }
+
+  /** Size it to its content, then reveal it. Both halves, always — see the
+   * knowledge-work return above for what happens when only some of it runs. */
+  function showContextPopover() {
     positionPopover(contextPopover, donutEl);
     contextPopover.hidden = false;
   }
