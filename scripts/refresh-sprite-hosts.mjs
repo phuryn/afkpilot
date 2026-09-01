@@ -77,6 +77,30 @@ const APPLY = process.argv.includes("--apply");
  */
 const IMAGE_FIX_PACKAGES = ["librsvg2-common"];
 const FIX_IMAGE = process.argv.includes("--fix-image");
+/**
+ * Install the new host NOW, instead of arming it and hoping for a boot.
+ *
+ * ARMING IS NOT ENOUGH, and believing it was cost a release. Clearing the
+ * weekly stamp only matters when the boot script re-runs, and two things stop
+ * that from happening on its own: a sleeping machine may resume rather than
+ * boot, and `refresh_host_if_stale` returns early on any machine that is not
+ * yet claimed. Measured 2026-09-01: a dev machine armed five hours earlier had
+ * been up for 2.9 of them with the stamp still cleared and the old build still
+ * installed.
+ *
+ * The host is registered as the sprite SERVICE `afkpilot`, and that service's
+ * command IS the boot script (see poolBuildCommand). So restarting the service
+ * re-runs `refresh_host_if_stale` and then execs the new build — no machine
+ * reboot, and no second host beside the live one, which is the thing that makes
+ * running the boot script by hand a bad idea.
+ *
+ * Still non-destructive: the bootstrap unpacks the new build BESIDE the running
+ * one and swaps only once its AppRun exists, so a failed download leaves the
+ * machine exactly as it was. What it does cost is the live session on that
+ * machine — restarting a host disconnects whoever is driving it. That is
+ * inherent, not a bug, and it is why this reports activity before acting.
+ */
+const FORCE_HOST = process.argv.includes("--force-host");
 /** Opt in to the REAL estate, by name. See spritesToken. */
 const PRODUCTION = process.argv.includes("--production");
 const ONLY = (() => {
@@ -179,6 +203,66 @@ async function handle(sprite) {
   // framed, so the last token is a control byte rather than the value.
   // reported all fifteen dev machines as behind when every one was current,
   // which in production is fifteen needless 110 MB downloads.
+  if (FORCE_HOST) {
+    const before = (await sh(
+      sprite.name,
+      "echo ASSET=$(sed 's|.*/||' \"$HOME/afkpilot/.afkpilot-asset\" 2>/dev/null || echo NONE); " +
+      "echo CLAIMED=$([ -f \"$HOME/.afkpilot.env\" ] && echo yes || echo no); " +
+      "echo KIND=$(cat \"$HOME/afkpilot/.afkpilot-kind\" 2>/dev/null || echo none); " +
+      // How recently anything was written to this machine's conversations. The
+      // owner asked to see that nobody is mid-session before restarting hosts,
+      // and the sessions directory is the honest signal: a driven machine
+      // writes to it continuously.
+      //
+      // ONLY MEANINGFUL BEFORE ACTING. A restarted host writes to this
+      // directory itself, so a verification pass run straight after a force
+      // reports every machine it just touched as in use. Read the flag on the
+      // dry run, not on the pass that confirms the result.
+      "echo IDLE=$(find \"$HOME/.grok/sessions\" -type f -newermt '-10 minutes' 2>/dev/null | head -1 | wc -l)",
+    )).output || "";
+    const asset = before.match(/ASSET=(\S+)/)?.[1] ?? "NONE";
+    const claimed = before.match(/CLAIMED=(\S+)/)?.[1] === "yes";
+    const kind = before.match(/KIND=(\S+)/)?.[1] ?? "none";
+    const busy = (before.match(/IDLE=(\d+)/)?.[1] ?? "0") !== "0";
+    const currentAlready = tag && asset.includes(tag.replace(/^v/, ""));
+    const use = busy ? ", IN USE (last 10 min)" : "";
+
+    if (currentAlready) { current++; return `  ${sprite.name}  [${sprite.state}${use}]  already ${tag}`; }
+    // An unclaimed machine cannot refresh its host: refresh_host_if_stale
+    // returns early without the claim file. It picks the new build up on the
+    // claim, which restarts the service — and its stamp is already cleared.
+    if (!claimed || kind !== "appimage") {
+      skipped++;
+      return `  ${sprite.name}  [${sprite.state}]  ${!claimed ? "unclaimed — updates when claimed" : "not an AppImage install"}`;
+    }
+    behind++;
+    if (!APPLY) return `  ${sprite.name}  [${sprite.state}${use}]  would force ${asset} -> ${tag}`;
+
+    await sh(
+      sprite.name,
+      "rm -f \"$HOME/afkpilot/.afkpilot-host-checked\"; " +
+      "/.sprite/bin/sprite-env services restart afkpilot >/dev/null 2>&1; echo GO",
+    );
+    // Poll the asset record rather than guessing a delay: the download is
+    // ~110 MB and a cold machine is slower than a warm one.
+    const deadline = Date.now() + 12 * 60_000;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 15_000));
+      const now = (await sh(
+        sprite.name,
+        "echo ASSET=$(sed 's|.*/||' \"$HOME/afkpilot/.afkpilot-asset\" 2>/dev/null || echo NONE)",
+      )).output || "";
+      const got = now.match(/ASSET=(\S+)/)?.[1] ?? "NONE";
+      if (tag && got.includes(tag.replace(/^v/, ""))) {
+        return `  ${sprite.name}  [${sprite.state}${use}]  FORCED -> ${tag}`;
+      }
+      if (Date.now() > deadline) {
+        failed++;
+        return `  ${sprite.name}  [${sprite.state}${use}]  TIMED OUT — still ${got} (machine unchanged)`;
+      }
+    }
+  }
+
   if (FIX_IMAGE) {
     // Report what is missing first, so a dry run says something useful.
     const probe = await sh(
@@ -275,14 +359,17 @@ await Promise.all(
 for (const line of lines) console.log(line);
 
 console.log(
-  `\n${APPLY ? "armed" : "surveyed"}: ${sprites.length} machines · ` +
+  `\n${APPLY ? (FORCE_HOST ? "forced" : "armed") : "surveyed"}: ${sprites.length} machines · ` +
   `${current} already current · ${behind} behind` +
   (skipped ? ` · ${skipped} not in scope` : "") +
-  (APPLY ? ` · ${failed} could not be armed` : ""),
+  (APPLY ? ` · ${failed} ${FORCE_HOST ? "failed" : "could not be armed"}` : ""),
 );
 if (APPLY && behind > 0) {
   console.log(
-    "Each armed machine installs the new host on its next boot — for a sleeping\n" +
+    FORCE_HOST
+      ? "Every machine above is running the new host NOW — it was installed and the\n" +
+        "service restarted, not left for a boot that might not come.\n"
+      : "Each armed machine installs the new host on its next boot — for a sleeping\n" +
     "machine, the next time its owner opens it. Re-run without --apply later to\n" +
     "confirm they landed.",
   );
