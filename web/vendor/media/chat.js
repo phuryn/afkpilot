@@ -6043,7 +6043,10 @@
     }
     const spec = helpers.addProjectMenuItems(addProjectCaps());
     const run = (id) => {
-      if (id === "import") vscode.postMessage({ type: "addProjectFolder" });
+      // The knowledge-work hint acts instead of instructing: it opens the
+      // setting that would put Clone in this menu.
+      if (id === "clone-needs-coding") openSettingsCategory("general");
+      else if (id === "import") vscode.postMessage({ type: "addProjectFolder" });
       else openAddProjectForm(id);
     };
     // One way in is a click, not a menu that asks permission to be a click.
@@ -6108,6 +6111,30 @@
       // headless device-code flow into this form. Capability, never a version
       // check — the same reason Connect is gated on `remoteAgentSignIn`.
       onFix: (fix) => {
+        const install = fix === "install-gh";
+        // INSTALL has no headless path and is not getting one: a package
+        // manager asks for elevation, so the host opens a terminal for it. On a
+        // cloud machine that terminal is an Xvfb screen nobody is at, and
+        // pressing the button again just opens another one — the very dead end
+        // the sign-in flow exists to remove, reintroduced on the other branch.
+        // Caught by review before release. The capability says the host can
+        // sign in headlessly; it says nothing about installing.
+        if (IS_REMOTE && install) {
+          if (addProjectFormApi) {
+            addProjectFormApi.update({
+              error: IS_CLOUD_HOST
+                // A cloud machine ships gh, so this is a broken machine rather
+                // than a missing step, and there is no computer to walk to.
+                ? "The GitHub CLI is missing on this cloud machine, which should not happen. "
+                  + "Reset the machine from Settings, or tell us and we will look."
+                // Literal, not the host's GITHUB_CLI_DOWNLOAD: that constant
+                // lives in project-create.ts and is not in scope here, so
+                // referencing it would throw at the moment of the click.
+                : "Install the GitHub CLI on the computer running this workspace — cli.github.com — then try again here.",
+            });
+          }
+          return;
+        }
         if (IS_REMOTE && !(state.hostCaps && state.hostCaps.remoteGithubSignIn)) {
           const cloud = IS_CLOUD_HOST;
           if (addProjectFormApi) {
@@ -6120,10 +6147,8 @@
           }
           return;
         }
-        vscode.postMessage({
-          type: "setupGithubCli",
-          action: fix === "install-gh" ? "install" : "auth",
-        });
+        // Local keeps both actions: a terminal there is one the person can see.
+        vscode.postMessage({ type: "setupGithubCli", action: install ? "install" : "auth" });
       },
     });
     if (!api) return;

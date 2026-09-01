@@ -2121,6 +2121,22 @@
         description: "Choose one you already have.",
       });
     }
+    // Cloning is a CODING affordance, so in knowledge work it is simply absent
+    // — and an absent thing explains nothing. Someone who came here to clone a
+    // repository finds two options that are not it and no way to know that the
+    // third exists one setting away (owner, 2026-09-01).
+    //
+    // The hint goes HERE rather than under the project name, because this is
+    // where the person is standing when they want it, and a permanent line
+    // elsewhere would be noise for everyone who never does. It acts: selecting
+    // it opens the setting rather than describing where to find it.
+    if (o.canClone && o.appPurpose !== "coding") {
+      items.push({
+        id: "clone-needs-coding",
+        label: "Clone from GitHub?",
+        description: "Cloning comes with Coding mode. Open settings to switch.",
+      });
+    }
     return items;
   }
 
