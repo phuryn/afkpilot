@@ -3352,7 +3352,7 @@
           const id = btn.dataset.session;
           if (!id) return;
           if (onClose && !opts.standalone) onClose();
-          post({ type: "resumeSession", id, cwd: btn.dataset.cwd || undefined });
+          post({ type: "resumeSession", id, cwd: btn.dataset.cwd || undefined, claim: true });
         });
       });
       body.querySelectorAll(".settings-connector-readonly-input").forEach((box) => {

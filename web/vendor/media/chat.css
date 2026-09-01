@@ -4043,6 +4043,39 @@ body.dragging { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -
   opacity: 0.8;
 }
 
+.session-superseded-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+  text-align: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--vscode-editorWidget-border);
+  background: var(--vscode-textBlockQuote-background, rgba(86, 156, 214, 0.08));
+}
+.session-superseded-banner button {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--vscode-button-border, var(--vscode-editorWidget-border));
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  cursor: pointer;
+}
+body.session-superseded .card-actions,
+body.session-superseded .plan-tools,
+body.session-superseded .question-actions {
+  pointer-events: none;
+  opacity: 0.45;
+}
+body.session-superseded textarea#input {
+  opacity: 0.6;
+}
+
 .plan-notice {
   display: flex;
   align-items: center;

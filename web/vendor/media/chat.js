@@ -186,6 +186,15 @@
     resolveRemoteTabTokenReady = resolve;
   });
 
+  const SESSION_SUPERSEDED_CODE = "session-superseded";
+
+  /** Explicit user actions set `claim`. Reconnect restore MUST omit it. */
+  function postResumeSession(id, cwd, opts) {
+    const msg = { type: "resumeSession", id, cwd: cwd || undefined };
+    if (opts && opts.claim) msg.claim = true;
+    vscode.postMessage(msg);
+  }
+
   function restoreRememberedRemoteSession() {
     const saved = rememberedRemoteSession;
     if (!IS_REMOTE || !saved) return;
@@ -195,7 +204,9 @@
     // Startup restore has no display name in the remembered payload, and the
     // page is already on the welcome/"Starting" hold. Treating it like a
     // user click would invent a title we do not have.
-    vscode.postMessage({ type: "resumeSession", id: saved.id, cwd: saved.cwd || undefined });
+    // Deliberately NOT a claim: a thawing background tab must not steal the
+    // conversation back from the tab that asked for it.
+    postResumeSession(saved.id, saved.cwd || undefined);
   }
   const ttsAvailable = !!window.speechSynthesis && typeof window.SpeechSynthesisUtterance === "function";
 
@@ -484,6 +495,10 @@
     // that drops `toggleSessionPin`, which is a control that looks broken
     // rather than absent (the same trap the repo chip avoids).
     pinnedSessionsKnown: false,
+    // Remote tab lost this conversation to another tab's explicit claim.
+    // Transcript stays; composer and turn controls freeze until Continue here
+    // (a claim) or a different conversation is opened.
+    sessionSuperseded: null,
     /** Desktop update rail — `updateAvailable` (notice) or `updateReady` (restart). */
     appUpdate: null,
     repoPreviews: {},
@@ -4466,7 +4481,7 @@
         row.onclick = () => {
           if (active) { closePopovers(); return; }
           startRailResumeTransition(s.id, s.cwd, s.cwd, s.displayName);
-          vscode.postMessage({ type: "resumeSession", id: s.id, cwd: s.cwd });
+          postResumeSession(s.id, s.cwd, { claim: true });
           closePopovers();
         };
       }
@@ -5350,6 +5365,7 @@
    * model.
    */
   function startRailTransition(fields) {
+    if (state.sessionSuperseded) clearSessionSuperseded();
     clearRailTransitionTimer();
     const token = ++railTransitionSeq;
     state.railTransition = { token, ...fields };
@@ -7289,7 +7305,7 @@
       // the host resolves sessions by cwd, and omitting it would look the id up
       // under the repo we happen to be in.
       if (!sameCwd(repo.cwd, state.selectedRepoCwd)) saveRememberedRemoteSession(null);
-      vscode.postMessage({ type: "resumeSession", id: s.id, cwd: s.cwd || repo.cwd });
+      postResumeSession(s.id, s.cwd || repo.cwd, { claim: true });
     };
   }
 
@@ -8305,6 +8321,7 @@
   }
 
   function resetForNewSession() {
+    clearSessionSuperseded();
     stopProcessingCue();
     cancelPendingSpeech();
     // The transcript is about to be emptied wholesale; drop the reference so a
@@ -10934,6 +10951,62 @@
     scrollToBottom();
   }
 
+  function sessionSupersededCwd(id) {
+    const row = (state.sessions || []).find((s) => s && s.id === id)
+      || (state.pinnedSessions || []).find((s) => s && s.id === id)
+      || (state.railSelectedRows || []).find((s) => s && s.id === id);
+    return (row && row.cwd) || state.activeRepoCwd || state.selectedRepoCwd || state.cwd || "";
+  }
+
+  function renderSessionSupersededBanner() {
+    let el = document.getElementById("session-superseded-banner");
+    if (!state.sessionSuperseded) {
+      if (el) el.remove();
+      document.body.classList.remove("session-superseded");
+      if (input) input.disabled = false;
+      if (micBtn) micBtn.disabled = false;
+      updateSendButton();
+      return;
+    }
+    document.body.classList.add("session-superseded");
+    if (input) input.disabled = true;
+    if (micBtn) micBtn.disabled = true;
+    updateSendButton();
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "session-superseded-banner";
+      el.className = "session-superseded-banner";
+      const composer = document.querySelector(".composer");
+      if (composer) composer.insertBefore(el, composer.firstChild);
+      else return;
+    }
+    el.replaceChildren();
+    const text = document.createElement("span");
+    text.textContent = "This conversation is open in another tab.";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Continue here";
+    btn.onclick = () => {
+      const held = state.sessionSuperseded;
+      if (!held) return;
+      postResumeSession(held.id, held.cwd, { claim: true });
+    };
+    el.appendChild(text);
+    el.appendChild(btn);
+  }
+
+  function enterSessionSuperseded(id, cwd) {
+    if (!id) return;
+    state.sessionSuperseded = { id, cwd: cwd || sessionSupersededCwd(id) };
+    renderSessionSupersededBanner();
+  }
+
+  function clearSessionSuperseded() {
+    if (!state.sessionSuperseded) return;
+    state.sessionSuperseded = null;
+    renderSessionSupersededBanner();
+  }
+
   // Does this surface open files in a host editor tab? Opt-out polarity on
   // capabilities.openInEditor (absent/true = yes). Remote always answers no:
   // the caps a phone receives are the DESK machine's, and a tap must never
@@ -12504,6 +12577,7 @@
       // the card in one press instead of walking every option.
       btn.tabIndex = i === (defaultIndex >= 0 ? defaultIndex : 0) ? 0 : -1;
       btn.onclick = () => {
+        if (state.sessionSuperseded) return;
         vscode.postMessage({
           type: "permissionAnswer",
           requestId,
@@ -13622,7 +13696,15 @@
     modeBtn.disabled = state.busyLocked;
     modeBtn.classList.toggle("disabled", state.busyLocked);
     modeBtn.title = modeButtonTitle(state.currentModeId);
-    if (state.onboardingMode === "no-project") {
+    if (state.sessionSuperseded) {
+      sendBtn.innerHTML = ICON.arrowUp;
+      sendBtn.title = "This conversation is open in another tab";
+      sendBtn.disabled = true;
+      if (newBtn) {
+        newBtn.disabled = false;
+        newBtn.title = "New session";
+      }
+    } else if (state.onboardingMode === "no-project") {
       sendBtn.innerHTML = ICON.arrowUp;
       sendBtn.title = "Add a project folder first";
       sendBtn.disabled = true;
@@ -13660,6 +13742,7 @@
   // both Enter and the button click funnel through, so send-intent can never
   // turn into a cancel (#37). A composer holding only an attachment is send-intent.
   function queueFromComposer() {
+    if (state.sessionSuperseded) return true;
     if (state.pendingPaste > 0) return true;
     const t = input.value.trim();
     const chips = explicitVisibleChips(state.chips);
@@ -13734,6 +13817,7 @@
   }
 
   function sendOrStop() {
+    if (state.sessionSuperseded) return;
     if (state.onboardingMode === "no-project") return;
     if (state.busy) {
       // Typed text signals send-intent — queue it; text present never cancels.
@@ -13863,6 +13947,7 @@
   }
 
   function toggleMic() {
+    if (state.sessionSuperseded) return;
     if (IS_REMOTE) {
       toggleBrowserMic();
       return;
@@ -14259,6 +14344,7 @@
   // back to the queue, which is the safe home for the text either way.
   // Attachments ride `_x.ai/interject` `content` (same encoder as a send).
   function queueOutgoing(text, chips) {
+    if (state.sessionSuperseded) return;
     const attachments = Array.isArray(chips) ? chips : explicitVisibleChips(state.chips);
     if (
       state.steerByDefault && state.steerSupported && steerableProvider() && state.busy && !state.busyLocked
@@ -14390,6 +14476,7 @@
       steerBtn.onpointerdown = (e) => {
         e.preventDefault();
         e.stopPropagation();
+        if (state.sessionSuperseded) return;
         // steerSend first so the host can snapshot the queue before this
         // clear races (webview handlers are not serialized across awaits).
         const msg = { type: "steerSend", text, fromQueue: true };
@@ -16730,6 +16817,28 @@
           state.repoSwitchPending = false;
           setConversationLoading(false);
           renderRepoChip();
+        }
+        {
+          const supersededId = msg.code === SESSION_SUPERSEDED_CODE
+            && msg.resumeFailed && typeof msg.resumeFailed.id === "string"
+            ? msg.resumeFailed.id
+            : (msg.code === SESSION_SUPERSEDED_CODE ? (state.activeSessionId || "") : "");
+          // A takeover names the conversation it displaced. Abort only a rail
+          // transition TO that id — an unrelated newer click must not be
+          // cancelled by it, and must not freeze this view into the old one.
+          if (supersededId) {
+            const resumeToThis = state.railTransition
+              && state.railTransition.kind === "resume"
+              && state.railTransition.sessionId === supersededId;
+            const transitioningElsewhere = !!state.railTransition && !resumeToThis;
+            if (resumeToThis) abortRailTransition();
+            if (!transitioningElsewhere) {
+              const already = state.sessionSuperseded && state.sessionSuperseded.id === supersededId;
+              enterSessionSuperseded(supersededId, sessionSupersededCwd(supersededId));
+              if (!already) addError(errorTextForHostAge(msg.text), msg.code);
+            }
+            break;
+          }
         }
         // A generic error cannot be attributed to a specific rail transition
         // (the frame carries no request id). An error from a superseded resume
