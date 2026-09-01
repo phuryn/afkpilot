@@ -3994,7 +3994,13 @@
    * nobody is at the screen to read it. Same shape as steerableProvider().
    */
   function rewindCapableProvider() {
-    return state.activeProvider !== "claude" && state.activeProvider !== "codex";
+    if (state.activeProvider === "claude" || state.activeProvider === "codex") return false;
+    // A host older than 4.1.0 classifies rewindSession / editLastMessage as
+    // host-local and drops them without a reply, so the buttons would be dead
+    // for every remote user who has not updated — and the relay always ships
+    // first. Field presence, never a version check; the desk is never gated.
+    if (IS_REMOTE && !(state.hostCaps && state.hostCaps.remoteRewind)) return false;
+    return true;
   }
 
   function providerDisplayName(provider) {
