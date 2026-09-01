@@ -59,6 +59,20 @@ const APT_PACKAGES = [
   // FUSE, so an AppImage can mount itself. Without it the download is inert and
   // the fallback path is the only one that ever runs.
   "libfuse2t64",
+  // An SVG decoder for gdk-pixbuf, and it is not cosmetic: without it GTK hands
+  // every SVG icon to glycin, which runs its loader under bwrap — and bwrap
+  // does not work on this image ("Unexpected capabilities but not setuid",
+  // measured on two separate machines). GTK treats a failed icon load as FATAL,
+  // so the whole host died with
+  //
+  //   Gtk:ERROR ensure_surface_for_gicon: assertion failed ... Bail out!
+  //
+  // It was the FALLBACK icon (image-missing.svg) that failed, so any icon GTK
+  // could not find took the machine down — which is what happened to the owner
+  // moments after a clone, on 2026-09-01. Verified on a dev sprite: installing
+  // this puts an svg loader in gdk-pixbuf's cache, so GTK decodes icons itself
+  // and never reaches the sandbox that cannot start.
+  "librsvg2-common",
 ];
 
 /**
