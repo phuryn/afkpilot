@@ -54,6 +54,7 @@
  * beside the running host and swaps only once the new one is intact.
  */
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { spriteExec } from "../dist/sprite-exec.js";
 
 const API_BASE = process.env.SPRITES_API_BASE || "https://api.sprites.dev";
@@ -101,6 +102,8 @@ const FIX_IMAGE = process.argv.includes("--fix-image");
  * inherent, not a bug, and it is why this reports activity before acting.
  */
 const FORCE_HOST = process.argv.includes("--force-host");
+/** Opt in to the REAL estate, by name. See spritesToken. */
+const PRODUCTION = process.argv.includes("--production");
 /**
  * Where a machine re-fetches its boot script from. Production machines were
  * built against afkpilot.com; dev machines against the dev relay. Overridable
@@ -108,8 +111,6 @@ const FORCE_HOST = process.argv.includes("--force-host");
  */
 const RELAY_HTTP = process.env.RELAY_HTTP_URL
   || (PRODUCTION ? "https://afkpilot.com" : "https://grok-remote-dev-development.up.railway.app");
-/** Opt in to the REAL estate, by name. See spritesToken. */
-const PRODUCTION = process.argv.includes("--production");
 const ONLY = (() => {
   const i = process.argv.indexOf("--only");
   return i >= 0 ? process.argv[i + 1] : undefined;
@@ -169,6 +170,28 @@ async function latestAssetUrl() {
   return { url: asset?.browser_download_url, tag: body.tag_name };
 }
 
+/**
+ * The boot script the relay is serving right now, hashed.
+ *
+ * A machine's copy is fetched ONCE, at provision, and its service runs that
+ * copy for ever — so a machine can be running the newest HOST from an ancient
+ * BOOT SCRIPT. That is not hypothetical: the capability fix that stops the GTK
+ * icon crash lives in the boot script, and every existing machine was current
+ * by host version while missing it entirely.
+ *
+ * Comparing hashes means a machine is only restarted when its script actually
+ * differs, instead of "force" meaning "restart everything every time".
+ */
+async function servedBootScriptHash() {
+  try {
+    const res = await fetch(`${RELAY_HTTP}/api/environment/pool-bootstrap.sh`);
+    if (!res.ok) return null;
+    const text = await res.text();
+    return createHash("sha256").update(text).digest("hex");
+  } catch { return null; }
+}
+const bootHash = FORCE_HOST ? await servedBootScriptHash() : null;
+
 const { url: wantUrl, tag } = await latestAssetUrl();
 if (!wantUrl) {
   console.error("The latest release publishes no .AppImage — nothing to roll out.");
@@ -225,7 +248,8 @@ async function handle(sprite) {
       // directory itself, so a verification pass run straight after a force
       // reports every machine it just touched as in use. Read the flag on the
       // dry run, not on the pass that confirms the result.
-      "echo IDLE=$(find \"$HOME/.grok/sessions\" -type f -newermt '-10 minutes' 2>/dev/null | head -1 | wc -l)",
+      "echo IDLE=$(find \"$HOME/.grok/sessions\" -type f -newermt '-10 minutes' 2>/dev/null | head -1 | wc -l); " +
+      "echo BOOTHASH=$(sha256sum \"$HOME/afkpilot-boot.sh\" 2>/dev/null | cut -d' ' -f1)",
     )).output || "";
     const asset = before.match(/ASSET=(\S+)/)?.[1] ?? "NONE";
     const claimed = before.match(/CLAIMED=(\S+)/)?.[1] === "yes";
@@ -234,7 +258,15 @@ async function handle(sprite) {
     const currentAlready = tag && asset.includes(tag.replace(/^v/, ""));
     const use = busy ? ", IN USE (last 10 min)" : "";
 
-    if (currentAlready) { current++; return `  ${sprite.name}  [${sprite.state}${use}]  already ${tag}`; }
+    const machineBoot = before.match(/BOOTHASH=(\S+)/)?.[1] ?? "";
+    // Stale by EITHER measure is stale. A machine on the newest host running a
+    // boot script from provision is exactly how the capability fix would have
+    // reached nobody while every report said "already current".
+    const bootStale = !!bootHash && machineBoot !== bootHash;
+    if (currentAlready && !bootStale) {
+      current++;
+      return `  ${sprite.name}  [${sprite.state}${use}]  already ${tag}`;
+    }
     // An unclaimed machine cannot refresh its host: refresh_host_if_stale
     // returns early without the claim file. It picks the new build up on the
     // claim, which restarts the service — and its stamp is already cleared.
@@ -243,7 +275,8 @@ async function handle(sprite) {
       return `  ${sprite.name}  [${sprite.state}]  ${!claimed ? "unclaimed — updates when claimed" : "not an AppImage install"}`;
     }
     behind++;
-    if (!APPLY) return `  ${sprite.name}  [${sprite.state}${use}]  would force ${asset} -> ${tag}`;
+    const why = currentAlready ? "boot script is stale" : `${asset} -> ${tag}`;
+    if (!APPLY) return `  ${sprite.name}  [${sprite.state}${use}]  would force (${why})`;
 
     // RE-FETCH THE BOOT SCRIPT FIRST. It is downloaded once, at provision, and
     // the service runs that local copy for ever — so a fix to pool-bootstrap.ts
@@ -269,11 +302,19 @@ async function handle(sprite) {
       await new Promise((r) => setTimeout(r, 15_000));
       const now = (await sh(
         sprite.name,
-        "echo ASSET=$(sed 's|.*/||' \"$HOME/afkpilot/.afkpilot-asset\" 2>/dev/null || echo NONE)",
+        "echo ASSET=$(sed 's|.*/||' \"$HOME/afkpilot/.afkpilot-asset\" 2>/dev/null || echo NONE); " +
+        "echo BOOTHASH=$(sha256sum \"$HOME/afkpilot-boot.sh\" 2>/dev/null | cut -d' ' -f1); " +
+        "echo UP=$(pgrep -c -f 'grok-build-desktop --no-sandbox')",
       )).output || "";
       const got = now.match(/ASSET=(\S+)/)?.[1] ?? "NONE";
-      if (tag && got.includes(tag.replace(/^v/, ""))) {
-        return `  ${sprite.name}  [${sprite.state}${use}]  FORCED -> ${tag}`;
+      const nowBoot = now.match(/BOOTHASH=(\S+)/)?.[1] ?? "";
+      const up = (now.match(/UP=(\d+)/)?.[1] ?? "0") !== "0";
+      const hostOk = !!tag && got.includes(tag.replace(/^v/, ""));
+      const bootOk = !bootHash || nowBoot === bootHash;
+      // The host must be RUNNING, not merely recorded: the whole incident was a
+      // machine whose service said "running" with no host process behind it.
+      if (hostOk && bootOk && up) {
+        return `  ${sprite.name}  [${sprite.state}${use}]  FORCED (${why}) — host up`;
       }
       if (Date.now() > deadline) {
         failed++;
