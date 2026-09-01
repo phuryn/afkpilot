@@ -2066,6 +2066,17 @@ window.grokRemoteClient = true;
   var everSawHost = (function () {
     try { return window.localStorage.getItem(everSawHostKey) === "1"; } catch (e) { return false; }
   })();
+  /** Has the host attached during THIS page load?
+   *
+   *  Deliberately separate from the remembered flag above. That one answers
+   *  "is this machine's first boot still happening", which must survive a
+   *  reload. This one answers "does this page have anything on screen yet",
+   *  which must NOT: a reload starts empty however long the machine has
+   *  existed. Silencing the asleep notice on the remembered flag meant a person
+   *  arriving at a sleeping machine — nothing rendered, nothing to send, just a
+   *  rail spinning — was told nothing at all while it woke (owner, 2026-09-01,
+   *  after several reloads that looked identical to a broken page). */
+  var sawHostThisLoad = false;
   var IDENTITY_RESTORE_TIMEOUT_MS = 15000;
   var IDENTITY_RESTORE_FAIL_MS = 60000;
   function deviceOfflineGraceMs() {
@@ -3097,6 +3108,7 @@ window.grokRemoteClient = true;
     // being open. Latched, because "has it ever arrived" is what separates a
     // machine that is still booting from one that went away.
     everSawHost = true;
+    sawHostThisLoad = true;
     try { window.localStorage.setItem(everSawHostKey, "1"); } catch (e) { /* private mode: page-local is still correct */ }
     if (firstBootNoteTimer) { clearTimeout(firstBootNoteTimer); firstBootNoteTimer = null; }
     if (firstBootErrorTimer) { clearTimeout(firstBootErrorTimer); firstBootErrorTimer = null; }
@@ -3188,15 +3200,25 @@ window.grokRemoteClient = true;
     // The header's reconnect indicator still carries the state; the transcript
     // stays out of it unless something is actually being held.
     var cloudAsleep = isCloudDevice && everSawHost;
+    // Asleep, and this PAGE has nothing yet: the rail is empty, the history is
+    // empty, and the machine is being woken behind a spinner that explains
+    // none of it. Attaching wakes it (server.ts, wake on attach) and resuming
+    // takes the best part of a minute, so silence here reads as a broken page
+    // and invites reload after reload — which is exactly what happened.
+    var wakingOnArrival = cloudAsleep && !sawHostThisLoad;
     var offlineText = stillBooting
       ? "Setting up your cloud environment. A new machine takes about a minute to come up — this page will connect on its own."
-      : cloudAsleep
-        ? "Your cloud machine is asleep. It wakes as soon as you send something."
-        : "Device offline — open VS Code on that machine and this page will connect by itself.";
-    // Nothing held, nothing to say: sleeping is not news. With a message
-    // waiting, the person needs to know it is safe — but as a notice, not an
-    // error, because nothing has failed.
-    if (cloudAsleep && !held) return;
+      : wakingOnArrival
+        ? "Waking your cloud machine. This takes a few seconds — the page will fill in on its own."
+        : cloudAsleep
+          ? "Your cloud machine is asleep. It wakes as soon as you send something."
+          : "Device offline — open VS Code on that machine and this page will connect by itself.";
+    // Sleeping mid-conversation is not news: the transcript is on screen, the
+    // machine wakes on the next send, and announcing it told the owner
+    // something was wrong while he was reading (2026-08-31). That silence is
+    // kept — but only once this page has actually SEEN the host. Before that
+    // there is nothing on screen for the silence to be kind about.
+    if (cloudAsleep && sawHostThisLoad && !held) return;
     // A machine being BUILT is progress, not a fault, and red is the wrong
     // colour for a minute of ordinary waiting (owner, 2026-08-31). The notice
     // channel is already the calm one — blue rule, quiet background — and the

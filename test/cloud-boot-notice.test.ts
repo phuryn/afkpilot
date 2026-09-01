@@ -27,15 +27,33 @@ describe("the cloud first-boot message", () => {
     expect(chat).toMatch(/localStorage\.setItem\(everSawHostKey, "1"\)/);
   });
 
-  it("says nothing at all when a cloud machine is simply asleep", () => {
+  it("says nothing when a cloud machine sleeps MID-CONVERSATION", () => {
     // Sleeping is the resting state this product sells — it wakes on the next
     // send. Announcing it as a fault told the owner something was wrong while
     // he was reading, gave him nothing to do, and was contradicted a minute
     // later by the machine answering (2026-08-31).
     expect(chat).toContain("var cloudAsleep = isCloudDevice && everSawHost;");
-    expect(chat).toContain("if (cloudAsleep && !held) return;");
+    expect(chat).toContain("if (cloudAsleep && sawHostThisLoad && !held) return;");
     // The old red sentence is gone.
     expect(chat).not.toContain("Your cloud environment isn't responding.");
+  });
+
+  it("but DOES say the machine is waking when the page has nothing yet", () => {
+    // The silence above was keyed on a flag remembered in localStorage per
+    // device, so it also covered arriving at a sleeping machine with an empty
+    // rail and nothing to send. Attaching wakes it and resuming takes the best
+    // part of a minute; with nothing said, that is indistinguishable from a
+    // broken page, and the owner reloaded repeatedly into it (2026-09-01).
+    //
+    // The distinction is per PAGE LOAD, not per device: a reload starts empty
+    // however old the machine is.
+    expect(chat).toContain("var sawHostThisLoad = false;");
+    expect(chat).toContain("sawHostThisLoad = true;");
+    expect(chat).toContain("var wakingOnArrival = cloudAsleep && !sawHostThisLoad;");
+    expect(chat).toContain("Waking your cloud machine.");
+    // Calm channel: nothing has failed, the machine is coming up.
+    const at = chat.indexOf("var wakingOnArrival");
+    expect(chat.slice(at, at + 2600)).toContain('type: stillBooting || cloudAsleep ? "hostNotice" : "error"');
   });
 
   it("still says where a held message went, and says it calmly", () => {
