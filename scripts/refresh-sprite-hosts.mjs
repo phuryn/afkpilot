@@ -101,6 +101,13 @@ const FIX_IMAGE = process.argv.includes("--fix-image");
  * inherent, not a bug, and it is why this reports activity before acting.
  */
 const FORCE_HOST = process.argv.includes("--force-host");
+/**
+ * Where a machine re-fetches its boot script from. Production machines were
+ * built against afkpilot.com; dev machines against the dev relay. Overridable
+ * for anything else.
+ */
+const RELAY_HTTP = process.env.RELAY_HTTP_URL
+  || (PRODUCTION ? "https://afkpilot.com" : "https://grok-remote-dev-development.up.railway.app");
 /** Opt in to the REAL estate, by name. See spritesToken. */
 const PRODUCTION = process.argv.includes("--production");
 const ONLY = (() => {
@@ -238,8 +245,20 @@ async function handle(sprite) {
     behind++;
     if (!APPLY) return `  ${sprite.name}  [${sprite.state}${use}]  would force ${asset} -> ${tag}`;
 
+    // RE-FETCH THE BOOT SCRIPT FIRST. It is downloaded once, at provision, and
+    // the service runs that local copy for ever — so a fix to pool-bootstrap.ts
+    // reaches new machines only, exactly like the apt step. That is how a host
+    // launched without dropping its ambient capabilities kept crashing on
+    // machines that had already been "updated". Fetch to a temp file and move
+    // only on success, so a failed download cannot leave a machine with no boot
+    // script at all.
     await sh(
       sprite.name,
+      `curl -fsSL --max-time 60 ${RELAY_HTTP}/api/environment/pool-bootstrap.sh ` +
+      "-o \"$HOME/afkpilot-boot.next\" " +
+      "&& chmod +x \"$HOME/afkpilot-boot.next\" " +
+      "&& mv \"$HOME/afkpilot-boot.next\" \"$HOME/afkpilot-boot.sh\"; " +
+      "rm -f \"$HOME/afkpilot-boot.next\"; " +
       "rm -f \"$HOME/afkpilot/.afkpilot-host-checked\"; " +
       "/.sprite/bin/sprite-env services restart afkpilot >/dev/null 2>&1; echo GO",
     );

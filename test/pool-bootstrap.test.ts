@@ -57,7 +57,31 @@ describe("it is a shell script", () => {
     // follows becomes JavaScript. If that happens again the script is missing
     // its tail, so check both ends are present.
     expect(script.startsWith("#!/usr/bin/env bash")).toBe(true);
-    expect(script).toContain("exec node scripts/run-desktop.cjs");
+    expect(script).toContain("exec $DROP_CAPS node scripts/run-desktop.cjs");
+  });
+
+  /**
+   * The host must not hand its ambient capabilities to the things it spawns.
+   *
+   * bwrap refuses to start while holding unexpected capabilities, glycin runs
+   * its SVG loader inside bwrap, and GTK treats a failed icon load as a FATAL
+   * assertion — so a missing icon killed a production machine on 2026-09-01.
+   * Measured: glycin's own bwrap line fails plainly and succeeds under setpriv.
+   *
+   * Pinned because the fix is one word in a shell line and would be silently
+   * lost by anyone tidying the exec, with the failure appearing hours later on
+   * a machine nobody is watching.
+   */
+  it("starts the host with its inheritable and ambient capabilities dropped", () => {
+    const script = poolBootstrapScript({ relayHttpUrl: "https://relay.example" });
+
+    expect(script).toContain("setpriv --inh-caps=-all --ambient-caps=-all");
+    // Both launch paths, not just the AppImage one.
+    expect(script).toContain('exec $DROP_CAPS "$APPDIR/AppRun" --no-sandbox');
+    expect(script).toContain("exec $DROP_CAPS node scripts/run-desktop.cjs");
+    // Absent setpriv the host must still start, unwrapped, rather than not at all.
+    expect(script).toContain('DROP_CAPS=""');
+    expect(script).toContain("command -v setpriv");
     expect(script).not.toContain("undefined");
   });
 });

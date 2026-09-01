@@ -59,19 +59,19 @@ const APT_PACKAGES = [
   // FUSE, so an AppImage can mount itself. Without it the download is inert and
   // the fallback path is the only one that ever runs.
   "libfuse2t64",
-  // An SVG decoder for gdk-pixbuf, and it is not cosmetic: without it GTK hands
-  // every SVG icon to glycin, which runs its loader under bwrap — and bwrap
-  // does not work on this image ("Unexpected capabilities but not setuid",
-  // measured on two separate machines). GTK treats a failed icon load as FATAL,
-  // so the whole host died with
+  // An SVG decoder for gdk-pixbuf.
   //
-  //   Gtk:ERROR ensure_surface_for_gicon: assertion failed ... Bail out!
+  // THIS DOES NOT FIX THE GTK ICON CRASH, and the comment that used to stand
+  // here said it did. GTK4 decodes images through glycin, not gdk-pixbuf, so a
+  // gdk-pixbuf loader is never consulted on that path — the cache gaining six
+  // SVG entries was true and irrelevant. The real cause is ambient capabilities
+  // making bwrap refuse to start, fixed at the host launch (see DROP_CAPS).
   //
-  // It was the FALLBACK icon (image-missing.svg) that failed, so any icon GTK
-  // could not find took the machine down — which is what happened to the owner
-  // moments after a clone, on 2026-09-01. Verified on a dev sprite: installing
-  // this puts an svg loader in gdk-pixbuf's cache, so GTK decodes icons itself
-  // and never reaches the sandbox that cannot start.
+  // The wrong claim was measured at the wrong layer, shipped to thirty
+  // production machines, and reported as "the crash cannot recur". It recurred
+  // the same evening on the owner's machine. Kept because it is harmless and
+  // other gdk-pixbuf consumers do benefit; corrected because a comment that
+  // claims a fix it does not deliver is worse than no comment.
   "librsvg2-common",
 ];
 
@@ -382,6 +382,45 @@ export DBUS_SESSION_BUS_ADDRESS=/dev/null
 for _ in $(seq 1 50); do [ -e /tmp/.X11-unix/X99 ] && break; sleep 0.2; done
 [ -e /tmp/.X11-unix/X99 ] || { step "Xvfb failed"; cat /tmp/xvfb.log; exit 69; }
 
+# THE HOST MUST NOT HOLD AMBIENT CAPABILITIES, and this is not hygiene — it is
+# what stops the machine dying.
+#
+# GTK renders native chrome for Electron on Linux, and it decodes images through
+# glycin, whose loader runs inside a bwrap sandbox. bwrap REFUSES to start while
+# the calling process holds capabilities it did not expect:
+#
+#   bwrap: Unexpected capabilities but not setuid, old file caps config?
+#
+# This machine runs as uid 1001 with a full set in CapAmb, and ambient
+# capabilities are inherited by every child — so bwrap inherits them and bails.
+# glycin then reports the loader as having exited early, and GTK treats a failed
+# icon load as a FATAL assertion:
+#
+#   Gtk:ERROR:gtkiconhelper.c: assertion failed (error == NULL): Failed to load
+#   /usr/share/icons/Adwaita/scalable/status/image-missing.svg ... Bail out!
+#
+# image-missing is the FALLBACK icon and exists only as SVG, so ANY icon GTK
+# cannot find takes the whole host down. That is what killed a production
+# machine on 2026-09-01.
+#
+# Measured, not reasoned — the earlier fix was reasoned and was wrong. Running
+# glycin's exact bwrap line by hand:
+#
+#   plain            -> "Unexpected capabilities but not setuid"
+#   under setpriv    -> the sandbox starts and the loader runs
+#
+# (The earlier attempt installed librsvg2-common, a gdk-pixbuf loader. GTK4
+# never consults gdk-pixbuf for this path, so it changed nothing. It is kept
+# because it is harmless and helps other consumers, but it is NOT this fix.)
+#
+# Only the inheritable and ambient sets are dropped. The bounding set is left
+# alone: both worked in testing, and this is the smaller change. Xvfb has
+# already been started above and keeps its own.
+DROP_CAPS=""
+if command -v setpriv >/dev/null 2>&1; then
+  DROP_CAPS="setpriv --inh-caps=-all --ambient-caps=-all"
+fi
+
 step "display up; starting host"
 if [ "$(cat "$APP/.afkpilot-kind" 2>/dev/null)" = "appimage" ]; then
   # APPDIR, explicitly. AppRun derives it from $0 when it is unset, and for an
@@ -390,9 +429,9 @@ if [ "$(cat "$APP/.afkpilot-kind" 2>/dev/null)" = "appimage" ]; then
   # only trace was one line in a log nobody was reading. The machine installed
   # perfectly and then did nothing, which is the worst shape a failure can take.
   export APPDIR="$APP/squashfs-root"
-  exec "$APPDIR/AppRun" --no-sandbox
+  exec $DROP_CAPS "$APPDIR/AppRun" --no-sandbox
 fi
-exec node scripts/run-desktop.cjs --relay-dev --no-sandbox
+exec $DROP_CAPS node scripts/run-desktop.cjs --relay-dev --no-sandbox
 `;
 }
 
