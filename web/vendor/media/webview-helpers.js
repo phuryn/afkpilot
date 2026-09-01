@@ -2134,7 +2134,9 @@
       items.push({
         id: "clone-needs-coding",
         label: "Clone from GitHub?",
-        description: "Cloning comes with Coding mode. Open settings to switch.",
+        // Short on purpose: the rail is narrow and the longer sentence was
+        // being truncated mid-word there (owner, 2026-09-01).
+        description: "Switch to Coding mode in the settings.",
       });
     }
     return items;
