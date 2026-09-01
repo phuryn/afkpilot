@@ -9337,6 +9337,10 @@
     // this session's CLI or it does not, and a control that always fails is
     // worse than an absent one.
     const capable = rewindCapableProvider();
+    // A conversation another tab has taken is frozen: these act on it, so they
+    // are disabled rather than merely dimmed. Visible, so the transcript still
+    // reads normally, but genuinely unclickable.
+    const frozen = !!state.sessionSuperseded;
     users.forEach((el, i) => {
       el.dataset.userBubbleIndex = String(prefixCount + i);
       const isLast = i === users.length - 1;
@@ -9345,11 +9349,15 @@
         // Hide on the tip: that message is Edit's, which does the same rewind
         // and returns the text. Not a wire limitation — execute accepts the tip.
         btn.hidden = !capable || users.length <= 1 || isLast;
+        btn.disabled = frozen;
       }
       // Edit is the exact complement: only the tip, which is the message a
       // rewind can't remove and the one you most often want to retype (#56).
       const edit = el.querySelector(".msg-edit-btn");
-      if (edit) edit.hidden = !capable || !isLast;
+      if (edit) {
+        edit.hidden = !capable || !isLast;
+        edit.disabled = frozen;
+      }
     });
   }
 
@@ -10958,20 +10966,30 @@
     return (row && row.cwd) || state.activeRepoCwd || state.selectedRepoCwd || state.cwd || "";
   }
 
+  /** Every composer control, not just the textarea. A frozen conversation that
+   *  still offers Add context, the mode picker or Send is offering actions the
+   *  host will refuse — and `disabled` is what makes them genuinely unclickable
+   *  rather than merely faded (owner, 2026-09-01). */
+  function setComposerFrozen(frozen) {
+    for (const el of [input, micBtn, addBtn, gearBtn, modeBtn, sendBtn]) {
+      if (el) el.disabled = frozen;
+    }
+    // Rewind and Edit hang off the message bubbles rather than the composer,
+    // and they act on this conversation, so they freeze with it.
+    refreshUserRewindButtons();
+  }
+
   function renderSessionSupersededBanner() {
     let el = document.getElementById("session-superseded-banner");
     if (!state.sessionSuperseded) {
       if (el) el.remove();
       document.body.classList.remove("session-superseded");
-      if (input) input.disabled = false;
-      if (micBtn) micBtn.disabled = false;
+      setComposerFrozen(false);
       updateSendButton();
       return;
     }
     document.body.classList.add("session-superseded");
-    if (input) input.disabled = true;
-    if (micBtn) micBtn.disabled = true;
-    updateSendButton();
+    setComposerFrozen(true);
     if (!el) {
       el = document.createElement("div");
       el.id = "session-superseded-banner";
@@ -10980,19 +10998,30 @@
       if (composer) composer.insertBefore(el, composer.firstChild);
       else return;
     }
+    // A CARD standing where the composer would be, not a stripe above it.
+    // The composer is the thing that no longer works, so the explanation takes
+    // its place instead of hovering over something that still looks usable — a
+    // 12px strip over a live-looking composer read as ignorable chrome, and the
+    // wording had to carry the whole state in one muted line (owner,
+    // 2026-09-01, from a phone).
     el.replaceChildren();
-    const text = document.createElement("span");
-    text.textContent = "This conversation is open in another tab.";
+    const title = document.createElement("p");
+    title.className = "session-superseded-title";
+    title.textContent = "This conversation moved to another tab";
+    const body = document.createElement("p");
+    body.className = "session-superseded-body";
+    // Says the thing a person actually wants to know first: nothing is lost.
+    body.textContent = "Nothing was lost — it is still here. Take it back to carry on in this tab.";
     const btn = document.createElement("button");
     btn.type = "button";
+    btn.className = "session-superseded-btn";
     btn.textContent = "Continue here";
     btn.onclick = () => {
       const held = state.sessionSuperseded;
       if (!held) return;
       postResumeSession(held.id, held.cwd, { claim: true });
     };
-    el.appendChild(text);
-    el.appendChild(btn);
+    el.append(title, body, btn);
   }
 
   function enterSessionSuperseded(id, cwd) {
@@ -16833,9 +16862,13 @@
             const transitioningElsewhere = !!state.railTransition && !resumeToThis;
             if (resumeToThis) abortRailTransition();
             if (!transitioningElsewhere) {
-              const already = state.sessionSuperseded && state.sessionSuperseded.id === supersededId;
+              // Deliberately no transcript error. The card IS the message, and
+              // adding one printed the same sentence twice — once calmly where
+              // the composer used to be, once in red above it, which reads as
+              // two different things having gone wrong (owner, 2026-09-01).
+              // Nothing failed here: the conversation moved, and it is one tap
+              // back.
               enterSessionSuperseded(supersededId, sessionSupersededCwd(supersededId));
-              if (!already) addError(errorTextForHostAge(msg.text), msg.code);
             }
             break;
           }
