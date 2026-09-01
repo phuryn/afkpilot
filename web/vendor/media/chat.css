@@ -671,6 +671,38 @@ body.rail-resizing * {
 /* The empty rail's one actionable thing. Sits under the note rather than beside
    it: on the screen where a user has nothing else to click, the next step
    should read as a step, not as decoration on an error message. */
+/* "+ Add project" — full width, under the project list and in the empty rail.
+   TWIN of the rule in projects-rail.css: that stylesheet is loaded ONLY by the
+   VS Code rail webview (sidebar.ts), so a rule written only there never reaches
+   the desktop or browser rail, which chat.css serves. Keep the two in step. */
+.rail-add-project-wide {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: calc(100% - 16px);
+  margin: 6px 8px 2px;
+  padding: 6px 12px;
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground, CanvasText));
+  background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.2));
+}
+.rail-add-project-wide:hover {
+  background: var(--vscode-button-secondaryHoverBackground, rgba(128, 128, 128, 0.3));
+}
+.rail-add-project-wide:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+.rail-add-project-wide-plus { font-size: 14px; line-height: 1; opacity: 0.9; }
+/* The 36px floor every other control here uses; 44 on a phone, where this is
+   the primary way to add a project. */
+@media (hover: none), (pointer: coarse) {
+  .rail-add-project-wide { min-height: 44px; font-size: 13.5px; }
+}
+
 .rail-empty-action {
   display: block;
   margin-top: 6px;
@@ -3719,7 +3751,12 @@ textarea#input {
   background: var(--vscode-list-activeSelectionBackground);
   color: var(--vscode-list-activeSelectionForeground);
 }
-.slash-name { font-family: var(--vscode-editor-font-family); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+/* Deliberately NOT the editor font. This was `--vscode-editor-font-family`,
+   i.e. monospace, on the theory that a slash command is a literal token — but
+   the row is a menu item being read, not code being edited, and the owner
+   noticed it as looking wrong before knowing why. The `@` mention rows below
+   already use the UI font; this makes the two popovers agree. */
+.slash-name { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
 .slash-desc { font-size: 11px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
 /* The matched run inside a slash/skill row. Uses the house accent
    (--vscode-charts-blue, the same one the composer's voice and command tokens

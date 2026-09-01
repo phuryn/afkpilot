@@ -2150,7 +2150,7 @@
       label: "Project name",
       placeholder: "Q3 Positioning",
       confirm: "Create",
-      busy: "Creating…",
+      busy: "Creating",
     },
     clone: {
       title: "Clone from GitHub",
@@ -2158,7 +2158,7 @@
       label: "Repository URL",
       placeholder: "https://github.com/you/project",
       confirm: "Clone",
-      busy: "Cloning…",
+      busy: "Cloning",
     },
   };
 
@@ -2372,7 +2372,7 @@
         githubHeading.textContent = "GitHub connected";
         githubDesc.textContent = typeof g.message === "string" && g.message
           ? g.message
-          : "Signed in to GitHub. Clone again.";
+          : "Signed in to GitHub. Try to clone again.";
         githubDesc.hidden = false;
         githubCmd.hidden = true;
         githubOpen.hidden = true;
@@ -2397,7 +2397,24 @@
       if (typeof s.root === "string" && s.root) root = s.root;
       busy = s.busy === kind;
       input.disabled = busy;
-      submit.textContent = busy ? copy.busy : copy.confirm;
+      // A static "Cloning…" reads as a stuck button — the owner could not tell
+      // anything was happening. Reuse the SAME three blinking dots every other
+      // progress indicator here uses (.blink-dots, animated in chat.css) rather
+      // than inventing a second spinner. Built as nodes, not innerHTML: this
+      // component is shared and takes no HTML anywhere else.
+      submit.textContent = "";
+      submit.appendChild(doc.createTextNode(busy ? copy.busy : copy.confirm));
+      if (busy) {
+        const dots = doc.createElement("span");
+        dots.className = "blink-dots";
+        dots.setAttribute("aria-hidden", "true");
+        for (let i = 0; i < 3; i++) {
+          const d = doc.createElement("span");
+          d.textContent = ".";
+          dots.appendChild(d);
+        }
+        submit.appendChild(dots);
+      }
       el.classList.toggle("is-busy", busy);
       const githubLive = paintGithub(s);
       const message = busy || githubLive ? "" : (typeof s.error === "string" ? s.error : "");

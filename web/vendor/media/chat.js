@@ -1904,6 +1904,21 @@
     }
     contextPopover.appendChild(act);
 
+    // KNOWLEDGE WORK STOPS HERE: the number and the action on it, nothing else.
+    //
+    // Everything below is the technical account — system prompt, reasoning
+    // overhead, tool definitions, per-turn token and cost rows. That is the
+    // same class of thing knowledge work already hides everywhere else; the
+    // gear describes the mode as "Hides worktrees, thinking traces, and tool
+    // details", and this popover was simply missed when that rule was applied.
+    // Somebody writing a document does not need to know how many tokens the
+    // tool definitions cost, and "Context used 12,400 / 128,000 (10%)" plus a
+    // way to compact is the whole of what the donut is being asked.
+    //
+    // Deliberately an early return rather than a wrapper: the sections below
+    // are independent and a wrapper would have to be threaded through each.
+    if (!isCodingPurpose()) return;
+
     // Snapshot addends are internally consistent (overhead from snapshot.used).
     // Occupancy that has moved does not hide the group: an open popover
     // re-fetches session/info so header and rows become current together.
@@ -5848,6 +5863,11 @@
         list.className = "rail-list rail-projects";
         for (const repo of repos) list.appendChild(renderRailRepo(repo, false));
         root.appendChild(list);
+        // Full-width target under the list, not only the small "+" in the group
+        // head. With one project or none the rail is mostly empty space and the
+        // header glyph is easy to miss — and on a phone, easy to miss AND hard
+        // to hit. Same control, said where there is room to say it.
+        if (canAddProjectFolder() && !q) root.appendChild(railAddProjectWide());
       }
       shownAnything = true;
     }
@@ -5883,12 +5903,7 @@
         // An empty rail that only says "No projects yet" is a dead end on the
         // one screen where the user has nothing else to click.
         const empty = railNote("No projects yet");
-        const add = document.createElement("button");
-        add.type = "button";
-        add.className = "rail-empty-action";
-        add.textContent = "Add a project";
-        add.onclick = () => openAddProjectMenu(add);
-        empty.appendChild(add);
+        empty.appendChild(railAddProjectWide());
         root.appendChild(empty);
       } else {
         root.appendChild(railNote(q ? "No matches." : "No projects yet"));
@@ -5989,6 +6004,30 @@
    * it gets a separate `grok.projects` view (media/projects-rail.js), which
    * carries its own copy of this control.
    */
+  /**
+   * "+ Add project", full width, at button height.
+   *
+   * The TWIN of addProjectWideButton in projects-rail.js — the two rails are
+   * separate implementations and have drifted into different wording before,
+   * which is why the clone hint was moved to a shared builder. Keep these two
+   * in step: same class, same label, same behaviour. It replaces the empty
+   * state's text link rather than joining it; a link and a button offering one
+   * action in one rail is a second mechanism, not a second affordance.
+   */
+  function railAddProjectWide() {
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "rail-add-project-wide";
+    const plus = document.createElement("span");
+    plus.className = "rail-add-project-wide-plus";
+    plus.setAttribute("aria-hidden", "true");
+    plus.textContent = "+";
+    add.appendChild(plus);
+    add.appendChild(document.createTextNode("Add project"));
+    add.onclick = () => openAddProjectMenu(add);
+    return add;
+  }
+
   function railAddProjectButton() {
     const btn = document.createElement("button");
     btn.type = "button";

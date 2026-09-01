@@ -12,6 +12,8 @@ dist/
 e2e-artifacts/
 .env
 CLAUDE.local.md
+# Agent working goal for the current release pass. Local, never shipped.
+GOAL.local.md
 supabase/.temp/
 
 # Machine-specific agent tool permissions — per-developer, never shared
