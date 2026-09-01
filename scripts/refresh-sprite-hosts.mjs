@@ -347,7 +347,11 @@ async function handle(sprite) {
       }
       if (Date.now() > deadline) {
         failed++;
-        return `  ${sprite.name}  [${sprite.state}${use}]  TIMED OUT — still ${got} (machine unchanged)`;
+        // NOT "unchanged". A timeout says verification did not finish, not that
+        // nothing happened: the restart may have landed, or landed and failed,
+        // while the polling was what broke. Claiming "unchanged" here is the same
+        // error as the rest of tonight — reporting a state nobody observed.
+        return `  ${sprite.name}  [${sprite.state}${use}]  OUTCOME UNKNOWN — last seen ${got}; re-run to observe`;
       }
     }
   }
@@ -456,8 +460,10 @@ console.log(
 if (APPLY && behind > 0) {
   console.log(
     FORCE_HOST
-      ? "Every machine above is running the new host NOW — it was installed and the\n" +
-        "service restarted, not left for a boot that might not come.\n"
+      ? "Machines marked FORCED were observed after the restart with the new asset\n" +
+        "recorded and a host process up. That is an observation, not proof that the\n" +
+        "new build is the one serving — the process is not asked to identify its own\n" +
+        "generation. Anything reported UNKNOWN was not observed at all.\n"
       : "Each armed machine installs the new host on its next boot — for a sleeping\n" +
     "machine, the next time its owner opens it. Re-run without --apply later to\n" +
     "confirm they landed.",
