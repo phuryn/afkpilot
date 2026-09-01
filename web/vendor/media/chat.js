@@ -3968,6 +3968,17 @@
     return state.activeProvider !== "claude" && state.activeProvider !== "codex";
   }
 
+  /**
+   * Rewind and edit-and-resend ride grok's `_x.ai/rewind/*` extension. Codex
+   * and Claude answer `unsupported`, and until 2026-09-01 the buttons rendered
+   * for them anyway — clicking one produced a host-side warning, which is a
+   * poor answer at a desk and NO answer at all on a cloud machine, where
+   * nobody is at the screen to read it. Same shape as steerableProvider().
+   */
+  function rewindCapableProvider() {
+    return state.activeProvider !== "claude" && state.activeProvider !== "codex";
+  }
+
   function providerDisplayName(provider) {
     if (provider === "codex") return "Codex";
     if (provider === "claude") return "Claude";
@@ -8549,7 +8560,24 @@
       + `data-provider="${escapeHtml(provider)}">Cancel</button>`;
 
     if (device && device.status === "waiting" && device.url) {
-      status("Confirm the code");
+      status(device.needsCode ? (device.submitted ? "Confirming sign-in" : "Paste the code") : "Confirm the code");
+      const paste = !!device.needsCode;
+      const codeChip = !paste && device.code
+        ? `<p class="onb-desc">Open the link, then confirm this code:</p>` +
+          // Same markup as every other copyable value in this panel, so it
+          // inherits the existing copy handler and its copied state.
+          `<div class="onb-cmd">` +
+            `<code>${escapeHtml(device.code)}</code>` +
+            `<button class="onb-copy" type="button" title="Copy" data-cmd="${escapeHtml(device.code)}">${ICON.copy}</button>` +
+          `</div>`
+        : (!paste ? `<p class="onb-desc">Open the link to finish signing in.</p>` : "");
+      const pasteEntry = paste && !device.submitted
+        ? `<p class="onb-desc">Open the link, sign in, then paste the code the page shows you:</p>` +
+          `<div class="onb-cmd onb-code-entry">` +
+            `<input class="onb-code-input" type="text" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste code" aria-label="Paste sign-in code">` +
+            `<button class="onb-action" type="button" data-act="submitDeviceLoginCode" data-provider="${escapeHtml(provider)}">Submit</button>` +
+          `</div>`
+        : "";
       return `<div class="onb">` +
         `<p class="onb-heading">${device.preflight ? "Step 2 of 2 &mdash; confirm the code" : `Finish signing in to ${escapeHtml(name)}`}</p>` +
         // The vendor's own page warns that device codes are used in phishing
@@ -8557,15 +8585,8 @@
         // BEFORE they meet it turns an alarming page into an expected one
         // (owner, with the screenshot, 2026-08-31).
         (device.note ? `<p class="onb-desc onb-note">${onbRich(device.note)}</p>` : "") +
-        (device.code
-          ? `<p class="onb-desc">Open the link, then confirm this code:</p>` +
-            // Same markup as every other copyable value in this panel, so it
-            // inherits the existing copy handler and its copied state.
-            `<div class="onb-cmd">` +
-              `<code>${escapeHtml(device.code)}</code>` +
-              `<button class="onb-copy" type="button" title="Copy" data-cmd="${escapeHtml(device.code)}">${ICON.copy}</button>` +
-            `</div>`
-          : `<p class="onb-desc">Open the link to finish signing in.</p>`) +
+        codeChip +
+        pasteEntry +
         `<a class="onb-action" href="${escapeHtml(device.url)}" target="_blank" rel="noopener noreferrer">Open the sign-in page</a>` +
         // The setting to check, beside the code it gates — not on a screen
         // before it that cost an extra click to get past.
@@ -8576,9 +8597,13 @@
               .join("")}</ol>`
           : "") +
         cancel +
-        // Said plainly because the instinct is to come back and press something
-        // else. Nothing else needs pressing.
-        `<p class="onb-desc">Keep this page open &mdash; it finishes on its own.</p>` +
+        // Device-code finishes without another tap. Paste-code does not, until
+        // the code has been written back.
+        `<p class="onb-desc">${paste
+          ? (device.submitted
+            ? "Code sent &mdash; keep this page open, it finishes on its own."
+            : "This page stays open so you can paste the code back.")
+          : "Keep this page open &mdash; it finishes on its own."}</p>` +
       `</div>`;
     }
 
@@ -8664,17 +8689,11 @@
     const cloudFresh = !!(state.hostCaps && state.hostCaps.remoteAgentSignOut) && nothingConnected;
     const offer = provider && !cloudFresh ? [provider] : ["grok", "codex", "claude"];
     // A cloud machine's three agents are not equal offers: Grok is the native
-    // one, and Claude cannot be connected there yet — a button that always
-    // ends in "not available" is a dead end wearing an affordance.
+    // one. Ranking is the cloud-only part; every agent that has a headless
+    // flow is offered, including Claude Code's paste-code sign-in.
     const cloudHost = !!(state.hostCaps && state.hostCaps.remoteAgentSignOut);
-    // Ranking is the cloud-only part: Grok Build is the agent this environment
-    // is built around, and Claude Code cannot be connected here yet, so it is
-    // stated rather than offered. The NAMES above are the same everywhere.
     const buttons = offer
       .map((id) => {
-        if (cloudHost && id === "claude") {
-          return `<p class="onb-desc onb-agent-note">Claude Code — we're working on adding it, not available yet.</p>`;
-        }
         const rec = cloudHost && id === "grok" ? " (recommended)" : "";
         // The mark the reader already knows from the model picker and the
         // provider rows. currentColor, so it takes the button's foreground.
@@ -9194,8 +9213,13 @@
       actions.appendChild(copyBtn);
       // Rewind sits next to Copy on user bubbles only (P2-9). Latest message
       // has nothing after it to discard — hidden via refreshUserRewindButtons.
-      // Desktop-only: the host rewind flow runs native VS Code UI.
-      if (role === "user" && !IS_REMOTE) {
+      //
+      // Built for every client since 2026-09-01: remote clients used to be
+      // excluded here because the host's rewind flow ran native VS Code UI, and
+      // that stopped being true when the confirmation moved in-chat. Visibility
+      // is decided in refreshUserRewindButtons, which also owns the provider
+      // gate — so a session that switches provider does not need re-rendering.
+      if (role === "user") {
         const rewindBtn = document.createElement("button");
         rewindBtn.className = "msg-action-btn msg-rewind-btn";
         rewindBtn.type = "button";
@@ -9292,6 +9316,10 @@
       if (ed) ed.hidden = true;
     }
     const prefixCount = state.historyPrefixUserCount || 0;
+    // One provider gate for both buttons: the RPC underneath either exists on
+    // this session's CLI or it does not, and a control that always fails is
+    // worse than an absent one.
+    const capable = rewindCapableProvider();
     users.forEach((el, i) => {
       el.dataset.userBubbleIndex = String(prefixCount + i);
       const isLast = i === users.length - 1;
@@ -9299,12 +9327,12 @@
       if (btn) {
         // Hide on the tip: that message is Edit's, which does the same rewind
         // and returns the text. Not a wire limitation — execute accepts the tip.
-        btn.hidden = users.length <= 1 || isLast;
+        btn.hidden = !capable || users.length <= 1 || isLast;
       }
       // Edit is the exact complement: only the tip, which is the message a
       // rewind can't remove and the one you most often want to retype (#56).
       const edit = el.querySelector(".msg-edit-btn");
-      if (edit) edit.hidden = !isLast;
+      if (edit) edit.hidden = !capable || !isLast;
     });
   }
 
@@ -17396,6 +17424,24 @@
       // remote request means the headless flow — so there is one capability
       // here, not two, and nothing new for the policy table to gate.
       else if (act === "connectRemote") vscode.postMessage({ type: "runGrokLogin", provider: onbAction.dataset.provider });
+      else if (act === "submitDeviceLoginCode") {
+        const root = onbAction.closest(".onb");
+        const input = root && root.querySelector(".onb-code-input");
+        const code = input ? String(input.value || "").trim() : "";
+        if (!code) return;
+        vscode.postMessage({ type: "submitDeviceLoginCode", provider: onbAction.dataset.provider, code: code });
+        // Deliberately NOT disabled here. This message can be dropped: the
+        // relay client's outbox keeps queue releases and authored input across
+        // a reconnect and drops everything else, and the reconnect is not an
+        // edge case in this flow — a phone leaves for the vendor's page to get
+        // the code and comes back on a new socket, which is the ONLY way to
+        // reach this button. Disabling on the click meant a dropped code left a
+        // dead field, a waiting CLI, and no way back but reopening Connect.
+        //
+        // The host echoes `submitted: true` once it has actually written the
+        // code to the CLI, and the card disables the field on that frame. No
+        // acknowledgement, no disable — so tapping Submit again just works.
+      }
       else if (act === "cancelDeviceLogin") {
         vscode.postMessage({ type: "cancelDeviceLogin", provider: onbAction.dataset.provider });
         // Close on the click, not on the host's answer. The person has said
@@ -17528,6 +17574,14 @@
     } else if (/^[a-zA-Z]:[\\/]/.test(href) || href.startsWith("\\\\") || !/^[a-z][a-z0-9+.-]*:/i.test(href)) {
       vscode.postMessage({ type: "openFile", path: href });
     }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const input = e.target && e.target.closest && e.target.closest(".onb-code-input");
+    if (!input || input.disabled) return;
+    e.preventDefault();
+    const btn = input.closest(".onb") && input.closest(".onb").querySelector('[data-act="submitDeviceLoginCode"]');
+    if (btn && !btn.disabled) btn.click();
   });
 
   /** Href a user would paste elsewhere, or "" when the link has no external

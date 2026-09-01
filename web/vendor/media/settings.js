@@ -726,24 +726,8 @@
       description: "",
       kind: "status",
       visible: (s, env) => !!(env && env.isRemote && env.providersKnown
-        && !hostIsCloud(env)
         && !remoteProviderActionable(s, env, "claude")),
       describe: (s, env) => providerRemoteDescribe(s, env, "claude"),
-    },
-    // On a cloud machine, Claude gets the answer BEFORE the click: a Connect
-    // button that always ends in "not available" is a dead end wearing an
-    // affordance (owner, 2026-08-31).
-    {
-      id: "providerClaudeCloud",
-      category: "providers",
-      logo: "claude",
-      provider: "claude",
-      title: "Claude Code",
-      vendor: "Anthropic",
-      description: "Claude Code isn't available on cloud machines yet — we're working on adding it. Grok and Codex both sign in right here.",
-      kind: "status",
-      visible: (s, env) => !!(env && env.isRemote && env.providersKnown && hostIsCloud(env)
-        && !(providerOf(s, "claude") && providerOf(s, "claude").connected)),
     },
     {
       id: "providerClaudeRemote",
@@ -755,7 +739,6 @@
       description: "",
       kind: "action",
       visible: (s, env) => !!(env && env.isRemote && env.providersKnown
-        && !hostIsCloud(env)
         && remoteProviderActionable(s, env, "claude")),
       // The flow opens in the connect wizard — one renderer, in a dialog,
       // which is not subject to the welcome card's refusal to paint over a
@@ -768,12 +751,7 @@
       local: (s, env) => (env && env.isRemote && !providerConnectedNow(s, "claude")
         ? "connectWizard:claude"
         : ""),
-      describe: (s, env) => (hostIsCloud(env) && providerConnectedNow(s, "claude")
-        // Signing out here is one-way: Claude's sign-in needs a terminal and a
-        // cloud machine has none, while the cloud override permits logout for
-        // every provider (found while documenting the matrices, 2026-08-31).
-        ? "Connected. Signing out here cannot be undone from this page — Claude Code needs a terminal to sign in again."
-        : providerRemoteDescribe(s, env, "claude")),
+      describe: (s, env) => providerRemoteDescribe(s, env, "claude"),
       actionLabel: (s) => providerAction(providerOf(s, "claude")),
       // Same two messages the desk row sends, reached through the same test.
       // Which one is offered is decided by visibility above, so this cannot

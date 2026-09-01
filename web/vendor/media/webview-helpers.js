@@ -44,7 +44,7 @@
     "listRoutines", "saveRoutine", "deleteRoutine", "setRoutinePaused", "runRoutineNow",
     "setShowThinking", "setAppPurpose", "setExpandCommandOutputs",
     "dropFile", "permissionAnswer", "exitPlanAnswer", "questionAnswer", "questionCancel",
-    "setModel", "installCodex", "cancelCodexInstall", "runInstallCmd", "runGrokLogin", "cancelDeviceLogin", "logout", "checkGrokUpdate", "updateGrok",
+    "setModel", "installCodex", "cancelCodexInstall", "runInstallCmd", "runGrokLogin", "cancelDeviceLogin", "submitDeviceLoginCode", "logout", "checkGrokUpdate", "updateGrok",
     "recheckConnection", "refreshProviders", "retryProviderSession", "listSessions", "listRepoSessions", "selectRepo", "toggleRepoPin", "setRepoArchived", "setRepoColor", "toggleSessionPin", "resumeSession", "renameSession", "deleteSession",
       "clearAllSessions", "pickFile", "mentionQuery", "addMentionFile", "listProjectDir", "readProjectFile", "writeProjectFile", "pasteImage", "uploadFile", "voiceStart", "voiceStop",
       "remoteVoiceStart", "remoteVoiceChunk", "remoteVoiceStop",
@@ -1918,11 +1918,6 @@
     {
       id: "providers",
       copy: "Grok isn’t your only agent. {Connect Codex or Claude Code} and pick one per conversation.",
-      // On a cloud machine Claude Code cannot be connected yet, so the tip
-      // names only what will actually work there.
-      copyWhen: (f) => (f.cloudHost
-        ? "Grok isn’t your only agent here. {Connect Codex} and pick one per conversation."
-        : undefined),
       target: "settings:providers",
       // Was deskOnly, on the rule that a remote may not sign an agent in. It
       // can since 3.19.x, and on a cloud machine this is the only surface

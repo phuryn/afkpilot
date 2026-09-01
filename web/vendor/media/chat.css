@@ -1547,6 +1547,17 @@ body.thinking-hidden .msg.thinking.find-reveal { display: block; }
   color: var(--vscode-foreground);
   font-size: 12px;
 }
+.onb-code-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--vscode-foreground);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 0;
+  outline: none;
+}
 .onb-copy {
   /* A flex item beside the code, pushed to the end — the absolute position it
      used to have could only ever be centred by luck. */
@@ -1603,6 +1614,11 @@ body.thinking-hidden .msg.thinking.find-reveal { display: block; }
   color: inherit;
 }
 .onb-action:hover { background: var(--vscode-button-hoverBackground); }
+.onb-code-entry .onb-action {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 4px 10px;
+}
 /* The remote sign-in panel's "Open the sign-in page" is a real link, because on
    a phone it has to open a real browser tab. It still has to look like the
    buttons above and below it.
