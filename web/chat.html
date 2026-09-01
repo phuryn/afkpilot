@@ -860,6 +860,11 @@ window.grokRemoteClient = true;
   // client before doing anything with the restored queue.
   var QKEY = "afk-outbox:" + device;
   var REMOTE_SESSION_KEY = "grok.remote.tabSession:" + (device || "default");
+  // Written by the renderer when the user CHOSE to leave a conversation —
+  // switching repo, starting a new session, opening a row in another project.
+  // Cleared the moment a real identity is saved, so it can only ever describe
+  // the gap between letting go and landing. See forgetRememberedSessionByChoice.
+  var REMOTE_SWITCH_KEY = "grok.remote.tabSwitchedByChoice:" + (device || "default");
   var REMOTE_TAB_TOKEN_KEY = "grok.remote.tabToken:" + (device || "default");
   // Rendered-window cache: the tab session IS the expiry. Keyed per device;
   // the payload's session id is what makes a different conversation ignorable.
@@ -2275,6 +2280,23 @@ window.grokRemoteClient = true;
     return sendReadyToHost(socket);
   }
 
+  /**
+   * Did the user let this conversation go on purpose?
+   *
+   * Consumed on read: one switch earns one explanation. If it is still set on a
+   * later restore, the user has genuinely not landed anywhere since — which is
+   * the same story, so telling it again would be true but tedious.
+   */
+  function tookLeaveOfConversation() {
+    try {
+      var flag = sessionStorage.getItem(REMOTE_SWITCH_KEY) === "1";
+      if (flag) sessionStorage.removeItem(REMOTE_SWITCH_KEY);
+      return flag;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function rememberedIdentity() {
     try {
       var value = JSON.parse(sessionStorage.getItem(REMOTE_SESSION_KEY) || "null");
@@ -2622,6 +2644,30 @@ window.grokRemoteClient = true;
       } catch (_) { count++; }
     }
     return count;
+  }
+
+  /**
+   * The queue could not follow the user to the conversation they chose. Say
+   * where the text went, calmly, and only when there is text to speak about.
+   *
+   * Deliberately the notice channel, not the error one: nothing failed. And
+   * deliberately silent when nothing was handed back — a queue of pure
+   * bookkeeping needs no sentence, exactly as in reportOutboxFailure.
+   */
+  function reportOutboxHandedBack() {
+    flushPendingAuthoredRecovery();
+    if (!queue.length) return;
+    var count = mournableQueueCount();
+    var handedBack = returnQueuedSendsToComposer(queuedSendTexts());
+    queue = [];
+    saveQueue();
+    if (!count || !handedBack) return;
+    window.dispatchEvent(new MessageEvent("message", {
+      data: {
+        type: "hostNotice",
+        text: "Your unsent message stayed with the conversation you left, and is back in the input here.",
+      },
+    }));
   }
 
   function reportOutboxFailure(text) {
@@ -3408,7 +3454,15 @@ window.grokRemoteClient = true;
     identitySessionConfirmed = false;
     if (!identityTarget) {
       recoverAuthoredFromLiveOutbound();
-      reportOutboxFailure("this tab had no remembered conversation to restore.");
+      // A missing identity has TWO causes and they are not the same news. Losing
+      // a conversation is a failure worth an error. Leaving one — switching
+      // repo, starting a new session, opening another project — is something the
+      // user just did on purpose, and reporting it as "this tab had no
+      // remembered conversation to restore" told the owner his message had
+      // failed when he had simply moved on mid-turn (2026-09-01). The text goes
+      // back to the composer either way; only the sentence differs.
+      if (tookLeaveOfConversation()) reportOutboxHandedBack();
+      else reportOutboxFailure("this tab had no remembered conversation to restore.");
       finishIdentityRestore();
       return;
     }

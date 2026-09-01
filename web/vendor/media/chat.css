@@ -937,6 +937,17 @@ body.rail-resizing * {
     padding: 4px;
     margin: -4px;
   }
+  /* GLYPH size, not the tap target — the tap target was already 36px here and
+     that was never the complaint. The owner, on a phone: "why size is smaller
+     than in files explorer?" Because these were 13px and 12px against the file
+     panel's 20px, so a 36px button held an icon under two thirds its size and
+     read as a different, lesser control.
+     20px is not a new number: `#session-head .rail-action-btn svg` in chat.css
+     has used it all along, and it is exactly what .gfp-icon-button uses. In a
+     36px box it leaves 8px of breathing room each side. */
+  .rail-action-btn svg,
+  .rail-session-actions .rail-action-btn svg,
+  .rail-repo-actions .rail-action-btn svg { width: 20px; height: 20px; }
   .rail-session-repo { font-size: 12px; }
   .rail-menu-item { padding: 11px 10px; }
   .rail-head-btn { padding-block: 12px 8px; }

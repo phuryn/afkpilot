@@ -27,6 +27,24 @@
       : "default"
   );
   const REMOTE_SESSION_KEY = "grok.remote.tabSession:" + REMOTE_STORAGE_SUFFIX;
+  /**
+   * "The user CHOSE to leave that conversation, and has not landed on another."
+   *
+   * The remembered identity is cleared both when a conversation is lost and
+   * when the user deliberately switches repo, starts a new session, or opens a
+   * row in another project. Downstream those two collapse into the same null,
+   * so the relay page reported a deliberate switch as
+   *   "1 queued action was not sent because this tab had no remembered
+   *    conversation to restore"
+   * — telling the owner his message had failed when he had simply moved on,
+   * mid-turn, on a phone (2026-09-01).
+   *
+   * A sibling storage key rather than a field on the identity, because the
+   * whole point is that there IS no identity at that moment. It is cleared the
+   * instant a real one is saved, so it bounds itself on an EVENT rather than a
+   * timer: it can only ever describe the gap between letting go and landing.
+   */
+  const REMOTE_SWITCH_KEY = "grok.remote.tabSwitchedByChoice:" + REMOTE_STORAGE_SUFFIX;
   // Set by the relay's page before this file loads. Only ever says "the host on
   // the other end is one the relay installed", which is why it can skip a
   // compatibility wait rather than change any behaviour.
@@ -79,9 +97,26 @@
     if (!IS_REMOTE) return;
     rememberedRemoteSession = value;
     try {
-      if (value) sessionStorage.setItem(REMOTE_SESSION_KEY, JSON.stringify(value));
-      else sessionStorage.removeItem(REMOTE_SESSION_KEY);
+      if (value) {
+        sessionStorage.setItem(REMOTE_SESSION_KEY, JSON.stringify(value));
+        // Landed. Whatever the user left behind is no longer the current story.
+        sessionStorage.removeItem(REMOTE_SWITCH_KEY);
+      } else sessionStorage.removeItem(REMOTE_SESSION_KEY);
     } catch (_) { /* storage unavailable/private mode */ }
+  }
+
+  /**
+   * Let go of the remembered conversation BECAUSE THE USER ASKED TO.
+   *
+   * Same clearing as `saveRememberedRemoteSession(null)`, plus a note saying so.
+   * Used only where a person acted: the repo chip, New session, and a rail row
+   * or repo in another project. Host-driven clears (a session deleted under us,
+   * a refused restore) deliberately keep the plain form — those really are
+   * losses and should still read as such.
+   */
+  function forgetRememberedSessionByChoice() {
+    saveRememberedRemoteSession(null);
+    try { sessionStorage.setItem(REMOTE_SWITCH_KEY, "1"); } catch (_) { /* private mode */ }
   }
 
   function replaceRemoteTabIdentity() {
@@ -4249,7 +4284,7 @@
         if (!repo.available || repoSwitcherLocked()) return;
         state.repoSwitchPending = true;
         renderRepoChip();
-        saveRememberedRemoteSession(null);
+        forgetRememberedSessionByChoice();
         vscode.postMessage({ type: "selectRepo", cwd: repo.cwd });
         closePopovers();
       };
@@ -6489,7 +6524,7 @@
     // the new conversation (they must differ from previousSessionId).
     const previousSessionId = state.activeSessionId;
     const repoCwd = state.selectedRepoCwd || state.activeRepoCwd || "";
-    saveRememberedRemoteSession(null);
+    forgetRememberedSessionByChoice();
     // Veil before the host-style reset so the click can unhide the welcome.
     // resetForNewSession marks the old nodes pending-clear, and a pending-clear
     // transcript must not grow an empty-state panel on top of it.
@@ -7405,7 +7440,7 @@
       // `cwd` rides along so a session in another repo reopens in ITS checkout —
       // the host resolves sessions by cwd, and omitting it would look the id up
       // under the repo we happen to be in.
-      if (!sameCwd(repo.cwd, state.selectedRepoCwd)) saveRememberedRemoteSession(null);
+      if (!sameCwd(repo.cwd, state.selectedRepoCwd)) forgetRememberedSessionByChoice();
       postResumeSession(s.id, s.cwd || repo.cwd, { claim: true });
     };
   }
@@ -7445,7 +7480,7 @@
       window.__grokRailNewIntent = null;
     }
     renderRepoChip();
-    saveRememberedRemoteSession(null);
+    forgetRememberedSessionByChoice();
     vscode.postMessage({ type: "selectRepo", cwd: repo.cwd });
   }
 

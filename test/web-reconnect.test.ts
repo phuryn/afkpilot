@@ -491,6 +491,10 @@ function makeVeilRuntime(opts?: { remembered?: { id: string; repoCwd: string } |
       function setVoiceTransportReady() {}
       function recoverAuthoredFromLiveOutbound() {}
       function reportOutboxFailure() {}
+      // Added with the deliberate-switch split. This slice is about the VEIL,
+      // so the plain loss path is the one it should take.
+      function reportOutboxHandedBack() {}
+      function tookLeaveOfConversation() { return false; }
       function flushHeldFileRequests() {}
       function failHeldFileRequests() {}
       function rememberedIdentity() { return remembered.value; }
@@ -1162,3 +1166,84 @@ describe("probe replacement resume vs tab token", () => {
   });
 });
 
+
+
+/**
+ * A missing identity has two causes, and they are not the same news.
+ *
+ * Losing a conversation is a failure worth an error banner. LEAVING one —
+ * switching repo, starting a new session, opening another project — is
+ * something the user just did on purpose. Both clear the remembered identity,
+ * so the restore reported the deliberate case as
+ *   "1 queued action was not sent because this tab had no remembered
+ *    conversation to restore. Your unsent message was returned to the input."
+ * The owner saw that mid-turn on a phone after simply switching repo, and
+ * reasonably asked how his message had failed. It had not.
+ *
+ * Tested here rather than in the tab-identity e2e because that suite cannot
+ * force a redial: chat.html's script is an IIFE, so the reconnect that runs the
+ * restore is not reachable from a Playwright page, and `setOffline` leaves an
+ * established WebSocket up. Measured, after two attempts that asserted against
+ * a page where nothing had happened at all.
+ */
+describe("a deliberate switch is not a lost conversation", () => {
+  const switchStart = html.indexOf("function tookLeaveOfConversation()");
+  const switchEnd = html.indexOf("function rememberedIdentity()");
+  const switchSrc = html.slice(switchStart, switchEnd);
+
+  function load(store: Record<string, string>) {
+    const sessionStorage = {
+      getItem: (k: string) => (k in store ? store[k] : null),
+      removeItem: (k: string) => { delete store[k]; },
+    };
+    return new Function(
+      "sessionStorage",
+      "REMOTE_SWITCH_KEY",
+      `${switchSrc}; return tookLeaveOfConversation;`,
+    )(sessionStorage, "mark") as () => boolean;
+  }
+
+  it("reports a deliberate departure when the renderer marked one", () => {
+    const store: Record<string, string> = { mark: "1" };
+    expect(load(store)()).toBe(true);
+  });
+
+  it("consumes the mark, so one switch earns one explanation", () => {
+    const store: Record<string, string> = { mark: "1" };
+    const took = load(store);
+    expect(took()).toBe(true);
+    expect(store.mark).toBeUndefined();
+    // A later restore with no new switch is a different story and must not
+    // borrow this one's calm wording.
+    expect(took()).toBe(false);
+  });
+
+  it("says no when nothing marked a departure — a real loss stays a real loss", () => {
+    expect(load({})()).toBe(false);
+  });
+
+  it("survives storage being unavailable, as every other reader here does", () => {
+    const throwing = new Function(
+      "sessionStorage",
+      "REMOTE_SWITCH_KEY",
+      `${switchSrc}; return tookLeaveOfConversation;`,
+    )({ getItem() { throw new Error("private mode"); }, removeItem() {} }, "mark") as () => boolean;
+    expect(throwing()).toBe(false);
+  });
+
+  it("routes the two causes to different reporters", () => {
+    // The branch itself, pinned in source: the calm reporter for a departure,
+    // the failure banner otherwise. Inverting either arm here is the defect.
+    const branchStart = html.indexOf("if (!identityTarget) {");
+    const branch = html.slice(branchStart, html.indexOf("finishIdentityRestore();", branchStart));
+    expect(branch).toContain("if (tookLeaveOfConversation()) reportOutboxHandedBack();");
+    expect(branch).toContain('else reportOutboxFailure("this tab had no remembered conversation to restore.");');
+    // And the calm one must not use the error channel.
+    const calm = html.slice(
+      html.indexOf("function reportOutboxHandedBack()"),
+      html.indexOf("function reportOutboxFailure("),
+    );
+    expect(calm).toContain('type: "hostNotice"');
+    expect(calm).not.toContain('type: "error"');
+  });
+});
