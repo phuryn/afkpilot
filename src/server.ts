@@ -1346,6 +1346,54 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
     };
   }
 
+  /**
+   * Wake a cloud environment that went to sleep with somebody still there.
+   *
+   * TWO THINGS REACH THIS, and the second is the one that was missing.
+   *
+   * A DROP: the machine paused underneath a reader and its outbound socket
+   * died. Gated on presence, because a tab left open overnight is not a
+   * reason to keep a machine awake and billing.
+   *
+   * A SEND: somebody clicked and the uplink was not there to take it. This
+   * is the case the drop path cannot cover, and it is what the owner hit on
+   * production. Presence LAPSES while a person reads — reading is not
+   * interacting — so by the time he clicked Clone, nothing considered him
+   * present, the drop path had already declined to wake anything, and the
+   * click bounced into silence. A refresh fixed it only because attaching is
+   * a wake trigger and clicking was not.
+   *
+   * A send needs no presence gate: the send IS the presence signal, and a
+   * stronger one than the heartbeat frame.
+   *
+   * Never awaited. A wake takes about a second; the callers are a socket
+   * teardown and a frame that has already been answered.
+   */
+  function wakeSleepingEnvironment(deviceId: string, why: "drop" | "send"): void {
+    if (!environments || !waker) return;
+    // Cheap in-memory guards before the registry lookup: an offline burst of
+    // frames must not become a burst of database reads.
+    if (waker.waking(deviceId)) return;
+    if (hub.uplinkConnected(deviceId)) return;
+    void (async () => {
+      const environment = await environments.find(deviceId).catch(() => null);
+      if (!environment) return;
+      // Re-checked after the await: both can have changed while it ran.
+      if (hub.uplinkConnected(deviceId)) return;
+      if (waker.waking(deviceId)) return;
+      log(`[relay] waking ${deviceId} on ${why}`);
+      // Same reason as wake-on-attach: hold it running long enough for the
+      // host to dial back, or it is suspended again before it can.
+      keepAlive?.noteActivity(deviceId, environment.externalId);
+      const outcome = await waker.wake(environment);
+      if (!outcome.ok) {
+        log(`[relay] wake on ${why} failed for ${deviceId}: ${outcome.kind}`);
+        // Nothing to keep awake, and a hold against a machine that is gone or
+        // over quota is a socket that reconnects forever.
+        keepAlive?.releaseFor(deviceId);
+      }
+    })();
+  }
   async function handleUplink(ws: WebSocket, url: URL): Promise<void> {
     const admit = bufferUntilAdmitted(ws);
     let device: Awaited<ReturnType<DeviceRegistry["verify"]>>;
@@ -1444,23 +1492,8 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       // Gated on PRESENCE, not on a socket being open. A browser tab left open
       // overnight is not a reason to keep a machine awake and billing; a person
       // who was interacting a moment ago is.
-      if (environments && waker && presence?.present(device.deviceId)) {
-        void (async () => {
-          const environment = await environments.find(device.deviceId).catch(() => null);
-          if (!environment) return;
-          if (hub.uplinkConnected(device.deviceId)) return; // it already came back
-          if (waker.waking(device.deviceId)) return;
-          log(`[relay] uplink dropped with someone present; waking ${device.deviceId}`);
-          // Same reason as wake-on-attach: hold it running long enough for the
-          // host to dial back, or it is suspended again before it can. `detach`
-          // released the old hold a moment ago, so this opens a fresh one.
-          keepAlive?.noteActivity(device.deviceId, environment.externalId);
-          const outcome = await waker.wake(environment);
-          if (!outcome.ok) {
-            log(`[relay] wake on drop failed for ${device.deviceId}: ${outcome.kind}`);
-            keepAlive?.releaseFor(device.deviceId);
-          }
-        })();
+      if (presence?.present(device.deviceId)) {
+        wakeSleepingEnvironment(device.deviceId, "drop");
       }
     };
     ws.on("close", detach);
@@ -1698,6 +1731,12 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       }
       const result = hub.fromClient(deviceId, clientId, raw);
       if (result === "offline") {
+        // WAKE ON SEND. The click that found no uplink is the best evidence
+        // there is that somebody wants this machine — better than the presence
+        // heartbeat, which lapses while a person reads. Before this, a click
+        // against a sleeping machine bounced and nothing woke it; only a page
+        // refresh did, because attach was the sole on-demand trigger.
+        wakeSleepingEnvironment(deviceId, "send");
         // Uncapped frames (ready) must still reach fromClient so an offline
         // tabToken is kept. Capped frames only land here if the uplink
         // dropped during increment; UsageStore cannot refund.

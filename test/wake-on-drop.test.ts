@@ -11,6 +11,13 @@
  * The gate is PRESENCE rather than an open socket. A tab left open overnight is
  * not a reason to keep a machine awake and billing; somebody who was
  * interacting a moment ago is.
+ *
+ * WAKE ON SEND is the other half, and it is here because it is the same
+ * mechanism. Presence lapses while a person READS — reading is not
+ * interacting — so the drop path declines to wake, and the next click lands
+ * on a machine nobody is going to start. That is what the owner hit on
+ * production: Clone did nothing, and a refresh fixed it only because
+ * attaching was the sole on-demand wake trigger and clicking was not.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import WebSocket from "ws";
@@ -51,7 +58,15 @@ async function boot() {
     environments,
     presence,
     waker: new WakeCoordinator({
-      wake: async (env) => { woke.push(env.externalId); return { ok: true }; },
+      // Takes a tick, because a provider call does. An instantly-resolving
+      // fake gives the coordinator's in-flight map a one-microtask window and
+      // makes its dedupe untestable — the push records that a CALL was made,
+      // so joiners must not add one.
+      wake: async (env) => {
+        woke.push(env.externalId);
+        await new Promise((r) => setTimeout(r, 15));
+        return { ok: true };
+      },
     }),
     pingIntervalMs: 0,
     log: () => {},
@@ -132,5 +147,78 @@ describe("a machine that sleeps while somebody is there", () => {
     await settle();
 
     expect(woke.length).toBe(first);
+  });
+});
+
+describe("a click that lands on a sleeping machine", () => {
+  /** A browser attached to the device, past the wake-on-attach window. */
+  async function attachedBrowser(deviceId: string) {
+    const ws = new WebSocket(`${wsBase}/client?device=${encodeURIComponent(deviceId)}`);
+    await new Promise<void>((r, j) => { ws.once("open", () => r()); ws.once("error", j); });
+    await settle();
+    woke.length = 0; // forget the attach wake; this suite is about the send
+    return ws;
+  }
+
+  it("wakes the machine, with NOBODY marked present", async () => {
+    // The discriminating case. Presence is deliberately never touched, so the
+    // drop path cannot be what fires — if a wake happens, the send caused it.
+    const d = await linkedCloudDevice();
+    const browser = await attachedBrowser(d.deviceId);
+    d.uplink.close();
+    await settle();
+    expect(woke, "drop must not have woken it").toEqual([]);
+
+    browser.send(JSON.stringify({ type: "removeProjectFolder", cwd: "/tmp/x" }));
+    await settle();
+
+    expect(woke.length).toBe(1);
+    browser.close();
+  });
+
+  it("does not wake an ordinary machine", async () => {
+    // A laptop that closed its lid is not something the relay can start.
+    const issued = await devices.issue("Laptop", MOCK_USER_ID, undefined, {});
+    const uplink = new WebSocket(`${wsBase}/uplink?token=${encodeURIComponent(issued.token)}`);
+    await new Promise<void>((r, j) => { uplink.once("open", () => r()); uplink.once("error", j); });
+    const browser = await attachedBrowser(issued.deviceId);
+    uplink.close();
+    await settle();
+
+    browser.send(JSON.stringify({ type: "removeProjectFolder", cwd: "/tmp/x" }));
+    await settle();
+
+    expect(woke).toEqual([]);
+    browser.close();
+  });
+
+  it("does not stack a wake per frame while one is in flight", async () => {
+    // An offline client can send several frames in a row. That must be one
+    // provider call, not one per click.
+    const d = await linkedCloudDevice();
+    const browser = await attachedBrowser(d.deviceId);
+    d.uplink.close();
+    await settle();
+
+    for (let i = 0; i < 5; i++) {
+      browser.send(JSON.stringify({ type: "removeProjectFolder", cwd: `/tmp/x${i}` }));
+    }
+    await settle();
+
+    expect(woke.length).toBe(1);
+    browser.close();
+  });
+
+  it("does not wake while the uplink is healthy", async () => {
+    // The control. A send that can be delivered is not evidence of anything
+    // being asleep, and waking on it would bill for every message.
+    const d = await linkedCloudDevice();
+    const browser = await attachedBrowser(d.deviceId);
+
+    browser.send(JSON.stringify({ type: "removeProjectFolder", cwd: "/tmp/x" }));
+    await settle();
+
+    expect(woke).toEqual([]);
+    browser.close();
   });
 });
