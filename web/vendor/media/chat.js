@@ -5782,6 +5782,50 @@
     if (live) delete state.railCollapsed[live];
   }
 
+  /**
+   * Carry the pointer's hover across a wholesale rebuild.
+   *
+   * `renderRail()` empties the rail and builds it again, and one boot does that
+   * a dozen times or more as each project's rows arrive. The browser recomputes
+   * :hover only AFTER the lifecycle that paints the new nodes, so the row under
+   * a cursor that never moved paints WITHOUT its hover fill and without its
+   * action buttons for one frame, every time — which is the blinking the owner
+   * saw while the rail loaded. .rail-rebuilding only silenced the fade; the
+   * frame at the wrong state was still painted.
+   *
+   * So find the row the pointer is over in the same task that builds it and mark
+   * it, before anything is painted. The mark is dropped on the next real pointer
+   * move, which is exactly when :hover becomes authoritative again.
+   */
+  let railPointerXY = null;
+  let railHoverHeld = null;
+
+  function railDropHoverHold() {
+    if (railHoverHeld) railHoverHeld.classList.remove("rail-hover-hold");
+    railHoverHeld = null;
+  }
+
+  function railHoldHoverAfterRebuild() {
+    railDropHoverHold();
+    if (!railPointerXY || typeof document.elementFromPoint !== "function") return;
+    const at = document.elementFromPoint(railPointerXY.x, railPointerXY.y);
+    const row = at && at.closest ? at.closest(".rail-session, .rail-repo-head") : null;
+    if (!row) return;
+    row.classList.add("rail-hover-hold");
+    railHoverHeld = row;
+  }
+
+  document.addEventListener("pointermove", (e) => {
+    railPointerXY = { x: e.clientX, y: e.clientY };
+    railDropHoverHold();
+  }, true);
+  // Leaving the window (or a touch ending) means there is no pointer to carry.
+  // documentElement, and NOT capturing: pointerleave does not bubble, but a
+  // capturing listener on document would still see the copy fired at every row
+  // the pointer crosses, and switch the carry off on the first move.
+  document.documentElement.addEventListener("pointerleave", () => { railPointerXY = null; railDropHoverHold(); });
+  document.addEventListener("pointercancel", () => { railPointerXY = null; railDropHoverHold(); }, true);
+
   function renderRail() {
     const root = rail();
     if (!root) return;
@@ -5966,6 +6010,7 @@
     // anchor button, and re-opening it mid-catalog-refresh is not worth the
     // bookkeeping. Closing avoids a fixed popover stranded over a gone row.
     if (railColorPickerEl) closeRailColorPicker();
+    railHoldHoverAfterRebuild();
     // Let the browser paint this rebuild with transitions off, then restore them
     // so an ordinary hover still fades. rAF (not a timer) so it lands after the
     // paint rather than at an arbitrary later moment.
@@ -6907,7 +6952,7 @@
     const add = document.createElement("button");
     add.type = "button";
     add.className = "rail-action-btn";
-    add.innerHTML = ICON.plus;
+    add.innerHTML = ICON.squarePen;
     add.title = selected ? "New session here" : "Switch to this project and start a new session";
     // Deliberately NOT gated on repoSwitcherLocked(). Starting a conversation is
     // the one thing that should always be available, and a lock that disables it

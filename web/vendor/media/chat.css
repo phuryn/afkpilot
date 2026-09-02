@@ -540,7 +540,14 @@ body.rail-resizing * {
   border-radius: 6px;
   cursor: pointer;
 }
+
+/* Carried hover — see railHoldHoverAfterRebuild in chat.js. The rail
+   rebuilds wholesale and a boot sends a burst of frames that each trigger one;
+   the browser recomputes :hover AFTER the lifecycle that paints the new nodes,
+   so the row under a stationary cursor paints un-hovered for exactly one frame,
+   once per frame that lands. This class is what the row wears for that frame. */
 .rail-repo-head:hover,
+.rail-repo-head.rail-hover-hold,
 .rail-repo-head:focus-within { background: var(--rail-hover-bg); }
 .rail-repo-head:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .rail-twisty,
@@ -632,7 +639,10 @@ body.rail-resizing * {
     transparent 0%,
     var(--rail-hover-bg, var(--vscode-list-hoverBackground)) 28%
   );
-  padding-left: 14px;
+  /* 28px, not 14: the scrim's fade runs from 0 to 28% of its own width, so a
+     wider element is what makes the trailing label dissolve rather than stop.
+     At 14px the gradient had ~18px to work in and read as an edge. */
+  padding-left: 28px;
   border-radius: 4px;
 }
 /* The HEAD, not the whole group. `.rail-repo` contains the session list, so
@@ -640,8 +650,10 @@ body.rail-resizing * {
    of controls lighting up for one pointer, and the ones under the cursor were
    not the ones that appeared. */
 .rail-repo-head:hover .rail-repo-actions,
+.rail-repo-head.rail-hover-hold .rail-repo-actions,
 .rail-repo-head:focus-within .rail-repo-actions,
 .rail-session:hover .rail-session-actions,
+.rail-session.rail-hover-hold .rail-session-actions,
 .rail-session:focus-within .rail-session-actions { opacity: 1; pointer-events: auto; }
 
 /* The rail rebuilds itself wholesale, and one session load fires several of
@@ -706,6 +718,10 @@ body.rail-resizing * {
   font-size: 12.5px;
   cursor: pointer;
   color: var(--vscode-button-secondaryForeground, var(--vscode-foreground, CanvasText));
+  /* The var stays HERE, and the twin in projects-rail.css deliberately drops it:
+     the desktop shell and the web client both give this variable a visible
+     value, while VS Code's default theme sets it fully transparent. The note
+     over there says the rest. */
   background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.2));
 }
 .rail-add-project-wide:hover {
@@ -793,7 +809,8 @@ body.desk:not(.desk-with-ft) .rail-action-btn { width: 24px; height: 24px; }
   font: inherit;
 }
 .rail-session { --provider-badge-ring: var(--rail-bg, var(--vscode-sideBar-background)); }
-.rail-session:hover { color: var(--vscode-foreground); background: var(--rail-hover-bg); --provider-badge-ring: var(--rail-hover-bg); }
+.rail-session:hover,
+.rail-session.rail-hover-hold { color: var(--vscode-foreground); background: var(--rail-hover-bg); --provider-badge-ring: var(--rail-hover-bg); }
 .rail-session.active { color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground)); background: var(--vscode-list-activeSelectionBackground); --provider-badge-ring: var(--vscode-list-activeSelectionBackground); }
 .rail-session .history-row-dot { flex: 0 0 auto; width: 7px; height: 7px; }
 .rail-session-name {
