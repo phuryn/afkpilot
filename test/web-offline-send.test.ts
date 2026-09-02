@@ -26,6 +26,7 @@ const {
   outboxAfterAck,
   shouldReenterIdentityOnDeviceOffline,
   liveSendDisposition,
+  isIdentityIndependentRequest,
   isQueueReleaseMessage,
   queueReleaseText,
   legacyOutboxAuthoredText,
@@ -64,6 +65,7 @@ const {
     outboxAfterAck,
     shouldReenterIdentityOnDeviceOffline,
     liveSendDisposition,
+    isIdentityIndependentRequest,
     isQueueReleaseMessage,
     queueReleaseText,
     legacyOutboxAuthoredText,
@@ -107,8 +109,10 @@ const {
     deviceOffline?: boolean;
     offlineHold?: boolean;
     isRestoreMessage?: boolean;
+    identityIndependent?: boolean;
     changesIdentity?: boolean;
   }) => "send" | "outbox" | "abandon-and-send";
+  isIdentityIndependentRequest: (message: unknown) => boolean;
   isQueueReleaseMessage: (message: unknown) => boolean;
   queueReleaseText: (message: unknown) => string;
   legacyOutboxAuthoredText: (message: unknown) => string;
@@ -331,6 +335,115 @@ describe("offline live-send hold", () => {
       isRestoreMessage: false,
       changesIdentity: true,
     })).toBe("abandon-and-send");
+  });
+
+  it("sends a repo preview while remembered identity still waits for sessions", () => {
+    const device = "cloud-device";
+    const sessionStorage = new Map<string, string>();
+    sessionStorage.set(`grok.remote.tabSession:${device}`, JSON.stringify({
+      id: "remembered-session",
+      cwd: "/work/alpha",
+      repoCwd: "/work/alpha",
+    }));
+    const remembered = JSON.parse(sessionStorage.get(`grok.remote.tabSession:${device}`) || "null");
+    let identityRestoreComplete = !remembered;
+    let previewInFlight = false;
+    let previewAnswered = false;
+    const sent: string[] = [];
+    const visibleVerdicts: string[] = [];
+    const socket = { send: (raw: string) => sent.push(raw) };
+
+    function postMessage(message: unknown): boolean {
+      const disposition = liveSendDisposition({
+        socketOpen: true,
+        identityRestoreComplete,
+        deviceOffline: false,
+        offlineHold: false,
+        isRestoreMessage: false,
+        identityIndependent: isIdentityIndependentRequest(message),
+        changesIdentity: false,
+      });
+      if (disposition !== "send") return false;
+      socket.send(JSON.stringify(message));
+      return true;
+    }
+
+    function receive(frame: { type: string; [key: string]: unknown }): void {
+      if (frame.type === "repos") {
+        // This is what the rail posts synchronously while handling `repos`.
+        previewInFlight = postMessage({
+          type: "listRepoSessions",
+          cwd: "/work/beta",
+          limit: 4,
+        });
+      } else if (frame.type === "repoSessions") {
+        previewAnswered = true;
+        previewInFlight = false;
+      } else if (frame.type === "sessions" && frame.activeId === remembered.id) {
+        identityRestoreComplete = true;
+      }
+    }
+
+    receive({ type: "repos", selectedCwd: "/work/alpha" });
+    expect(identityRestoreComplete).toBe(false);
+    expect(sent.map((raw) => JSON.parse(raw))).toContainEqual({
+      type: "listRepoSessions",
+      cwd: "/work/beta",
+      limit: 4,
+    });
+    expect(previewInFlight).toBe(true);
+
+    // The preview may answer before the ordinary `sessions` identity proof.
+    receive({ type: "repoSessions", cwd: "/work/beta", entries: [], dots: {}, total: 0 });
+    receive({ type: "sessions", activeId: "remembered-session" });
+    if (previewInFlight && !previewAnswered) {
+      visibleVerdicts.push("Sessions need a newer Grok Build");
+    }
+    expect(identityRestoreComplete).toBe(true);
+    expect(visibleVerdicts).not.toContain("Sessions need a newer Grok Build");
+
+    // Pin the real shim wiring as well as the decision helper exercised above.
+    expect(sendPath).toContain("identityIndependent: isIdentityIndependentRequest(m)");
+    expect(sendPath).toContain("if (isIdentityIndependentRequest(m)) return true");
+  });
+
+  it("returns, shows, and logs an explicit repo-preview transport refusal", () => {
+    const persistSource = html.slice(
+      html.indexOf("function persistOutboxMessage(raw, message, authored)"),
+      html.indexOf("var liveOutbound = []"),
+    );
+    const warnings: string[] = [];
+    let notices = 0;
+    const persist = new Function(
+      "outboxDispositionForMessage",
+      "isUserControlAction",
+      "isIdentityIndependentRequest",
+      "console",
+      "announceControlActionNotSent",
+      `${persistSource}; return persistOutboxMessage;`,
+    )(
+      () => "drop",
+      () => false,
+      isIdentityIndependentRequest,
+      { warn: (text: string) => warnings.push(text) },
+      () => { notices += 1; },
+    ) as (raw: string, message: unknown) => boolean;
+
+    expect(persist(
+      JSON.stringify({ type: "listRepoSessions", cwd: "/work/beta", limit: 4 }),
+      { type: "listRepoSessions", cwd: "/work/beta", limit: 4 },
+    )).toBe(false);
+    // NO toast. A repo preview is background traffic the user never asked
+    // for; the rail shows its own per-project failure with Retry. Telling
+    // somebody "that didn't reach your machine" about a request they did not
+    // make is the same untruth as the version verdict this change removes,
+    // so the notice stays scoped to things a person actually clicked.
+    expect(notices).toBe(0);
+    expect(warnings).toEqual([
+      "[transport] refused listRepoSessions before the socket: reconnect in progress",
+    ]);
+    expect(sendPath).toContain('console.warn("[transport] refused " + m.type + " during socket write", err)');
+    expect(sendPath).toContain("return persistOutboxMessage(s, m, authored)");
   });
 
   it("holds the refused send and re-enters restore before swallowing the banner", () => {

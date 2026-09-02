@@ -538,10 +538,8 @@
     appUpdate: null,
     repoPreviews: {},
     repoPreviewsAsked: {},
+    repoPreviewErrors: {},
     repoPreviewsSupported: false,
-    // Latched when the probe goes unanswered past its deadline — the only way to
-    // learn that a host predates the frame, since silence is all it can offer.
-    repoPreviewsUnsupported: false,
     // What the connected host says it can do (initialState.capabilities). Empty
     // until it says, so a control that needs one is withheld rather than offered
     // and then refused.
@@ -4671,7 +4669,7 @@
 
   let railEl = null;
   let railResolved = false;
-  let railProbeTimer = null;
+  const railProbeTimers = {};
   // Monotonic renderer-local counter for railTransition.token. Not a grok
   // session id — never sent to the host; only used so superseded timers and
   // late frames cannot complete a transition that a later click replaced.
@@ -5711,35 +5709,73 @@
    *  an old host would be sent one dead request per repo on every catalog push. */
   function requestRailPreviews() {
     if (!rail() || !state.reposKnown) return;
+    // Before capability proof there is exactly one probe. If it failed, only
+    // the visible Retry may send it again; catalog repaints are not retries.
+    if (!state.repoPreviewsSupported && Object.keys(state.repoPreviewErrors).length) return;
     const wanted = railRepos().filter(
-      (r) => r.available && !sameCwd(r.cwd, state.selectedRepoCwd) && !state.repoPreviews[cwdKey(r.cwd)],
+      (r) => r.available
+        && !sameCwd(r.cwd, state.selectedRepoCwd)
+        && !state.repoPreviews[cwdKey(r.cwd)]
+        && !state.repoPreviewErrors[cwdKey(r.cwd)],
     );
     if (!wanted.length) return;
     const ask = state.repoPreviewsSupported ? wanted : wanted.slice(0, 1);
-    for (const r of ask) {
-      const key = cwdKey(r.cwd);
-      if (state.repoPreviewsAsked[key]) continue;
-      state.repoPreviewsAsked[key] = true;
-      vscode.postMessage({ type: "listRepoSessions", cwd: r.cwd, limit: RAIL_EXPANDED });
-      armRailProbeDeadline();
+    for (const r of ask) requestRailPreview(r);
+  }
+
+  function requestRailPreview(repo) {
+    const key = cwdKey(repo.cwd);
+    if (state.repoPreviewsAsked[key]) return;
+    let accepted;
+    try {
+      accepted = vscode.postMessage({ type: "listRepoSessions", cwd: repo.cwd, limit: RAIL_EXPANDED });
+    } catch (err) {
+      failRailPreview(repo.cwd, "transport-refused");
+      return;
+    }
+    if (accepted === false) {
+      failRailPreview(repo.cwd, "transport-refused");
+      return;
+    }
+    state.repoPreviewsAsked[key] = true;
+    armRailProbeDeadline(repo.cwd);
+    if (accepted && typeof accepted.then === "function") {
+      accepted.then((sent) => {
+        if (sent === false && state.repoPreviewsAsked[key]) failRailPreview(repo.cwd, "transport-refused");
+      }, () => {
+        if (state.repoPreviewsAsked[key]) failRailPreview(repo.cwd, "transport-refused");
+      });
     }
   }
 
-  /** A host that predates `listRepoSessions` answers with silence, so the only
-   *  way to tell "still reading the session store" from "will never reply" is a
-   *  deadline. Armed once, on the first probe; cancelled by the first answer. */
-  function armRailProbeDeadline() {
-    if (railProbeTimer || state.repoPreviewsSupported || state.repoPreviewsUnsupported) return;
+  function clearRailProbeDeadline(cwd) {
+    const key = cwdKey(cwd);
+    if (!railProbeTimers[key]) return;
+    clearTimeout(railProbeTimers[key]);
+    delete railProbeTimers[key];
+  }
+
+  function failRailPreview(cwd, reason) {
+    const key = cwdKey(cwd);
+    clearRailProbeDeadline(cwd);
+    delete state.repoPreviewsAsked[key];
+    state.repoPreviewErrors[key] = reason || "no-answer";
+    console.warn(`[rail] listRepoSessions failed: ${state.repoPreviewErrors[key]}`);
+    renderRail();
+  }
+
+  /** Every accepted request owns a deadline. Expiry is a load failure, never a
+   *  version verdict, and releases the in-flight slot for the visible Retry. */
+  function armRailProbeDeadline(cwd) {
+    const key = cwdKey(cwd);
+    clearRailProbeDeadline(cwd);
     const ms = Number(window.__grokRailProbeTimeoutMs) > 0
       ? Number(window.__grokRailProbeTimeoutMs)
       : RAIL_PROBE_TIMEOUT_MS;
-    railProbeTimer = setTimeout(() => {
-      railProbeTimer = null;
-      if (state.repoPreviewsSupported) return;
-      // A verdict, not a fact: nothing answered in time. Said out loud so the
-      // rail has something to show, and dropped on the next reconnect.
-      state.repoPreviewsUnsupported = true;
-      renderRail();
+    railProbeTimers[key] = setTimeout(() => {
+      delete railProbeTimers[key];
+      if (!state.repoPreviewsAsked[key]) return;
+      failRailPreview(cwd, "deadline-expired");
     }, ms);
   }
 
@@ -5748,21 +5784,12 @@
    *  but that is a correction owed when the conversation ARRIVES, not a reason to
    *  refuse the fold forever. Keyed on the repo changing, so re-collapsing the
    *  project you are working in sticks until you go somewhere else. */
-  /**
-   * Forget an unanswered capability probe.
-   *
-   * `repoPreviewsUnsupported` is inferred from silence, so it is only ever as
-   * good as the moment it was measured. A reconnect may be a different host —
-   * or the same one, no longer busy — and without this the page carried
-   * "Sessions need a newer Grok Build" about a current host for as long as it
-   * stayed open (owner, on a cloud machine that had just run a CLI sign-out,
-   * 2026-08-31).
-   */
+  /** Reconnect abandons every old in-flight request; the new socket may retry. */
   function forgetRailProbeVerdict() {
-    if (state.repoPreviewsSupported) return;
-    if (railProbeTimer) { clearTimeout(railProbeTimer); railProbeTimer = null; }
-    state.repoPreviewsUnsupported = false;
+    for (const timer of Object.values(railProbeTimers)) clearTimeout(timer);
+    for (const key of Object.keys(railProbeTimers)) delete railProbeTimers[key];
     state.repoPreviewsAsked = {};
+    state.repoPreviewErrors = {};
   }
 
   function railFollowLiveRepo() {
@@ -7139,16 +7166,20 @@
         appendRailSessionSlice(body, entries, key, (s) => renderRailSessionRow(s, repo));
         return body;
       }
-      // No rows yet. Two very different reasons, and saying "Loading…" for both
-      // is the wrong answer: a host too old to answer `listRepoSessions` will
-      // NEVER answer, and the probe is sent for one repo only — so every other
-      // repo would sit on a spinner forever with nothing coming.
-      if (state.repoPreviewsUnsupported) {
-        const note = railNote("Sessions need a newer Grok Build");
-        note.title =
-          "Grok Build on your computer — the extension or the desktop app — is older " +
-          "than this page, so it can't list another project's sessions without " +
-          "switching to it. Click the project name to open it, or update it.";
+      const previewError = state.repoPreviewErrors[key];
+      if (previewError) {
+        const note = railNote("Couldn't load these conversations. ");
+        const retry = document.createElement("button");
+        retry.type = "button";
+        retry.className = "rail-note-retry";
+        retry.textContent = "Retry";
+        retry.onclick = (e) => {
+          e.stopPropagation();
+          delete state.repoPreviewErrors[key];
+          renderRail();
+          requestRailPreview(repo);
+        };
+        note.appendChild(retry);
         body.appendChild(note);
       } else {
         body.appendChild(railNote("Loading…"));
@@ -11146,28 +11177,6 @@
     el.textContent = "Context from previous session applied";
     appendTranscriptChild(el);
     scrollToBottom();
-  }
-
-  /**
-   * An outdated host cannot describe its own age, so the client says it.
-   *
-   * Observed 2026-08-31: an old desktop answered a new session with "That
-   * project folder is no longer open on the desktop" while the rail, on the
-   * same screen, said every project needed a newer Grok Build. Both were the
-   * same fact -- the host is behind -- and only one of them said so. The host
-   * that produced the sentence is the one that cannot be taught a better one,
-   * so the newest thing in the loop supplies the missing half.
-   *
-   * Matched on the literal because an old host offers no other signal; the
-   * sentence is APPENDED, never replaced, so if the folder really is closed
-   * the original answer still stands.
-   */
-  function errorTextForHostAge(text) {
-    if (!state.repoPreviewsUnsupported) return text;
-    if (!/no longer open on the desktop|archived, so it is not available from here/.test(text)) return text;
-    return text
-      + " That machine is also running an older Grok Build, which can report projects"
-      + " incorrectly — updating it there is worth trying first.";
   }
 
   function addError(text, code) {
@@ -17157,7 +17166,7 @@
           renderQueuedBlocks();
           updateSendButton();
         }
-        addError(errorTextForHostAge(msg.text), msg.code);
+        addError(msg.text, msg.code);
         break;
       case "hostNotice":
         addPlanNotice(msg.text);
@@ -17316,15 +17325,23 @@
         // Proof this host answers per-repo previews — until now the rail has
         // only probed with a single request.
         const known = state.repoPreviewsSupported;
+        const key = cwdKey(msg.cwd);
         state.repoPreviewsSupported = true;
-        state.repoPreviewsUnsupported = false;
-        if (railProbeTimer) { clearTimeout(railProbeTimer); railProbeTimer = null; }
-        state.repoPreviews[cwdKey(msg.cwd)] = {
-          entries: uniqueSessionRows(msg.entries),
-          total: typeof msg.total === "number" ? msg.total : (msg.entries || []).length,
-        };
+        clearRailProbeDeadline(msg.cwd);
+        delete state.repoPreviewsAsked[key];
+        if (msg.error) {
+          delete state.repoPreviews[key];
+          state.repoPreviewErrors[key] = msg.error;
+          console.warn(`[rail] listRepoSessions host refusal: ${msg.error}`);
+        } else {
+          delete state.repoPreviewErrors[key];
+          state.repoPreviews[key] = {
+            entries: uniqueSessionRows(msg.entries),
+            total: typeof msg.total === "number" ? msg.total : (msg.entries || []).length,
+          };
+        }
         state.dots = Object.assign({}, state.dots, msg.dots || {});
-        if (settlePendingRename(state.repoPreviews[cwdKey(msg.cwd)].entries)) {
+        if (!msg.error && settlePendingRename(state.repoPreviews[key].entries)) {
           renderSessionName();
           renderSessionHead();
         }
@@ -17357,7 +17374,6 @@
               entries: state.railSelectedRows.slice(0, RAIL_EXPANDED),
               total: state.railSelectedRows.length,
             };
-            state.repoPreviewsAsked[cwdKey(wasSelected)] = true;
           }
           // The list for the new repo has not arrived yet — see railRowsFor.
           state.railSessionsStale = true;

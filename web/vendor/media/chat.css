@@ -859,6 +859,8 @@ body.desk:not(.desk-with-ft) .rail-action-btn { width: 24px; height: 24px; }
   opacity: 1;
 }
 .rail-note { padding: 4px 7px 4px 16px; color: var(--vscode-descriptionForeground); font-size: 12px; font-style: italic; }
+.rail-note-retry { padding: 0; border: 0; background: none; color: var(--vscode-textLink-foreground); font: inherit; font-style: normal; cursor: pointer; }
+.rail-note-retry:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
 
 /* Overflow menus are body-fixed: the rail is overflow:auto and would clip them. */
 .rail-menu {

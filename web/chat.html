@@ -1031,9 +1031,16 @@ window.grokRemoteClient = true;
   function liveSendDisposition(opts) {
     if (!opts || !opts.socketOpen) return "outbox";
     if (opts.isRestoreMessage) return "send";
+    // This is transport ordering, not authorization. A repo preview names its
+    // own cwd and does not consume the tab's restoring session identity; the
+    // host still applies the ordinary remote-policy gate when it arrives.
+    if (opts.identityIndependent && !opts.deviceOffline && !opts.offlineHold) return "send";
     if (opts.identityRestoreComplete && !opts.deviceOffline && !opts.offlineHold) return "send";
     if (opts.changesIdentity) return "abandon-and-send";
     return "outbox";
+  }
+  function isIdentityIndependentRequest(message) {
+    return !!(message && message.type === "listRepoSessions");
   }
   function isQueueReleaseMessage(message) {
     // The only frames that may be held and flushed later. Correlated
@@ -1464,19 +1471,30 @@ window.grokRemoteClient = true;
   }
   function persistOutboxMessage(raw, message, authored) {
     if (outboxDispositionForMessage(message, authored) !== "persist") {
-      // A control action dropped here never reached the socket at all.
+      // Both kinds need an explicit refusal so the caller can react: chat.js
+      // reads `false` to release a repo preview's in-flight slot and show its
+      // Retry. What differs is who is TOLD — see below.
+      if (isUserControlAction(message) || isIdentityIndependentRequest(message)) {
+        console.warn("[transport] refused " + message.type + " before the socket: reconnect in progress");
+      }
+      // The toast is for something a PERSON just clicked. A repo preview is
+      // background traffic: the rail already shows a per-project failure with
+      // its own Retry, and telling somebody "that didn't reach your machine"
+      // about a request they never made is the same class of untruth as the
+      // version verdict this change exists to remove.
       if (isUserControlAction(message)) announceControlActionNotSent();
       if (authored) {
         authoredDrafts = authoredStoreAfterPersist(authoredDrafts, authored);
         saveAuthoredDrafts();
         recoverAuthoredTexts([authored]);
       }
-      return;
+      return false;
     }
     var next = outboxAfterPersist(queue, raw, message);
-    if (next === queue) return;
+    if (next === queue) return true;
     queue = next;
     saveQueue();
+    return true;
   }
   var liveOutbound = [];
   function rememberLiveOutbound(raw, message, authored) {
@@ -4403,6 +4421,7 @@ window.grokRemoteClient = true;
           deviceOffline: deviceOffline,
           offlineHold: !!offlineHold,
           isRestoreMessage: restoreMsg,
+          identityIndependent: isIdentityIndependentRequest(m),
           changesIdentity: explicitlyChangesIdentity(m),
         });
         if (disposition === "send") {
@@ -4413,7 +4432,16 @@ window.grokRemoteClient = true;
           if (m && (m.type === "resumeSession" || m.type === "selectRepo")) {
             ensureHostHasTabToken(ws);
           }
-          ws.send(s);
+          try {
+            ws.send(s);
+          } catch (err) {
+            if (isIdentityIndependentRequest(m)) {
+              console.warn("[transport] refused " + m.type + " during socket write", err);
+              // Same reason as above: the rail owns this failure, not a toast.
+              return false;
+            }
+            throw err;
+          }
           if (!restoreMsg && (isQueueReleaseMessage(m) || authored)) {
             rememberLiveOutbound(s, m, authored);
             if (authored) persistInFlightAuthored(authored);
@@ -4422,6 +4450,7 @@ window.grokRemoteClient = true;
             armIdentityFailTimer();
             notePendingResumeReplay();
           }
+          if (isIdentityIndependentRequest(m)) return true;
         } else if (disposition === "abandon-and-send") {
           abandonIdentityRestore("you chose a different repository or conversation.");
           if (m && (m.type === "resumeSession" || m.type === "selectRepo")) {
@@ -4434,7 +4463,7 @@ window.grokRemoteClient = true;
           if (isReadOnlyFileRequest(m) && !identityRestoreComplete) {
             holdReadOnlyFileRequest(s, m);
           } else {
-            persistOutboxMessage(s, m, authored);
+            return persistOutboxMessage(s, m, authored);
           }
         }
       },
