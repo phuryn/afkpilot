@@ -207,6 +207,14 @@ let current = 0;
 let behind = 0;
 let failed = 0;
 let skipped = 0;
+// Unclaimed stock carrying a stale BOOT SCRIPT. Its own bucket on purpose:
+// `behind` means a stale host and is what drives the post-force note about
+// restarts, which never happen here — but counting these as `skipped` said
+// "not in scope" about the machines this pass exists to fix, and, because the
+// re-run hint keys off `behind`, an estate of nothing but stale pool stock
+// surveyed as "0 behind" and offered no next step. The next customer then
+// claims a machine still carrying the old launch path.
+let poolStale = 0;
 
 /**
  * How many machines to work on at once.
@@ -292,12 +300,13 @@ async function handle(sprite) {
         )).output || "";
         const ok = (r.match(/NEW=(\S+)/)?.[1] ?? "") === bootHash;
         if (!ok) failed++;
+        poolStale++;
         return `  ${sprite.name}  [${sprite.state}]  ` +
           (ok ? "unclaimed — boot script replaced, ready for its claim"
               : "unclaimed — COULD NOT REPLACE boot script");
       }
       if (bootStale && !APPLY && !claimed) {
-        skipped++;
+        poolStale++;
         return `  ${sprite.name}  [${sprite.state}]  unclaimed — would replace its stale boot script`;
       }
       skipped++;
@@ -454,6 +463,9 @@ for (const line of lines) console.log(line);
 console.log(
   `\n${APPLY ? (FORCE_HOST ? "forced" : "armed") : "surveyed"}: ${sprites.length} machines · ` +
   `${current} already current · ${behind} behind` +
+  (poolStale
+    ? ` · ${poolStale} pool ${poolStale === 1 ? "machine" : "machines"} with a stale boot script`
+    : "") +
   (skipped ? ` · ${skipped} not in scope` : "") +
   (APPLY ? ` · ${failed} ${FORCE_HOST ? "failed" : "could not be armed"}` : ""),
 );
@@ -469,6 +481,10 @@ if (APPLY && behind > 0) {
     "confirm they landed.",
   );
 }
-if (!APPLY && behind > 0) {
-  console.log("Re-run with --apply to arm them.");
+if (!APPLY && (behind > 0 || poolStale > 0)) {
+  console.log(
+    behind > 0
+      ? "Re-run with --apply to arm them."
+      : "Re-run with --apply to replace those boot scripts before they are claimed.",
+  );
 }
