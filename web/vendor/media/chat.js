@@ -6150,6 +6150,23 @@
     };
   }
 
+  /**
+   * May this surface put a project away?
+   *
+   * NOT canAddProjectFolder(), and the difference is the whole bug. That helper
+   * used to mean "the native picker is here" — false on every remote, so Hide
+   * never drew there and gate and action agreed. Then create and clone shipped
+   * as remote-capable ways IN, the helper started answering true on a remote,
+   * and Hide came with it: drawn, posted, and dropped by the host's policy
+   * without a word. The owner found it on a cloud machine.
+   *
+   * Its own capability now, advertised only where the action can be honoured.
+   */
+  function canRemoveProjectFolder() {
+    const caps = state.hostCaps || {};
+    return caps.removeProjectFolder === true;
+  }
+
   function canAddProjectFolder() {
     const caps = addProjectCaps();
     return caps.canImport || caps.canCreate || caps.canClone;
@@ -7038,13 +7055,27 @@
       // has no business closing folders on the machine it is borrowing. Same
       // capability as the + that adds them: a host that can open a folder can
       // close one, and one that cannot never grows either control.
-      ...(canAddProjectFolder() ? [{
+      ...(canRemoveProjectFolder() ? [{
         label: "Hide project",
         icon: ICON.archive,
         title:
           "Take this project out of the list. Nothing is deleted — the folder " +
           "stays on disk, and + adds it back.",
-        onSelect: () => vscode.postMessage({ type: "removeProjectFolder", cwd: repo.cwd }),
+        // Confirmed, like every other rail act that reaches other surfaces. The
+        // VS Code rail has always asked; this one posted bare, so one gesture was
+        // guarded on one surface and not the other. It also takes the row off
+        // every linked device at once, which is worth saying out loud.
+        onSelect: () => {
+          const repoLabel = repo.label || cwdLeaf(repo.cwd);
+          uiConfirm({
+            title: `Hide “${repoLabel}”?`,
+            body: `Takes this project out of the list on every linked device:\n${repo.cwd}`
+              + "\n\nNothing is deleted — the folder stays on disk, and Add project brings it back.",
+            confirmLabel: "Hide",
+          }).then((ok) => {
+            if (ok) vscode.postMessage({ type: "removeProjectFolder", cwd: repo.cwd });
+          });
+        },
       }, null] : []),
       {
         label: "Clear all history",
