@@ -2,9 +2,9 @@
   "version": 1,
   "source": {
     "repository": "grok-build-vscode",
-    "revision": "b6e00e690c583aac7eefa44570deba41a8c261f3",
+    "revision": "a899561c948d7957a7187e3b52d43a83d02cea76",
     "appVersion": "4.1.1",
-    "filesMatchRevision": false
+    "filesMatchRevision": true
   },
   "artifacts": [
     {
