@@ -1175,7 +1175,7 @@ async function openMeterClient(
   return { client, inbox };
 }
 
-const DEVICE_OFFLINE = /Device offline — VS Code isn't connected to the relay/;
+const DEVICE_OFFLINE = /Device offline — that machine isn't connected to the relay/;
 
 describe("free-tier meter charges only delivered messages", () => {
   it("an offline send does not increment; an online send still does", async () => {

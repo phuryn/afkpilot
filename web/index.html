@@ -1814,11 +1814,12 @@
         start.className = "btn btn-primary device-start is-disabled";
         start.setAttribute("aria-disabled", "true");
         // A hosted machine that cannot be woken is a different problem from a
-        // laptop that is switched off, and pointing someone at VS Code they
-        // never installed would be nonsense.
+        // laptop that is switched off, and pointing someone at an editor they
+        // never installed would be nonsense — the host may be any editor that
+        // takes the extension, or Grok Build Desktop.
         start.title = isCloud
           ? "Couldn't start this environment. Try again."
-          : "Offline — open VS Code on that machine to reconnect";
+          : "Offline — open Grok Build on that machine to reconnect";
         start.textContent = "Start remote session";
         body.appendChild(start);
       }

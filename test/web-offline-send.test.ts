@@ -180,7 +180,7 @@ const sendPath = html.slice(
 
 const DEVICE_OFFLINE = {
   type: "error",
-  text: "Device offline — VS Code isn't connected to the relay.",
+  text: "Device offline — that machine isn't connected to the relay.",
 };
 
 function sendRaw(text: string, submissionId: string): string {
@@ -223,7 +223,7 @@ describe("offline live-send hold", () => {
   it("matches the relay's fixed Device offline prefix and nothing else", () => {
     expect(isDeviceOfflineError({
       type: "error",
-      text: "Device offline — VS Code isn't connected to the relay.",
+      text: "Device offline — that machine isn't connected to the relay.",
     })).toBe(true);
     expect(isDeviceOfflineError({ type: "error", text: "Device offline" })).toBe(true);
     expect(isDeviceOfflineError({ type: "error", text: "Free plan limit reached (20 messages this week)." })).toBe(false);

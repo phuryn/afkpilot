@@ -308,13 +308,19 @@ try {
     assert.equal(await building.locator(".device-remove").count(), 0,
       "a building row is still a cloud row: no ✕");
 
-    // 8b. An ordinary offline laptop is unchanged — still offline, still told to
-    //    open VS Code. "We added a feature and nothing else moved."
+    // 8b. An ordinary offline laptop still gets the go-to-the-machine
+    //    guidance, not the cloud's. The name in it stopped being "VS Code" in
+    //    4.1.2: the host may be any editor that takes the extension, or Grok
+    //    Build Desktop, and naming one of them was wrong on the other two.
+    //    What this asserts is the DISTINCTION — laptop guidance is not cloud
+    //    guidance — which is what the check was always for.
     const laptop = row("d-laptop");
     assert.ok(/offline/i.test(await laptop.innerText()));
     const laptopTitle = await laptop.locator(".device-start").getAttribute("title");
-    assert.ok(laptopTitle && /VS Code/i.test(laptopTitle),
-      `a laptop keeps its old guidance: ${laptopTitle}`);
+    assert.ok(laptopTitle && /open Grok Build on that machine/i.test(laptopTitle),
+      `a laptop is told to go to the machine: ${laptopTitle}`);
+    assert.ok(laptopTitle && !/environment/i.test(laptopTitle),
+      `a laptop must not get the cloud wording: ${laptopTitle}`);
 
     // 6. Nothing hangs off the side of a phone.
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

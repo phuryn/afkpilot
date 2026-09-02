@@ -1696,7 +1696,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         // token. The client retries a Device-offline bounce automatically,
         // so metering first would bill the same typed prompt twice.
         if (!hub.uplinkConnected(deviceId)) {
-          return bounce("Device offline — VS Code isn't connected to the relay.", submissionId);
+          return bounce("Device offline — that machine isn't connected to the relay.", submissionId);
         }
         if (messageRate && !messageRate.limiter.take(userId, messageRate.perMinute)) {
           return bounce(`Slow down — at most ${messageRate.perMinute} messages per minute.`, submissionId);
@@ -1740,7 +1740,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         // Uncapped frames (ready) must still reach fromClient so an offline
         // tabToken is kept. Capped frames only land here if the uplink
         // dropped during increment; UsageStore cannot refund.
-        bounce("Device offline — VS Code isn't connected to the relay.", submissionId);
+        bounce("Device offline — that machine isn't connected to the relay.", submissionId);
       }
     };
     admit((raw) => {
