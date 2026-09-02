@@ -27,6 +27,54 @@ const script = poolBootstrapScript({ relayHttpUrl: "https://relay.example/" });
 /** The name electron-builder actually produced for v3.19.0. Not a guess. */
 const REAL_APPIMAGE = "Grok-Build-Desktop-3.19.0-linux-x86_64.AppImage";
 
+/** A path bash can open. It reads its arguments as POSIX strings, so a Windows
+ *  separator arrives consumed as an escape and `C:\\Users\\x` becomes
+ *  `C:Usersx`. The harness already does this to the paths INSIDE the script;
+ *  the script's own path needs it too. A no-op everywhere else. */
+function bashPath(p: string): string {
+  return p.split(String.fromCharCode(92)).join("/");
+}
+
+/**
+ * A bash that can see the files this harness writes.
+ *
+ * `bash --version` was the wrong question on Windows, and it cost nine failing
+ * tests that were read as a broken suite. Two separate things were wrong:
+ * the path arrived mangled (see {@link bashPath}), and `bash` on PATH there is
+ * usually WSL's, which answers `--version` happily and then cannot open
+ * `C:/Users/...` at all, because its filesystem starts at `/mnt/c`. Fixing
+ * either alone still fails, which is what made this look like the product.
+ *
+ * So probe the capability actually needed: hand each candidate a file we just
+ * wrote and ask whether it can see it. On Linux and macOS the first candidate
+ * answers yes and nothing else is tried; the suite still SKIPS, loudly, where
+ * no usable bash exists at all.
+ */
+function bashOr(ctx: { skip(): void }): string | null {
+  const dir = mkdtempSync(join(tmpdir(), "afkpilot-bash-"));
+  try {
+    const probe = join(dir, "probe");
+    writeFileSync(probe, "");
+    const posix = bashPath(probe);
+    for (const candidate of [
+      "bash",
+      "C:/Program Files/Git/bin/bash.exe",
+      "C:/Program Files (x86)/Git/bin/bash.exe",
+    ]) {
+      try {
+        execFileSync(candidate, ["-c", `test -f "${posix}"`], { stdio: "ignore" });
+        return candidate;
+      } catch {
+        // Not installed, or cannot reach our temp dir. Try the next one.
+      }
+    }
+    ctx.skip();
+    return null;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 describe("it is a shell script", () => {
   it("parses as one", (ctx) => {
     // `bash -n` is the only thing here that reads the script the way a sprite
@@ -34,19 +82,13 @@ describe("it is a shell script", () => {
     // quietly — an early `return` reports green, and a check that reports green
     // without running is worse than not having it: the first version of this
     // test did exactly that and passed while the script was broken.
-    let bash: string;
-    try {
-      execFileSync("bash", ["--version"], { stdio: "ignore" });
-      bash = "bash";
-    } catch {
-      ctx.skip();
-      return;
-    }
+    const bash = bashOr(ctx);
+    if (!bash) return;
     const dir = mkdtempSync(join(tmpdir(), "boot-"));
     const path = join(dir, "boot.sh");
     try {
       writeFileSync(path, script);
-      execFileSync(bash, ["-n", path], { stdio: "pipe" });
+      execFileSync(bash, ["-n", bashPath(path)], { stdio: "pipe" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -226,24 +268,13 @@ describe("what it is told, and what it is not", () => {
 
 describe("updating the host on a machine nobody can walk up to", () => {
   /**
-   * `refresh_host_if_stale` is the one function here that can destroy a working
-   * machine, so it is RUN rather than read. The script's own function is
-   * extracted and executed against stub `curl`/`step` and a fake $APP tree —
-   * asserting on the tree that is left behind, which is the thing that decides
-   * whether somebody's environment still starts tomorrow.
-   */
-  function bashOr(ctx: { skip(): void }): string | null {
-    try {
-      execFileSync("bash", ["--version"], { stdio: "ignore" });
-      return "bash";
-    } catch {
-      ctx.skip();
-      return null;
-    }
-  }
-
-  /**
-   * Run the function in isolation.
+   * Run `refresh_host_if_stale` in isolation.
+   *
+   * It is the one function here that can destroy a working machine, so it is
+   * RUN rather than read. The script's own function is extracted and executed
+   * against stub `curl`/`step` and a fake $APP tree — asserting on the tree
+   * that is left behind, which is the thing that decides whether somebody's
+   * environment still starts tomorrow.
    *
    * `curlBehaviour` is the body of a stub `curl`, which stands in for both the
    * release lookup and the download. Returns the resulting `$APP` listing plus
@@ -304,7 +335,7 @@ describe("updating the host on a machine nobody can walk up to", () => {
 
       const path = join(dir, "harness.sh");
       writeFileSync(path, harness);
-      return execFileSync(bash, [path], { encoding: "utf8" });
+      return execFileSync(bash, [bashPath(path)], { encoding: "utf8" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
