@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 // Behavioural extract of the offline-send helpers in web/chat.html. The
 // lifecycle suite is the full product check; these pin the decisions that
@@ -46,6 +46,10 @@ const {
   liveOutboundAfterNonRetryable,
   liveOutboundParkedByReplacement,
   liveOutboundRecoveredByReplacement,
+  isUserControlAction,
+  noteControlActionSent,
+  claimBouncedControlAction,
+  forgetControlActions,
 } = new Function(
   `${helpers}; return {
     isDeviceOfflineError,
@@ -80,6 +84,10 @@ const {
     liveOutboundAfterNonRetryable,
     liveOutboundParkedByReplacement,
     liveOutboundRecoveredByReplacement,
+    isUserControlAction,
+    noteControlActionSent,
+    claimBouncedControlAction,
+    forgetControlActions,
   };`,
 )() as {
   isDeviceOfflineError: (data: unknown) => boolean;
@@ -335,6 +343,14 @@ describe("offline live-send hold", () => {
     expect(deviceOfflineHandler).toContain("return;");
     expect(deviceOfflineHandler).not.toContain("dispatchEvent");
     expect(deviceOfflineHandler).not.toContain("clearLiveOutbound");
+    // ONE thing may speak here, and only when the bounce names something this
+    // page just sent: a refused control action. The BANNER stays swallowed,
+    // which is what this guard has always been protecting — a Device offline
+    // right after reconnect is a race, not a state. Pinned as a CONDITIONAL so
+    // an unconditional notice cannot creep back in.
+    expect(deviceOfflineHandler).toContain(
+      "if (claimBouncedControlAction(data)) announceControlActionNotSent();",
+    );
   });
 
   it("remembers a live send so Device offline can put it back in the outbox", () => {
@@ -963,5 +979,54 @@ describe("offline live-send hold", () => {
     );
     expect(finishSrc).toContain("forgetUnbouncedLiveOutbound()");
     expect(finishSrc).not.toContain("parkLiveOutboundForReplacement");
+  });
+});
+
+describe("a control action that never reached the machine", () => {
+  beforeEach(() => forgetControlActions());
+
+  it("knows a person's control action from the rest of the traffic", () => {
+    // The owner clicked these two and got silence.
+    expect(isUserControlAction({ type: "cloneProject" })).toBe(true);
+    expect(isUserControlAction({ type: "removeProjectFolder" })).toBe(true);
+    expect(isUserControlAction({ type: "renameSession" })).toBe(true);
+    expect(isUserControlAction({ type: "deleteSession" })).toBe(true);
+    // A send has its own machinery — the outbox and the editable Not sent
+    // block — and must not also raise the control notice.
+    expect(isUserControlAction({ type: "send", text: "hi" })).toBe(false);
+    expect(isUserControlAction({ type: "ready" })).toBe(false);
+    expect(isUserControlAction({ type: "listProjectDir" })).toBe(false);
+    expect(isUserControlAction(null)).toBe(false);
+  });
+
+  it("claims only a bounce naming something this page sent", () => {
+    noteControlActionSent({ type: "cloneProject", submissionId: "ctl-a" });
+    expect(claimBouncedControlAction({ submissionId: "ctl-a" })).toBe(true);
+    // Once. A second bounce for the same id is not a second lost click.
+    expect(claimBouncedControlAction({ submissionId: "ctl-a" })).toBe(false);
+  });
+
+  it("does not claim a SEND's bounce", () => {
+    // The case that would double-report: a refused send already comes back as
+    // an editable Not sent block, and must not also say a control action
+    // failed. Correlation is what separates them.
+    noteControlActionSent({ type: "cloneProject", submissionId: "ctl-a" });
+    expect(claimBouncedControlAction({ submissionId: "send-42" })).toBe(false);
+    expect(claimBouncedControlAction({})).toBe(false);
+    expect(claimBouncedControlAction(null)).toBe(false);
+  });
+
+  it("remembers nothing for a frame with no id, and nothing for a send", () => {
+    noteControlActionSent({ type: "cloneProject" });
+    noteControlActionSent({ type: "send", submissionId: "send-1" });
+    expect(claimBouncedControlAction({ submissionId: "send-1" })).toBe(false);
+  });
+
+  it("forgets everything once the host speaks again", () => {
+    // Bounded on an EVENT rather than a timer: a frame from the host is proof
+    // the uplink is back, so nothing outstanding is still worth reporting.
+    noteControlActionSent({ type: "cloneProject", submissionId: "ctl-a" });
+    forgetControlActions();
+    expect(claimBouncedControlAction({ submissionId: "ctl-a" })).toBe(false);
   });
 });

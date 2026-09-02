@@ -1139,6 +1139,76 @@ window.grokRemoteClient = true;
     for (var i = 0; i < texts.length; i++) next = authoredStoreAfterRemoveOne(next, texts[i]);
     return next;
   }
+  /**
+   * Control actions a PERSON performs, which must never fail in silence.
+   *
+   * The owner clicked Clone on a sleeping cloud machine and nothing happened
+   * at all: no progress, no error. Two paths swallow these, and both are
+   * covered here.
+   *
+   * BEFORE THE SOCKET: an unsent control frame reaches
+   * `outboxDispositionForMessage`, which answers "drop" for anything the user
+   * did not type. Correct — a Hide is not user work to be replayed later — but
+   * dropping it without a word is what made a click vanish.
+   *
+   * AFTER THE SOCKET: the frame reaches the relay, the uplink is not
+   * deliverable, and the relay bounces "Device offline". That bounce is
+   * deliberately swallowed by the reconnect grace, because right after a
+   * reconnect it is usually a race rather than a state. The grace governs the
+   * BANNER; it should never have governed feedback for something just clicked.
+   * A `submissionId` is what separates the two, and the relay already copies
+   * one from any frame that carries it, so this needs nothing from the relay.
+   *
+   * Deliberately NOT queued for later. `OPEN` plus `send()` does not prove the
+   * host received anything, so replaying an unacknowledged action would make
+   * this at-least-once; and a clone that lands minutes late moves the tab of
+   * whoever has since gone somewhere else. Say it did not happen; let the
+   * person decide.
+   */
+  var USER_CONTROL_ACTIONS = {
+    cloneProject: 1, createProject: 1, addProjectFolder: 1, removeProjectFolder: 1,
+    setRepoArchived: 1, setRepoColor: 1, toggleRepoPin: 1, toggleSessionPin: 1,
+    renameSession: 1, deleteSession: 1, clearAllSessions: 1, newSession: 1,
+  };
+  function isUserControlAction(m) {
+    return !!(m && typeof m.type === "string" && USER_CONTROL_ACTIONS[m.type] === 1);
+  }
+  /** Ids of control actions sent and not yet answered. Bounded by clearing on
+   *  ANY inbound host frame — an event, not a timer: a frame from the host is
+   *  proof the uplink is back, and anything still outstanding was answered or
+   *  is past caring about. */
+  var outstandingControlActions = Object.create(null);
+  var outstandingControlCount = 0;
+  function noteControlActionSent(m) {
+    if (!isUserControlAction(m) || typeof m.submissionId !== "string") return;
+    if (!outstandingControlActions[m.submissionId]) outstandingControlCount++;
+    outstandingControlActions[m.submissionId] = 1;
+  }
+  function forgetControlActions() {
+    if (!outstandingControlCount) return;
+    outstandingControlActions = Object.create(null);
+    outstandingControlCount = 0;
+  }
+  function claimBouncedControlAction(data) {
+    var id = data && typeof data.submissionId === "string" ? data.submissionId : "";
+    if (!id || !outstandingControlActions[id]) return false;
+    delete outstandingControlActions[id];
+    outstandingControlCount--;
+    return true;
+  }
+  /** One notice per burst: five refused clicks are one situation. */
+  var controlNoticeShown = false;
+  function announceControlActionNotSent() {
+    if (controlNoticeShown) return;
+    controlNoticeShown = true;
+    window.dispatchEvent(new MessageEvent("message", {
+      data: {
+        type: "error",
+        text: "That didn't reach your machine — it is reconnecting. Nothing was changed; try again in a moment.",
+      },
+    }));
+  }
+  function clearControlActionNotice() { controlNoticeShown = false; }
   function outboxDispositionForMessage(message, authored) {
     if (isQueueReleaseMessage(message)) return "persist";
     if (authored) return "recover";
@@ -1394,6 +1464,8 @@ window.grokRemoteClient = true;
   }
   function persistOutboxMessage(raw, message, authored) {
     if (outboxDispositionForMessage(message, authored) !== "persist") {
+      // A control action dropped here never reached the socket at all.
+      if (isUserControlAction(message)) announceControlActionNotSent();
       if (authored) {
         authoredDrafts = authoredStoreAfterPersist(authoredDrafts, authored);
         saveAuthoredDrafts();
@@ -3723,6 +3795,9 @@ window.grokRemoteClient = true;
       // first non-error frame, which can be a boot-gap snapshot of the
       // wrong session.
       if (isDeviceOfflineError(data)) {
+        // A refused CONTROL action is not the race this grace exists for: the
+        // person clicked a moment ago and is owed an answer either way.
+        if (claimBouncedControlAction(data)) announceControlActionNotSent();
         holdLiveOutboundInOutbox(data);
         var identityWasComplete = identityRestoreComplete;
         beginDeviceOfflineGrace();
@@ -3731,6 +3806,10 @@ window.grokRemoteClient = true;
         }
         return;
       }
+      // The host is talking, so nothing is outstanding and the next refusal
+      // is a new situation rather than the same one repeating.
+      forgetControlActions();
+      clearControlActionNotice();
       acknowledgeLiveOutbound(data);
       // A host error is still a live uplink. Gating this on type !== "error"
       // left an error-only returning host in grace until persistent-offline
@@ -4306,7 +4385,16 @@ window.grokRemoteClient = true;
             armedForSessions = false;
           }
         }
+        // A control action gets a correlation id so the relay's refusal can be
+        // told from the reconnect races the grace exists to swallow. The relay
+        // copies `submissionId` off ANY frame that carries one, so this asks
+        // nothing of it. Correlation only — never an idempotency key, because
+        // nothing here is ever replayed.
+        if (isUserControlAction(m) && typeof m.submissionId !== "string") {
+          m.submissionId = "ctl-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+        }
         var s = JSON.stringify(m);
+        noteControlActionSent(m);
         var restoreMsg = isIdentityRestoreMessage(m);
         var authored = takePendingUiAuthored();
         var disposition = liveSendDisposition({
