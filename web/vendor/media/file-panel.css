@@ -385,9 +385,12 @@ body.desk-rail-collapsed .desk-rail-open-btn { display: inline-flex; }
   min-height: 28px;
   border-radius: 8px;
 }
+/* 16px, meeting the rail beside it. The box stays 28 so nothing reflows —
+   only the glyph comes down, from a 20px that made the explorer's row controls
+   look like a different, bigger product than the rail's. */
 .gfp-close svg,
 .gfp-icon-button svg,
-.gfp-toggle svg { width: 20px; height: 20px; }
+.gfp-toggle svg { width: 16px; height: 16px; }
 .gfp-close:hover,
 .gfp-icon-button:hover,
 .gfp-toggle:hover {
@@ -900,7 +903,9 @@ body.vscode-light {
   background: transparent;
   color: var(--vscode-descriptionForeground, #999);
 }
-.gfp-viewer .gfp-action.gfp-icon-only svg { width: 20px; height: 20px; }
+/* 16px with the rest of the panel scale. This is the viewer toolbar's ... —
+   the same control as the tree rows', so it moves with them. */
+.gfp-viewer .gfp-action.gfp-icon-only svg { width: 16px; height: 16px; }
 .gfp-viewer .gfp-action.gfp-icon-only:hover:not(:disabled) {
   color: var(--vscode-foreground, inherit);
   background: transparent;
@@ -992,6 +997,14 @@ body.vscode-light {
     background: transparent;
     padding-left: 0;
   }
+  /* The panel scale returns to 20 on touch, with the rail and the top bar: a
+     16px glyph read at arm's length inside a 36px target is a different problem
+     from a 16px glyph read at desk distance. Without this the file panel was the
+     one 16px thing left in a tablet render of 20s. */
+  .gfp-close svg,
+  .gfp-icon-button svg,
+  .gfp-toggle svg,
+  .gfp-viewer .gfp-action.gfp-icon-only svg { width: 20px; height: 20px; }
   /* 36px buttons + 1px inset overflow a 36px row; cap to the inset box. */
   .gfp-row-actions .gfp-icon-button {
     width: 34px;

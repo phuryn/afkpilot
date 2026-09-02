@@ -296,7 +296,12 @@ body.rail-resizing * {
 }
 .rail-icon-btn:active { opacity: 0.82; }
 .rail-icon-btn:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; }
-.rail-icon-btn svg { width: 20px; height: 20px; display: block; }
+/* PANEL SCALE. `.rail-icon-btn` only ever appears in the rail's own header or
+   the top bar — the rail toggle, the theme toggle, the rail gear — never in the
+   composer. On Desktop it sits IN the top bar beside controls that are 16, and
+   "chat furniture versus panel member" stops being a visible distinction once
+   they are neighbours. */
+.rail-icon-btn svg { width: 16px; height: 16px; display: block; }
 .rail-toolbar {
   flex-shrink: 0;
   padding: 0;
@@ -613,7 +618,9 @@ body.rail-resizing * {
   z-index: 2;
   display: flex;
   flex: none;
-  gap: 1px;
+  /* 4px, the file panel's value. At 1px the + and the ... read as one blob,
+     which is what the owner saw on a phone. */
+  gap: 4px;
   opacity: 0;
   pointer-events: none;
   transition: opacity .1s ease;
@@ -666,8 +673,17 @@ body.rail-resizing * {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
+  /* 4px, matching the file panel's trailing group. This was ZERO, so the three
+     controls above the messages touched while the explorer's breathed. */
+  gap: 4px;
 }
-.rail-action-btn { width: 25px; height: 27px; }
+/* DESKTOP + REMOTE TIER: 28x28 box, 16px glyph, 4px apart.
+   Two in-row controls sat side by side in one app at wildly different sizes —
+   the file explorer's row was a 20px glyph, the rail's was 13px, and the owner
+   asked why. They are the same kind of control and now read as one. The
+   explorer meets it in the middle (20 -> 16) in file-panel.css; VS Code keeps a
+   tighter 24/14 in projects-rail.css, where no explorer sits beside it. */
+.rail-action-btn { width: 28px; height: 28px; }
 /* The empty rail's one actionable thing. Sits under the note rather than beside
    it: on the screen where a user has nothing else to click, the next step
    should read as a step, not as decoration on an error message. */
@@ -716,7 +732,7 @@ body.rail-resizing * {
 }
 .rail-empty-action:hover { text-decoration: underline; }
 .rail-empty-action:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
-.rail-action-btn svg { width: 13px; height: 13px; }
+.rail-action-btn svg { width: 16px; height: 16px; }
 /* Header ⋯ is a bar-icon (20×20 in an invisible 28 box). Rail *rows* keep
    the 13px in-row affordance above — they are not this primitive. */
 #session-head .rail-action-btn,
@@ -730,7 +746,28 @@ body.rail-resizing * {
 }
 #session-head .rail-action-btn svg,
 #session-head-actions .rail-action-btn svg,
-#vscode-session-actions .rail-action-btn svg { width: 20px; height: 20px; }
+#vscode-session-actions .rail-action-btn svg { width: 16px; height: 16px; }
+/* The rest of that same bar. On the remote surface session-history and
+   session-new are `.icon-btn`, not `.rail-action-btn`, so sizing by CLASS left
+   two 20px glyphs beside a 16px one INSIDE ONE BAR — a worse mismatch than the
+   one being fixed, and the relay's own screens gate is what caught it. The bar
+   is a region, so it is scoped as one. The composer's `.icon-btn` keeps 20:
+   different bar, opposite end of the screen. */
+#session-head .icon-btn svg { width: 16px; height: 16px; }
+/* The same bar on Desktop and VS Code, which build a different document:
+   `<header class="top-bar">` with #history-btn / #new-btn rather than
+   #session-head with #session-history / #session-new. */
+.top-bar .icon-btn svg,
+.top-bar .rail-icon-btn svg,
+.desk-rail-open-btn svg { width: 16px; height: 16px; }
+/* VS CODE IS THE DENSE TIER at 14, matching its rail (projects-rail.css).
+   `deskLayoutClass` in sidebar.ts adds `desk-with-ft` for the Electron desktop
+   only, so `desk` without it IS the VS Code chat document. */
+body.desk:not(.desk-with-ft) .top-bar .icon-btn svg,
+body.desk:not(.desk-with-ft) .top-bar .rail-icon-btn svg,
+body.desk:not(.desk-with-ft) .rail-action-btn svg,
+body.desk:not(.desk-with-ft) #vscode-session-actions .rail-action-btn svg { width: 14px; height: 14px; }
+body.desk:not(.desk-with-ft) .rail-action-btn { width: 24px; height: 24px; }
 .rail-action-btn:disabled { opacity: .35; pointer-events: none; }
 /* Session indent: no left pad on the list; rows and Show more share --rail-indent. */
 /* 2px between conversations, the same value the VS Code rail uses. It was 1px
@@ -782,8 +819,9 @@ body.rail-resizing * {
   white-space: nowrap;
   opacity: .85;
 }
-.rail-session-actions .rail-action-btn { width: 25px; height: 24px; }
-.rail-session-actions .rail-action-btn svg { width: 12px; height: 12px; }
+/* Session rows are the same control as project rows; they were 25x24/12. */
+.rail-session-actions .rail-action-btn { width: 28px; height: 28px; }
+.rail-session-actions .rail-action-btn svg { width: 16px; height: 16px; }
 /* Reveal control: subordinate to rows; no count in the label (see chat.js scar). */
 .rail-more {
   align-self: flex-start;
@@ -947,7 +985,22 @@ body.rail-resizing * {
      36px box it leaves 8px of breathing room each side. */
   .rail-action-btn svg,
   .rail-session-actions .rail-action-btn svg,
-  .rail-repo-actions .rail-action-btn svg { width: 20px; height: 20px; }
+  .rail-repo-actions .rail-action-btn svg,
+  #session-head .icon-btn svg,
+  .top-bar .icon-btn svg,
+  .rail-icon-btn svg,
+  /* Id-scoped, because the desk rules for these are id-scoped too and a
+     class-only selector in here loses the specificity contest silently — the
+     tablet render kept a lone 16px glyph in a bar of 20s. */
+  #session-head .rail-action-btn svg,
+  #session-head-actions .rail-action-btn svg,
+  #vscode-session-actions .rail-action-btn svg { width: 20px; height: 20px; }
+  .top-bar { gap: 0 6px; }
+  /* 6px on a phone: the desktop's 4px between two 36px targets still reads as
+     one blob at arm's length. */
+  .rail-repo-actions,
+  .rail-session-actions { gap: 6px; }
+
   .rail-session-repo { font-size: 12px; }
   .rail-menu-item { padding: 11px 10px; }
   .rail-head-btn { padding-block: 12px 8px; }
@@ -1045,7 +1098,9 @@ a:hover {
   display: grid;
   grid-template-columns: minmax(0, auto) auto;
   align-items: center;
-  gap: 0 2px;
+  /* 4px, the value every other control group uses. Was 2px, which the owner
+     read as no gap at all beside the file panel's 4. */
+  gap: 0 4px;
   padding: 1px 2px 1px 6px;
   border-radius: 5px;
 }
@@ -2128,6 +2183,19 @@ body.thinking-hidden .msg.thinking { display: none; }
 }
 .blink-dots span:nth-child(2) { animation-delay: 0.2s; }
 .blink-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+/* PHONE ONLY: two controls step out of the row.
+   The per-session PIN goes because "Pin conversation" is already in that row's
+   ... menu (chat.js openRowMenu), so the affordance is not lost — only the
+   duplicate, in the place where horizontal room is scarcest.
+   The "+" beside PROJECTS goes because the full-width "Add project" now sits
+   under the list and is the better target by every measure.
+   Both are display:none rather than a JS branch: the markup stays identical on
+   every surface, so nothing can drift between them. */
+@media (hover: none) and (pointer: coarse) {
+  .rail-session-actions .rail-pin-btn,
+  .rail-head .rail-add-project { display: none; }
+}
 
 /* ---- file chips in user message history ---- */
 

@@ -36,15 +36,28 @@ Project colors are also tokens under shared `:root`:
 
 ## Bar icons and click areas
 
-The standard icon-only control is deliberately consistent across chat, project rail, and file panel.
+Icon-only controls use **two glyph scales, split by region, not by class**. The box is `28px × 28px` in both; only the glyph differs.
 
-| Selector | Mouse layout | Glyph | Other rules |
+| Scale | Where | Selectors | Glyph |
 | --- | --- | --- | --- |
-| `.icon-btn` | `28px × 28px` | `.icon-btn svg`: `20px × 20px` | `8px` radius; transparent background; `2px` focus outline with `-2px` offset. |
-| `.rail-icon-btn` | `28px × 28px` | `.rail-icon-btn svg`: `20px × 20px` | `8px` radius; the same transparent and focus treatment. |
-| `.gfp-close`, `.gfp-icon-button`, `.gfp-toggle` | `28px × 28px` | their `svg`: `20px × 20px` | `8px` radius; the same transparent and focus treatment. |
+| Composer | The composer's own buttons, at the bottom of the chat. Nothing else. | `.icon-btn` outside a header | `20px × 20px` |
+| Panel | Everything that belongs to a panel or to the bar above the messages: rail rows, the rail's own toggles, the top bar, and the whole file panel. | `.rail-action-btn`, `.rail-icon-btn`, `.desk-rail-open-btn`, `#session-head .icon-btn`, `.top-bar .icon-btn`, `.gfp-close`, `.gfp-icon-button`, `.gfp-toggle`, `.gfp-viewer .gfp-action.gfp-icon-only` | `16px × 16px` |
 
-Hover changes foreground color, not the button box. This keeps the `20px` bar-icon scale visible without painting a row of tiles.
+**There are three headers with three sets of ids, and this is the trap.** Remote builds `<header id="session-head">` with `#session-history` / `#session-new`; Desktop and VS Code build `<header class="top-bar">` with `#history-btn` / `#new-btn`. Scoping one of them reaches one surface. Both are listed above for that reason.
+
+**Why two.** Until 2026-09-02 there was one documented scale and a second, undocumented one: the file panel's in-row `⋯` was `20px` while the project rail's in-row `⋯` was `13px` (sessions `12px`), side by side on the same screen. That was not a chrome-versus-row distinction — the file panel uses its one primitive in its header *and* its rows — it was simply an outlier, and the owner asked why the two looked like different controls. The panel scale is where they met.
+
+`@media (hover: none)` returns the panel scale to `20px`, where the glyph is read at arm's length inside a `36px` target — a different problem from the same glyph at desk distance. That override must repeat the **id-scoped** selectors (`#session-head-actions .rail-action-btn svg` and friends), because a class-only rule inside the media query loses the specificity contest to the id-scoped desk rule and leaves a lone `16px` glyph in a bar of `20`s. `file-panel.css` carries the matching bump for its own controls.
+
+**VS Code is its own tier: `24px × 24px` box, `14px` glyph**, in both its rail webview (`projects-rail.css`) and its chat document (`chat.css`, under `body.desk:not(.desk-with-ft)` — `deskLayoutClass` in `sidebar.ts` adds `desk-with-ft` for the Electron desktop only, so `desk` without it is VS Code). It is deliberately denser, and it can be: `sidebar.ts` builds that document without the file panel at all — "the shared file-panel asset is desktop-only in this generated document" — so no panel sits beside that rail to disagree with it. A `24px` button also fits the `24px` row without growing it.
+
+Gaps between sibling icon controls are `4px` on a mouse (`.rail-repo-actions`, `.rail-session-actions`, `#session-head-actions`, `.top-bar`, the file panel's trailing group) and `6px` under `@media (hover: none)`. Before 2026-09-02 `#session-head-actions` had no gap at all and `.top-bar` had `0 2px`.
+
+Two controls leave the row on touch rather than shrink: `@media (hover: none) and (pointer: coarse)` hides `.rail-session-actions .rail-pin-btn` (pinning stays in that row's `⋯` menu) and `.rail-head .rail-add-project` (the full-width `.rail-add-project-wide` under the list replaces it).
+
+`scripts/desk-screens-check.mjs` and the relay's `scripts/ui-screens-check.mjs` enforce all three tiers against a real render; their `CHROME` and `PANEL` selector lists are the executable form of this table, and both read `matchMedia("(hover: none)")` from the page rather than inferring touch from a viewport name.
+
+Hover changes foreground color, not the button box. This keeps the scale visible without painting a row of tiles.
 
 Exceptions are explicit:
 

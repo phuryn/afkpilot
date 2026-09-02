@@ -120,8 +120,18 @@ const BAR_ICONS = `() => {
     return { borderNone, bgClear: isTransparent(s.backgroundColor), bg: s.backgroundColor, border: s.borderTopStyle };
   };
   const labelOf = (el) => el.id || el.getAttribute("aria-label") || el.title || String(el.className || "").trim().split(/\\s+/)[0] || "?";
-  const SEL = [
-    ".icon-btn:not(.session-name-edit):not(#session-head-edit)",
+  // TWO scales, split by REGION not by class — this gate is what proved the
+  // difference matters. On the remote surface session-history and session-new
+  // are .icon-btn while the header's ... is .rail-action-btn, so sizing by class
+  // put a 20px glyph beside a 16px one inside one bar.
+  // What is LEFT at 20: the composer's own buttons. Everything belonging to a
+  // panel or to the bar above the messages is 16.
+  const CHROME = [
+    ".icon-btn:not(.session-name-edit):not(#session-head-edit):not(#session-head .icon-btn):not(.top-bar .icon-btn)",
+  ].join(",");
+  const PANEL = [
+    "#session-head .icon-btn:not(.session-name-edit):not(#session-head-edit)",
+    ".top-bar .icon-btn:not(.session-name-edit):not(#session-head-edit)",
     ".rail-icon-btn",
     ".desk-rail-open-btn",
     ".gfp-toggle",
@@ -132,6 +142,8 @@ const BAR_ICONS = `() => {
     "#session-head-actions .rail-action-btn",
     "#vscode-session-actions .rail-action-btn",
   ].join(",");
+  const SEL = CHROME + "," + PANEL;
+  const TOUCH = window.matchMedia && window.matchMedia("(hover: none)").matches;
   const bad = [];
   const seen = [];
   const members = [];
@@ -142,7 +154,13 @@ const BAR_ICONS = `() => {
     const box = noPaintedBox(el);
     const what = labelOf(el);
     members.push({ what, glyph: g, bg: box.bg, border: box.border });
-    if (Math.abs(g - 20) > 1) bad.push(what + " glyph " + g + "px (want 20)");
+    // THREE tiers, and the third is the viewport's, not the selector's: under
+    // (hover: none) the panel scale goes back to 20, because a 16px glyph read
+    // at arm's length inside a 36px target is not the same problem as a 16px
+    // glyph read at desk distance. Asserting 16 everywhere failed on the tablet
+    // render for a UI that was behaving correctly.
+    const want = el.matches(PANEL) ? (TOUCH ? 20 : 16) : 20;
+    if (Math.abs(g - want) > 1) bad.push(what + " glyph " + g + "px (want " + want + ")");
     if (!box.borderNone) bad.push(what + " border-style " + box.border);
     if (!box.bgClear) bad.push(what + " background " + box.bg);
   }
@@ -151,7 +169,8 @@ const BAR_ICONS = `() => {
     const g = glyphW(pencil);
     const box = noPaintedBox(pencil);
     members.push({ what: "pencil", glyph: g, exempt: true });
-    if (Math.abs(g - 16) > 1) bad.push("pencil glyph " + g + "px (want 16)");
+    const pw = TOUCH ? 20 : 16;
+    if (Math.abs(g - pw) > 1) bad.push("pencil glyph " + g + "px (want " + pw + ")");
     if (!box.borderNone) bad.push("pencil border-style " + box.border);
     if (!box.bgClear) bad.push("pencil background " + box.bg);
   }
@@ -1135,10 +1154,21 @@ try {
         }
         return out;
       });
+      // 16px since 2026-09-02, SUPERSEDING the 20px this asserted from an
+      // earlier owner audit. The header bar is now one of the three panels that
+      // share a screen — rail, header, file panel — and they were sized apart:
+      // the file panel's in-row ... was 20px against the rail's 13px, which the
+      // owner asked about directly. The header moved with them so the bar does
+      // not contain two scales. The 20px scale survives on the composer and the
+      // rail's open button; see docs/design.md § Bar icons and click areas.
+      // 20 under (hover: none), 16 otherwise — read from the PAGE rather than
+      // inferred from the viewport name, so a new viewport cannot silently pick
+      // the wrong expectation.
+      const barWant = (await page.evaluate(() => matchMedia("(hover: none)").matches)) ? 20 : 16;
       for (const icon of barIcons) {
         assert.ok(
-          Math.abs(icon.w - 20) <= 1,
-          `${name}: header icon "${icon.what}" is ${icon.w}px — the bar scale is 20px (owner audit)`,
+          Math.abs(icon.w - barWant) <= 1,
+          `${name}: header icon "${icon.what}" is ${icon.w}px — the panel scale is ${barWant}px here`,
         );
       }
       const closePin = await page.evaluate(() => {
