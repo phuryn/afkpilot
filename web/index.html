@@ -402,58 +402,6 @@
   .plan-fine { margin: 0.85rem 0 0; font-family: var(--font-mono); font-size: 0.72rem; color: var(--faint); text-align: center; }
   .pricing-note { margin: 1.5rem auto 0; max-width: 780px; text-align: center; font-family: var(--font-mono); font-size: 0.72rem; color: var(--faint); }
 
-  /* info tooltip — hover on desktop, tap-to-toggle on touch (no hover to rely on) */
-  .info-wrap { position: relative; display: inline-flex; vertical-align: middle; margin-left: 0.35rem; }
-  .info-btn {
-    width: 1.05rem; height: 1.05rem; padding: 0;
-    display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 50%;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--muted);
-    font-family: var(--font-mono);
-    font-size: 0.68rem;
-    line-height: 1;
-    cursor: pointer;
-  }
-  .info-btn:hover, .info-btn:focus-visible { color: var(--accent); border-color: var(--accent); }
-  .info-bubble {
-    position: absolute;
-    left: 50%;
-    bottom: calc(100% + 9px);
-    transform: translateX(-50%) translateY(4px);
-    width: max-content;
-    max-width: min(260px, 70vw);
-    background: var(--heading);
-    color: var(--bg);
-    font-family: var(--font-sans);
-    font-size: 0.78rem;
-    font-weight: 400;
-    line-height: 1.5;
-    text-align: left;
-    padding: 0.65rem 0.8rem;
-    border-radius: var(--radius-sm);
-    box-shadow: var(--shadow-lg);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.15s ease, transform 0.15s ease;
-    z-index: 5;
-  }
-  .info-bubble::after {
-    content: "";
-    position: absolute;
-    top: 100%; left: 50%;
-    transform: translateX(-50%);
-    border: 5px solid transparent;
-    border-top-color: var(--heading);
-  }
-  .info-wrap:hover .info-bubble,
-  .info-wrap.is-open .info-bubble {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-    pointer-events: auto;
-  }
-
   /* ---------------- app view (signed in) ---------------- */
   .app { padding-block: clamp(2rem, 5vw, 3.25rem); }
   .app + .app { border-top: 1px solid var(--border-soft); }
@@ -703,7 +651,9 @@
   #add-device .setup-local > summary::-webkit-details-marker { display: none; }
   #add-device .setup-local > summary::after {
     content: "+";
-    margin-left: auto;
+    /* Beside "Three steps", not pushed to the container's right edge — it is
+       the marker for that label, and margin-left:auto stranded it far enough
+       away to read as unrelated furniture. */
     color: var(--faint);
     font-family: var(--font-mono);
   }
@@ -1066,7 +1016,7 @@
           <div class="feature">
             <span class="kw">pairing</span>
             <h3>Link once, chat anywhere</h3>
-            <p>Devices pair with a one-time code shown by your host — VS Code or Grok Build Desktop. Approve it in the browser and you are connected — no tunnels, no config.</p>
+            <p>Devices pair with a one-time code shown by your host — an IDE such as VS Code, or Grok Build Desktop. Approve it in the browser and you are connected — no tunnels, no config.</p>
           </div>
           <div class="feature">
             <span class="kw">privacy</span>
@@ -1126,10 +1076,6 @@
                 <li>The full chat UI</li>
                 <li>
                   Unlimited local messages
-                  <span class="info-wrap">
-                    <button type="button" class="info-btn" aria-label="What counts as a local message?" aria-expanded="false" aria-describedby="free-local-tip">i</button>
-                    <span class="info-bubble" id="free-local-tip" role="tooltip">Messages in the <b>Grok Build for VS Code (Community)</b> extension are never limited. You can use it inside VS Code, Cursor, Antigravity, and so on.</span>
-                  </span>
                 </li>
               </ul>
               <button class="btn btn-secondary js-signin" type="button">Start free</button>
@@ -1271,6 +1217,7 @@
                         <li>Open, edit and save project files, syntax-highlighted</li>
                         <li>Attach workspace files with @, add photos and documents</li>
                         <li>Connect Grok, Codex or Claude Code to a machine</li>
+                        <li>Add a project — name a new one, or clone it from a URL</li>
                         <li>Rewind the conversation, or edit a message you already sent</li>
                         <li>Sign in to GitHub, and clone a private repository onto a Cloud machine</li>
                         <li>Pick up the conversation open in VS Code or Desktop — both stay live</li>
@@ -1280,7 +1227,7 @@
                     <div class="cap cap-no">
                       <p class="cap-head">Only at the desk</p>
                       <ul>
-                        <li>Adding a project folder — that opens a file picker on the machine itself</li>
+                        <li>Importing a folder that is already on the machine — that opens a file picker there</li>
                         <li>Signing agents out of a local machine — a Cloud machine can be signed out remotely</li>
                         <li>Linking a new local machine — that starts in the extension or Desktop app</li>
                         <li>Dragging files onto the composer — use the attach button instead</li>
@@ -1314,7 +1261,7 @@
               <details class="faq-item" name="faq">
                 <summary>Is my phone one of my linked devices?</summary>
                 <div class="faq-body">
-                  <p>No. A linked device is a <b>machine running a host</b> — VS Code or Grok Build Desktop — and that is what the Free plan's one-device limit counts. Running <i>both</i> hosts on the same computer still counts as one device. Open the browser client on as many phones, tablets and laptops as you like; they all reach the same workspace, and two of them can watch the same run at once.</p>
+                  <p>No. A linked device is a <b>machine running a host</b> — an IDE such as VS Code, or Grok Build Desktop — and that is what the Free plan's one-device limit counts. Running <i>both</i> hosts on the same computer still counts as one device. Open the browser client on as many phones, tablets and laptops as you like; they all reach the same workspace, and two of them can watch the same run at once.</p>
                 </div>
               </details>
             </div>
@@ -1501,33 +1448,6 @@
   // stops the extra /api/me poll. Free users keep limits, so it keeps polling.
   let meterOff = false;
 
-  // Info tooltips (".info-wrap"): hover covers desktop via CSS alone; this
-  // adds tap-to-toggle for touch, where :hover either doesn't fire or sticks.
-  document.querySelectorAll(".info-btn").forEach((btn) => {
-    btn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      const wrap = btn.closest(".info-wrap");
-      const open = wrap.classList.toggle("is-open");
-      btn.setAttribute("aria-expanded", String(open));
-      document.querySelectorAll(".info-wrap.is-open").forEach((w) => {
-        if (w !== wrap) { w.classList.remove("is-open"); w.querySelector(".info-btn").setAttribute("aria-expanded", "false"); }
-      });
-    });
-  });
-  document.addEventListener("click", () => {
-    document.querySelectorAll(".info-wrap.is-open").forEach((w) => {
-      w.classList.remove("is-open");
-      w.querySelector(".info-btn").setAttribute("aria-expanded", "false");
-    });
-  });
-  document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape") {
-      document.querySelectorAll(".info-wrap.is-open").forEach((w) => {
-        w.classList.remove("is-open");
-        w.querySelector(".info-btn").setAttribute("aria-expanded", "false");
-      });
-    }
-  });
 
   async function authHeaders() {
     const headers = {};
