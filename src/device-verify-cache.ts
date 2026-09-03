@@ -14,6 +14,20 @@
 
 import type { DeviceRecord } from "./devices.js";
 
+// SINGLE PROCESS, and that is not an assumption this file introduces.
+//
+// An independent review read this as a revocation hole: revoke invalidates one
+// process's map, so a second relay could keep admitting a revoked token for a
+// TTL — and, since tokens are only checked at upgrade, that socket would then
+// live for ever. Correct reasoning, false premise (mine, in the brief). The
+// `Hub` pairs an uplink with its browsers IN MEMORY and there is no Redis, no
+// pub/sub, nothing that could route between processes: a browser reaching a
+// second instance could not find its machine at all. The relay cannot run
+// horizontally today, so this cache adds no constraint the Hub did not.
+//
+// If that ever changes, this file changes with it: cross-instance revocation
+// needs a shared signal, and a stale positive here is a credential that
+// outlives its revocation.
 /** Positive-row TTL. Single-digit seconds: absorb a reconnect storm, not remember. */
 export const VERIFY_CACHE_TTL_MS = 5_000;
 /** Negative (no row) TTL. Shorter — a revoked device retrying is the storm shape. */
