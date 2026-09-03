@@ -2019,11 +2019,18 @@ body.turn-busy .queued-steer:hover {
 .msg-actions:focus-within,
 .msg-actions:focus-visible { opacity: 1; }
 .msg-actions.has-rating { opacity: 1; }
-/* Touch has no hover. The dimmed row is the resting, tappable state — same
-   as the rename pencil, which must exist without a gesture first. */
+/* Touch has no hover, so this row's resting state is its PERMANENT state —
+   the rename pencil has the same problem, and must exist without a gesture.
+
+   It used to rest at 0.4, and that compounded: `descriptionForeground` is
+   already the muted token (~4.9:1 on white), and 0.4 of it lands near 1.7:1,
+   below even the 3:1 floor for interface elements. Two muting mechanisms
+   multiplying is the trap; the token was tuned by somebody and does not need
+   help. Opacity stays what it is for on a pointer — hidden becoming shown —
+   and here, where nothing is ever revealed, the row simply reads. */
 @media (hover: none) {
   .msg.user .msg-actions,
-  .msg.agent .msg-actions { opacity: 0.4; }
+  .msg.agent .msg-actions { opacity: 1; }
   .msg-actions.has-rating { opacity: 1; }
 }
 /* Codex-style ghost action: 16px glyph centered in a 28px rounded-square hit
@@ -2045,9 +2052,12 @@ body.turn-busy .queued-steer:hover {
   line-height: 1;
 }
 .msg-action-btn svg { width: 16px; height: 16px; }
+/* The pill IS the hover affordance. Brightening the glyph as well made the
+   icons jump to `foreground` while the timestamp beside them stayed on
+   `descriptionForeground`, so a revealed row showed two different greys and
+   the copy icon read as darker than the time next to it. One colour per row. */
 .msg-action-btn:hover {
   background: var(--vscode-toolbar-hoverBackground);
-  color: var(--vscode-foreground);
 }
 .msg-action-btn:focus-visible {
   color: var(--vscode-foreground);
@@ -4801,9 +4811,18 @@ mjx-container[display="true"] {
 .confirm-btn.confirm-primary:hover {
   background: var(--vscode-button-hoverBackground);
 }
+/* WHITE, not the near-black this used to hardcode.
+
+   `errorForeground` is a FOREGROUND token being used as a background, so its
+   lightness is whatever a theme chose for error TEXT. The old `#1e1e1e` was
+   picked against the dark-theme fallback (#f48771, a pale salmon) and is
+   near-black on the dark reds light themes use: #1e1e1e on #A1260D is about
+   2.3:1, under the 4.5:1 floor for text. White on that same red is ~7.5:1,
+   and ~5:1 on the brighter #E51400 — passing everywhere instead of half the
+   themes. A destructive confirm is the last place to make someone squint. */
 .confirm-btn.confirm-danger {
   background: var(--vscode-errorForeground, #f48771);
-  color: #1e1e1e;
+  color: #ffffff;
   border-color: transparent;
 }
 .confirm-btn.confirm-danger:hover {
