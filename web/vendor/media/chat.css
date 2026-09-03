@@ -4096,6 +4096,13 @@ body.dragging { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -
   border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border));
   border-radius: var(--radius);
   font: inherit;
+  /* A <textarea> since #144. `display: block` kills the inline descender gap
+     an inline-block would add under it, and the drag handle is off because the
+     height is computed from the content (autosize in the keydown/oninput
+     pair) — a handle would fight it on the next keystroke. */
+  display: block;
+  resize: none;
+  line-height: 1.4;
 }
 .card .question-other-input:focus {
   outline: 1px solid var(--vscode-focusBorder);

@@ -1620,21 +1620,37 @@
     }).join("");
 
     function inline(t) {
+      // A code span and a link's href are LITERAL — nothing inside either is
+      // markdown. Both are pulled out to placeholders before the link and
+      // emphasis passes run, exactly as fenced blocks and math are pulled out
+      // of the document above, and restored at the end.
+      //
+      // Without this the passes run over their own output: `1*2` and `3*4`
+      // renders as one <em> spanning from the first code span to the second,
+      // because by then the asterisks are just characters in a string and the
+      // <code> tags mean nothing to a regex (#143). Same shape reaches a URL
+      // containing `*`, and a [link](x) written inside backticks.
+      //
+      // Link TEXT is deliberately left live: [**bold**](url) is valid markdown
+      // and worked before, so only the href is held.
+      const held = [];
+      const hold = (html) => `\x00C${held.push(html) - 1}\x00`;
       return t
         .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
         .replace(/`([^`\n]+)`/g, (_, code) => {
           if (looksLikeFileRef(code)) {
             const safe = code.replace(/"/g, "&quot;");
-            return `<a href="${safe}" class="file-ref-link"><code>${code}</code></a>`;
+            return hold(`<a href="${safe}" class="file-ref-link"><code>${code}</code></a>`);
           }
-          return `<code>${code}</code>`;
+          return hold(`<code>${code}</code>`);
         })
         .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, text, url) => {
           const safe = url.replace(/"/g, "&quot;");
-          return `<a href="${safe}">${text}</a>`;
+          return `<a href="${hold(safe)}">${text}</a>`;
         })
         .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
-        .replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+        .replace(/\*([^*\n]+)\*/g, "<em>$1</em>")
+        .replace(/\x00C(\d+)\x00/g, (_, i) => held[+i]);
     }
 
     // GFM tables: header row | separator row (|---|---|) | data rows
@@ -9930,6 +9946,29 @@
     return parts.length ? parts.join(", ").replace(/^./, (c) => c.toUpperCase()) : "Tool calls";
   }
 
+  // Deliberate short trim (40 chars): a row reads as a scannable summary, not a
+  // wall of shell. Shared so the running header and the settled row clamp
+  // identically.
+  const clampToolTarget = (s) => (s && s.length > 40 ? s.slice(0, 40) + "…" : s);
+
+  /**
+   * What a search tool is looking for. The pattern is the useful thing — grep
+   * ships both `pattern` and `path:"."`, and the path is the unhelpful half.
+   *
+   * #145: the settled row has named the pattern for a long time, but the
+   * running header said a bare "Searching", so the one moment you actually
+   * want to know what is being searched was the one moment we would not say.
+   * Every neighbouring verb already carries its argument (Reading foo.ts,
+   * Listing src/, Editing bar.css); this makes search consistent with them.
+   * It is NOT the details block — a search row has no IN/OUT, because the IN
+   * would repeat this label and the OUT is the match list.
+   */
+  function searchPatternText(call) {
+    const r = (call && (call.rawInput || call.input)) || {};
+    const p = r.glob_pattern || r.pattern || r.query || r.regex || r.search;
+    return typeof p === "string" && p.trim() ? clampToolTarget(p.trim()) : "";
+  }
+
   function inProgressLabel(call) {
     const name = toolName(call);
     const kind = toolKind(call);
@@ -9940,9 +9979,15 @@
     if (/^(read_file|file_read)$/.test(name) || kind === "read") {
       return filePath ? `Reading ${prettyPath(filePath)}` : "Reading file";
     }
-    if (/^(web_search|search_web)$/.test(name)) return "Searching web";
+    if (/^(web_search|search_web)$/.test(name)) {
+      const q = searchPatternText(call);
+      return q ? `Searching web for "${q}"` : "Searching web";
+    }
     if (/^(web_fetch|webfetch)$/.test(name)) return "Fetching page";
-    if (/^(grep|ripgrep|search_files)$/.test(name) || kind === "search") return "Searching";
+    if (/^(grep|ripgrep|search_files)$/.test(name) || kind === "search") {
+      const p = searchPatternText(call);
+      return p ? `Searching for "${p}"` : "Searching";
+    }
     if (/^(write_file|file_write|write|edit_file|search_replace|str_replace)$/.test(name) || kind === "edit" || kind === "write") {
       const renamed = toolRenamePaths(call);
       if (renamed) return `Editing ${prettyPath(renamed.from)} → ${prettyPath(renamed.to)}`;
@@ -9966,10 +10011,10 @@
     const command = r.command || r.cmd;
     const pattern = r.glob_pattern || r.pattern || r.query || r.regex || r.search;
     const url = r.url || r.uri;
-    // Deliberate short trim (40 chars): collapsed rows read as a scannable
-    // summary, not a wall of shell — the full command lives one click away in
-    // the IN/OUT detail. (CSS still single-line-ellipsizes whatever remains.)
-    const clamp = (s) => (s && s.length > 40 ? s.slice(0, 40) + "…" : s);
+    // Collapsed rows read as a scannable summary, not a wall of shell — the
+    // full command lives one click away in the IN/OUT detail. (CSS still
+    // single-line-ellipsizes whatever remains.)
+    const clamp = clampToolTarget;
     // A search tool's *pattern* is the useful target — prefer it over the path it
     // searched (grep ships both `pattern` and `path:"."`, which would otherwise
     // render the unhelpful "root folder"). Match by kind OR name so it still wins
@@ -10596,6 +10641,20 @@
     }
     const labelEl = item.querySelector(".tool-item-label");
     if (labelEl) applyToolLabel(labelEl, merged);
+    // The running header names the NEWEST call (addToToolGroup), and its
+    // argument often arrives on an update rather than the first tool_call —
+    // Claude ships an empty rawInput and fills it in. Without this the header
+    // sits on a bare "Searching" for the whole search, which is the half of
+    // #145 worth fixing. Only while running: once the batch closes the header
+    // is a summary, not a verb.
+    if (groupCalls && groupCalls.classList.contains("in-progress") && Array.isArray(groupCalls._calls)) {
+      const newest = groupCalls._calls[groupCalls._calls.length - 1];
+      const hdrLabel = groupCalls.querySelector(".tool-group-label");
+      if (hdrLabel && newest && newest.toolCallId === id) {
+        hdrLabel.textContent = inProgressLabel(merged);
+        paintGroupDiffTotals(groupCalls); // textContent just wiped the totals slot
+      }
+    }
     // A shell command that only shows up on the update still earns its IN/OUT
     // box; attachCommandDetails is a no-op once the row already has one.
     // MCP args that arrive after a pending row use the same attach.
@@ -13265,23 +13324,51 @@
         };
         opts.appendChild(btn);
         if (isOther) {
-          const custom = document.createElement("input");
-          custom.type = "text";
+          // A textarea, not a single-line input (#144): an "Other" answer is
+          // often a list or a couple of paragraphs, and a one-line box meant
+          // the writer could not read back what they had typed. One row at
+          // rest so it looks no heavier than the input it replaces; it grows
+          // with the content and then scrolls, same rule as the composer.
+          const custom = document.createElement("textarea");
+          custom.rows = 1;
           custom.className = "question-other-input";
           custom.placeholder = "Type your answer";
           custom.setAttribute("aria-label", `${questionText(q)} — Other answer`);
           custom.hidden = true;
+          const autosize = () => {
+            const cs = window.getComputedStyle(custom);
+            const line = parseFloat(cs.lineHeight) || 20;
+            const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
+              + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+            const max = Math.round(line * 10 + pad);
+            custom.style.height = "auto";
+            const content = custom.scrollHeight;
+            custom.style.height = Math.max(Math.round(line + pad), Math.min(content, max)) + "px";
+            custom.style.overflowY = content > max ? "auto" : "hidden";
+          };
           custom.oninput = () => {
             otherText[qi] = custom.value;
+            autosize();
             updateSubmit();
           };
           custom.onkeydown = (e) => {
-            if (e.key === "Enter" && submitBtn && !submitBtn.disabled) {
+            // The composer's rule, verbatim, so one convention covers both:
+            // Ctrl/Cmd+Enter when the user has chosen that, otherwise Enter —
+            // except on a touch composer, where Enter has to make a newline
+            // because a phone keyboard has no other way to.
+            const sendKey = state.useCtrlEnter
+              ? e.key === "Enter" && (e.metaKey || e.ctrlKey)
+              : !remoteUsesTouchComposer() && e.key === "Enter" && !e.shiftKey;
+            if (sendKey && submitBtn && !submitBtn.disabled) {
               e.preventDefault();
               submit();
             }
           };
           opts.appendChild(custom);
+          // Hidden until "Other" is picked, so the first measurement has to
+          // wait for it to be revealed — the click handler focuses it, and
+          // focus is what this rides on.
+          custom.onfocus = autosize;
         }
       }
       block.appendChild(opts);
@@ -14523,16 +14610,22 @@
   // Mirror the composer text onto the backdrop, wrapping a trailing send command
   // ("grok send") in an accent pill. Call whenever the input value changes.
   // Auto-grow the composer with its content: 2 lines at rest (Cursor-style,
-  // matching the textarea's rows attribute), expanding to 5 as the user
+  // matching the textarea's rows attribute), expanding to 10 as the user
   // types, then scrolling. The .input-highlight overlay is inset:0 in the
   // same wrap, so it tracks the height for free; its scrollTop is synced in
   // renderInputHighlight.
+  //
+  // 10 rather than the original 5 (#144): a longer answer could not be read
+  // back while writing it. The owner set the number against the neighbours —
+  // Claude Code stops at 10, Codex at 8 — in preference to a drag handle,
+  // because a max the user has to re-drag every time they want the history
+  // back is worse than one that is simply large enough.
   function autosizeInput() {
     const cs = window.getComputedStyle(input);
     const line = parseFloat(cs.lineHeight) || 20;
     const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
     const min = Math.round(line * 2 + pad);
-    const max = Math.round(line * 5 + pad);
+    const max = Math.round(line * 10 + pad);
     input.style.height = "auto";
     const content = input.scrollHeight;
     input.style.height = Math.max(min, Math.min(content, max)) + "px";
