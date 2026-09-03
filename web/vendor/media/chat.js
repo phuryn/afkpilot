@@ -6299,6 +6299,22 @@
         );
       },
       onConnect: () => {
+        // Same gate as onFix below, and for the same reason: a host that
+        // predates `remoteGithubSignIn` drops `setupGithubCli` silently, so
+        // without this the picker's Connect row is a button that does nothing.
+        // The client is always as new as the relay deploy while the extension
+        // is whatever the person installed, so "older host" is the ordinary
+        // case, not an edge one.
+        if (IS_REMOTE && !(state.hostCaps && state.hostCaps.remoteGithubSignIn)) {
+          if (addProjectFormApi) {
+            addProjectFormApi.update({
+              error: IS_CLOUD_HOST
+                ? "This machine's app is too old to connect GitHub from here. It updates itself shortly."
+                : "Sign in to GitHub on the computer running this workspace — a terminal opens there — then try again here.",
+            });
+          }
+          return;
+        }
         vscode.postMessage({ type: "setupGithubCli", action: "auth" });
       },
       onRequestRepos: () => {
