@@ -1267,3 +1267,72 @@ textarea.settings-routine-prompt {
   gap: 0.55rem;
   flex-wrap: wrap;
 }
+
+.settings-github-flow,
+.settings-github-token {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-github-flow-desc,
+.settings-github-flow-note,
+.settings-github-token-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--vscode-descriptionForeground, currentColor);
+}
+.settings-github-flow-cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--vscode-textCodeBlock-background);
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, currentColor));
+  border-radius: 4px;
+  padding: 6px 6px 6px 10px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+}
+.settings-github-flow-cmd code {
+  background: none;
+  padding: 0;
+}
+.settings-github-flow-copy {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--vscode-descriptionForeground, currentColor);
+  cursor: pointer;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 12px;
+}
+.settings-github-flow-open {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 7px 10px;
+  border-radius: 4px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  text-decoration: none;
+  font-size: 12px;
+}
+.settings-github-token-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--vscode-input-foreground, CanvasText);
+  background: var(--vscode-input-background, Canvas);
+  border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border, currentColor));
+  border-radius: 5px;
+}
+.settings-github-token-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

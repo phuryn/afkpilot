@@ -5260,6 +5260,74 @@ body.vscode-light .preview-overlay {
   border-color: var(--vscode-focusBorder, currentColor);
 }
 .add-project-input:disabled { opacity: 0.6; }
+.add-project-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, currentColor));
+  border-radius: 6px;
+  background: var(--vscode-input-background, Canvas);
+}
+.add-project-list[hidden] { display: none; }
+.add-project-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 7px 9px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in oklab, var(--vscode-foreground) 8%, transparent);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.add-project-option:last-child { border-bottom: 0; }
+.add-project-option.is-active,
+.add-project-option:hover {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
+}
+.add-project-option.is-connect { font-weight: 600; }
+.add-project-option-glyph {
+  flex: 0 0 auto;
+  width: 1em;
+  text-align: center;
+  opacity: 0.7;
+  font-size: 10px;
+}
+.add-project-option-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.add-project-option-name {
+  font-weight: 600;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.add-project-option-owner {
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--vscode-descriptionForeground, currentColor);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.add-project-option-when {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, currentColor);
+  white-space: nowrap;
+}
 /* The destination, live. The whole point of the feature is that nobody has to
    choose a folder, which only works if they can see the one being chosen. */
 .add-project-dest {
@@ -5388,7 +5456,7 @@ body.vscode-light .preview-overlay {
 /* Touch: the universal 36px floor, same as every other control. */
 @media (hover: none), (pointer: coarse) {
   .add-project-btn, .add-project-fix, .add-project-input,
-  .add-project-github-copy, .add-project-github-open { min-height: 36px; }
+  .add-project-github-copy, .add-project-github-open, .add-project-option { min-height: 36px; }
 }
 /* The pre-flight step list. Numbered because these are steps in an order, and
    the reader is following them in another window. */

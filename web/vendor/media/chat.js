@@ -363,6 +363,8 @@
     // Settings → Providers re-observation in flight. Host-owned; see the
     // `providerState` case for why the client never sets it on its own.
     providersChecking: false,
+    githubState: null,
+    githubRepos: null,
     onboardingMode: null,
     onboardingInfo: {},
     /** provider -> the device-login card last sent by the host. Mirrored into
@@ -2754,6 +2756,7 @@
       thumbsFeedback: !!state.thumbsFeedback,
       providers: state.providers || [],
       providersChecking: !!state.providersChecking,
+      githubState: state.githubState || undefined,
       extVersion: state.extVersion,
       cliVersion: state.cliVersion,
       hostKind: state.hostKind,
@@ -6239,8 +6242,7 @@
     const run = (id) => {
       // The knowledge-work hint acts instead of instructing: it opens the
       // setting that would put Clone in this menu.
-      if (id === "clone-needs-coding") openSettingsCategory("general");
-      else if (id === "import") vscode.postMessage({ type: "addProjectFolder" });
+      if (id === "import") vscode.postMessage({ type: "addProjectFolder" });
       else openAddProjectForm(id);
     };
     // One way in is a click, not a menu that asks permission to be a click.
@@ -6289,13 +6291,23 @@
     const api = helpers.addProjectForm({
       kind,
       root: state.projectRoot,
-      onSubmit: (value) => {
+      onSubmit: (value, extra) => {
         vscode.postMessage(
           kind === "clone"
-            ? { type: "cloneProject", url: value }
+            ? { type: "cloneProject", url: value, ...(extra && extra.name ? { name: extra.name } : {}) }
             : { type: "createProject", name: value },
         );
       },
+      onConnect: () => {
+        vscode.postMessage({ type: "setupGithubCli", action: "auth" });
+      },
+      onRequestRepos: () => {
+        vscode.postMessage({ type: "listGithubRepos" });
+      },
+      githubState: state.githubState || undefined,
+      repos: state.githubRepos,
+      touch: remoteUsesTouchComposer() || (typeof window.matchMedia === "function"
+        && window.matchMedia("(hover: none), (pointer: coarse)").matches),
       onCancel: closeAddProjectForm,
       // Local: signing in happens in a terminal, and the form stays open so
       // they can clone again afterwards.
@@ -6360,7 +6372,12 @@
       closeAddProjectForm();
     };
     document.addEventListener("keydown", addProjectFormKeydown, true);
-    api.update({ root: state.projectRoot, github: state.projectGithub || undefined });
+    api.update({
+      root: state.projectRoot,
+      github: state.projectGithub || undefined,
+      githubState: state.githubState || undefined,
+      repos: state.githubRepos,
+    });
     api.focus();
   }
 
@@ -15737,7 +15754,7 @@
     "initialState", "showThinking", "appPurpose", "expandCommandOutputs",
     "steerByDefault", "steerUnavailable", "soundNotifications", "processingSound",
     "readRepliesAloud", "summarizeRepliesAloud", "fontScale", "voiceConfigured",
-    "providerState", "mcpServers", "mcpConnectors", "remoteStatus", "telemetryEnabled", "thumbsFeedback", "grokUpdateStatus", "initialized",
+    "providerState", "githubState", "mcpServers", "mcpConnectors", "remoteStatus", "telemetryEnabled", "thumbsFeedback", "grokUpdateStatus", "initialized",
   ]);
 
   function handleHostMessage(msg) {
@@ -15823,7 +15840,26 @@
         if (!addProjectFormApi && msg.github && (msg.github.status === "starting" || msg.github.status === "waiting")) {
           openAddProjectForm("clone");
         }
-        if (addProjectFormApi) addProjectFormApi.update({ ...msg, github: state.projectGithub || msg.github });
+        if (addProjectFormApi) addProjectFormApi.update({
+          ...msg,
+          github: state.projectGithub || msg.github,
+          githubState: state.githubState || undefined,
+          repos: state.githubRepos,
+        });
+        break;
+      case "githubState":
+        state.githubState = msg.github && typeof msg.github === "object" ? msg.github : null;
+        if (addProjectFormApi) addProjectFormApi.update({ githubState: state.githubState });
+        break;
+      case "githubRepos":
+        state.githubRepos = Array.isArray(msg.repos) ? msg.repos : [];
+        if (addProjectFormApi) {
+          addProjectFormApi.update({
+            repos: state.githubRepos,
+            reposTruncated: msg.truncated === true,
+            reposError: typeof msg.error === "string" ? msg.error : "",
+          });
+        }
         break;
       case "welcomeTips":
         // Deliberately NOT an advance: this frame arrives on startup and after
