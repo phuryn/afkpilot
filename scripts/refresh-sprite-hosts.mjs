@@ -215,6 +215,7 @@ let skipped = 0;
 // surveyed as "0 behind" and offered no next step. The next customer then
 // claims a machine still carrying the old launch path.
 let poolStale = 0;
+let prewarmed = 0;
 
 /**
  * How many machines to work on at once.
@@ -309,8 +310,60 @@ async function handle(sprite) {
         poolStale++;
         return `  ${sprite.name}  [${sprite.state}]  unclaimed — would replace its stale boot script`;
       }
+      // STAGE THE BUILD ON STOCK, rather than making its first customer wait.
+      //
+      // `refresh_host_if_stale` returns early without the claim file — the
+      // comment there says “unclaimed: the build already did it”, which was
+      // true the day the machine was provisioned and less true after every
+      // release since. So an untouched pool machine handed over months later
+      // downloads ~110 MB before the product does anything, which is the
+      // first minute of somebody's first impression.
+      //
+      // Nothing is running here, and that is what makes this the SAFE place
+      // to do it: no host to disturb, no session to drop, no restart. Same
+      // beside-and-swap the bootstrap uses, so a failed download or a corrupt
+      // archive leaves the machine exactly as it was.
+      if (!claimed && kind === "appimage" && !currentAlready && APPLY) {
+        const r = (await sh(
+          sprite.name,
+          'APP="$HOME/afkpilot"; set -e; ' +
+          'mkdir -p "$APP/next"; ' +
+          `curl -fL ${wantUrl} -o "$APP/next/afkpilot.AppImage" ` +
+          '--retry 0 --continue-at - --max-time 600 --silent --show-error; ' +
+          'chmod +x "$APP/next/afkpilot.AppImage"; ' +
+          'cd "$APP/next" && ./afkpilot.AppImage --appimage-extract >/dev/null 2>&1; ' +
+          'test -x "$APP/next/squashfs-root/AppRun"; ' +
+          'rm -rf "$APP/squashfs-root.old"; ' +
+          'mv "$APP/squashfs-root" "$APP/squashfs-root.old" 2>/dev/null || true; ' +
+          'mv "$APP/next/squashfs-root" "$APP/squashfs-root"; ' +
+          'mv "$APP/next/afkpilot.AppImage" "$APP/afkpilot.AppImage" 2>/dev/null || true; ' +
+          `printf '%s\n' ${wantUrl} > "$APP/.afkpilot-asset"; ` +
+          'rm -rf "$APP/next" "$APP/squashfs-root.old"; ' +
+          // RESTART, because stock is not idle: the boot script execs a host
+          // even before a claim, so the swap above happened under a live
+          // process. Its open handles survive the move, but anything it loads
+          // afterwards would resolve to the NEW build at the same path — a
+          // mixed-version process, which is a worse thing to hand somebody
+          // than a slow first minute. Nobody is driving an unclaimed machine,
+          // so there is no session to lose; this is exactly where a restart
+          // is free.
+          '/.sprite/bin/sprite-env services restart afkpilot >/dev/null 2>&1 || true; ' +
+          'echo STAGED=$(sed "s|.*/||" "$APP/.afkpilot-asset")',
+        )).output || "";
+        const staged = /STAGED=(\S+)/.exec(r)?.[1] ?? "";
+        if (staged.includes(tag.replace(/^v/, ""))) {
+          prewarmed++;
+          return `  ${sprite.name}  [${sprite.state}]  unclaimed — staged ${tag}, ready for its claim`;
+        }
+        failed++;
+        return `  ${sprite.name}  [${sprite.state}]  unclaimed — COULD NOT STAGE ${tag} (kept what it had)`;
+      }
+      if (!claimed && kind === "appimage" && !currentAlready && !APPLY) {
+        prewarmed++;
+        return `  ${sprite.name}  [${sprite.state}]  unclaimed — would stage ${tag} for its claim`;
+      }
       skipped++;
-      return `  ${sprite.name}  [${sprite.state}]  ${!claimed ? "unclaimed — updates when claimed" : "not an AppImage install"}`;
+      return `  ${sprite.name}  [${sprite.state}]  ${!claimed ? "unclaimed — already current" : "not an AppImage install"}`;
     }
     behind++;
     const why = currentAlready ? "boot script is stale" : `${asset} -> ${tag}`;
@@ -465,6 +518,9 @@ console.log(
   `${current} already current · ${behind} behind` +
   (poolStale
     ? ` · ${poolStale} pool ${poolStale === 1 ? "machine" : "machines"} with a stale boot script`
+    : "") +
+  (prewarmed
+    ? ` · ${prewarmed} pool ${prewarmed === 1 ? "machine" : "machines"} ${APPLY ? "staged" : "to stage"}`
     : "") +
   (skipped ? ` · ${skipped} not in scope` : "") +
   (APPLY ? ` · ${failed} ${FORCE_HOST ? "failed" : "could not be armed"}` : ""),
