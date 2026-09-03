@@ -865,8 +865,17 @@
       description: "A fine-grained token can be scoped to one repository, with an expiry. It is stored by the GitHub CLI, not by us.",
       kind: "action",
       actionLabel: "Paste token",
+      // A REMOTE sees this only on a cloud machine, and the gate is
+      // `canSignOutFromRemote` (i.e. `remoteAgentSignOut`, which a host
+      // advertises only when it is hosted) rather than `remoteGithubSignIn`.
+      // The two are not interchangeable here: the host refuses
+      // `githubLoginWithToken` from a non-cloud remote, so offering the row on
+      // a remotely-driven laptop would take a paste, send the credential across
+      // the relay, and have it dropped in silence — the token travelling for
+      // nothing being the worse half of that. A desk keeps the row locally,
+      // where there is also a terminal.
       visible: (s, env) => !!(githubKnown(s) && !githubConnectedNow(s)
-        && (!env || !env.isRemote || canGithubSignInFromRemote(env))),
+        && (!env || !env.isRemote || canSignOutFromRemote(env))),
       keepOpen: true,
       local: "githubToken",
     },
