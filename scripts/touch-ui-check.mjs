@@ -422,14 +422,19 @@ try {
     await page.evaluate((s) => document.querySelector(s).click(), sel);
   };
 
-  // 1. Dimmed and tappable at rest (owner, 2026-08-13). The footer's resting
-  //    state on touch is the vendored 0.4 — visible enough to find, quiet
-  //    enough to ignore — and its controls take taps with NO reveal gesture
-  //    first. This replaced the old hide/tap-to-reveal shim for message
-  //    footers; if either assertion fails, a chat.html rule is fighting the
-  //    vendored contract again.
+  // 1. Quiet and tappable at rest (owner, 2026-08-13; contrast fixed
+  //    2026-09-03). The footer's controls take taps with NO reveal gesture
+  //    first — that part is unchanged, and if it fails a chat.html rule is
+  //    fighting the vendored contract again.
+  //
+  //    What changed is HOW it is quietened. It rested at 0.4, and on touch
+  //    that resting state is permanent because nothing ever reveals it. That
+  //    stacked on `descriptionForeground`, already the muted token (~4.9:1 on
+  //    white), and 0.4 of it lands near 1.7:1 — under even the 3:1 floor for
+  //    interface elements. The owner read it on a phone as "too light". The
+  //    row is now muted by the token alone and rests at 1.
   for (const id of ["#done", "#usermsg"]) {
-    await expectOpacity(page, `${id} .msg-actions`, "0.4", `${id} footer rests dimmed`);
+    await expectOpacity(page, `${id} .msg-actions`, "1", `${id} footer rests readable`);
     assert.equal((await styleOf(`${id} .msg-actions`)).pointerEvents, "auto", `${id} footer is tappable at rest`);
   }
   assert.equal((await styleOf("#streaming .msg-actions")).display, "none", "streaming footer is display:none");
