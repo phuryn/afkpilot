@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { RECONNECT_CAP_MS, RECONNECT_FLOOR_MS } from "../src/reconnect-backoff.js";
 
 // Behavioural extract of the connection-identity helpers in web/chat.html.
 // The legacy-host suite is the product check (a stale error after a real
@@ -184,6 +185,97 @@ describe("socket generation", () => {
     expect(connectSrc).toContain("if (e.code === 4004) { gateSignIn().then(connect); return; }");
     expect(connectSrc.indexOf("if (ws !== socket) return;"))
       .toBeLessThan(connectSrc.indexOf("gateSignIn().then(connect)"));
+  });
+});
+
+describe("reconnect backoff", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("uses the shared floor and cap, and does not flat-retry at 1s", () => {
+    expect(html).toContain(`var RECONNECT_FLOOR_MS = ${RECONNECT_FLOOR_MS}`);
+    expect(html).toContain(`var RECONNECT_CAP_MS = ${RECONNECT_CAP_MS}`);
+    expect(html).toContain("baseMs * (0.5 + 0.5 * Math.random())");
+    expect(html).toContain("Math.min(RECONNECT_CAP_MS, reconnectDelayMs * 2)");
+    expect(connectSrc).not.toContain("setTimeout(connect, 1000)");
+    expect(connectSrc).toContain("scheduleReconnect()");
+  });
+
+  it("does not reset backoff on OPEN — only notes the open time", () => {
+    const openAt = connectSrc.indexOf('addEventListener("open"');
+    const openHandler = connectSrc.slice(openAt, connectSrc.indexOf("});", openAt) + 3);
+    expect(openHandler).toContain("noteReconnectOpen()");
+    expect(openHandler).not.toContain("resetReconnectBackoff()");
+    expect(html).toContain("(Date.now() - reconnectOpenedAt) >= RECONNECT_FLOOR_MS");
+  });
+
+  it("terminal close codes still do not retry; only the fall-through backs off", () => {
+    const closeAt = connectSrc.indexOf('addEventListener("close"');
+    const closeHandler = connectSrc.slice(closeAt, connectSrc.indexOf("socket.addEventListener(\"error\""));
+    expect(closeHandler).toContain("if (e.code === 4004)");
+    expect(closeHandler).toContain("if (e.code === 4005)");
+    expect(closeHandler).toContain("if (e.code === 4003)");
+    expect(closeHandler.indexOf("if (e.code === 4005)")).toBeLessThan(closeHandler.indexOf("scheduleReconnect()"));
+    expect(closeHandler.indexOf("if (e.code === 4003)")).toBeLessThan(closeHandler.indexOf("scheduleReconnect()"));
+    expect(closeHandler).toContain("noteReconnectClosed()");
+    expect(closeHandler).toContain("scheduleReconnect()");
+  });
+
+  it("does not retry while hidden, and reconnects immediately on return", () => {
+    const scheduleSrc = html.slice(
+      html.indexOf("function scheduleReconnect()"),
+      html.indexOf("function reconnectNow()"),
+    );
+    expect(scheduleSrc).toContain("pageIsHidden()");
+    expect(html).toContain("function reconnectNow()");
+    expect(html).toContain("resetReconnectBackoff()");
+    const resumeVisible = html.slice(
+      html.indexOf("function onResumeVisible()"),
+      html.indexOf('document.addEventListener("visibilitychange", function () {'),
+    );
+    expect(resumeVisible).toContain("reconnectNow()");
+    expect(html).toContain('window.addEventListener("focus"');
+    expect(html).toContain("onReconnectUserAction");
+    const hideSrc = html.slice(
+      html.indexOf('document.addEventListener("visibilitychange", function () {'),
+      html.indexOf('window.addEventListener("pagehide"'),
+    );
+    expect(hideSrc).toContain("clearReconnectTimer()");
+    expect(hideSrc).toContain('document.visibilityState === "hidden"');
+  });
+
+  it("a hidden tab does not dial, and becoming visible dials at once", () => {
+    vi.useFakeTimers();
+    const visibility = { state: "hidden" };
+    const stats = { connectCalls: 0 };
+    const backoffSrc = html.slice(
+      html.indexOf("var RECONNECT_FLOOR_MS"),
+      html.indexOf("// ---------------------------------------------------------------- presence"),
+    );
+    const runtime = new Function(
+      "document",
+      "stats",
+      `
+        var ws = null;
+        function socketIsLive(socket) { return !!socket; }
+        function connect() { stats.connectCalls += 1; }
+        ${backoffSrc}
+        return { scheduleReconnect, reconnectNow };
+      `,
+    )({
+      get visibilityState() { return visibility.state; },
+    }, stats) as { scheduleReconnect: () => void; reconnectNow: () => void };
+
+    runtime.scheduleReconnect();
+    vi.advanceTimersByTime(60_000);
+    expect(stats.connectCalls).toBe(0);
+
+    visibility.state = "visible";
+    runtime.reconnectNow();
+    expect(stats.connectCalls).toBe(1);
+    vi.advanceTimersByTime(60_000);
+    expect(stats.connectCalls).toBe(1);
   });
 });
 

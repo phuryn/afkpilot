@@ -5,6 +5,8 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { SupabaseDeviceRegistry } from "../src/devices-supabase.js";
+import { DeviceVerifyCache } from "../src/device-verify-cache.js";
+import { hmacDeviceSecret, issueDeviceKey } from "../src/device-keys.js";
 
 interface Call {
   method: string;
@@ -175,6 +177,84 @@ describe("SupabaseDeviceRegistry (stub client)", () => {
     expect(calls.filter((c) => c.method === "eq")).toEqual([{ method: "eq", args: ["device_id", DEV_ID] }]);
     expect(JSON.stringify(calls)).not.toMatch(/"name"/);
     expect(JSON.stringify(calls)).not.toMatch(/user_id/);
+  });
+
+  it("a wrong secret still fails on a cache hit", async () => {
+    const minted = issueDeviceKey({
+      randomUUID: () => "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      randomBytes: (n) => Buffer.alloc(n, 9),
+    });
+    const hmac = hmacDeviceSecret("user-1", minted.secret, deps.pepper);
+    const verifyRow = { ...row, hmac };
+    const { client, calls } = recordingClient({ data: verifyRow, error: null });
+    const cache = new DeviceVerifyCache({ now: () => 0, ttlMs: 5_000, maxEntries: 8 });
+    const registry = new SupabaseDeviceRegistry(client, { ...deps, verifyCache: cache });
+
+    expect(await registry.verify(minted.token)).toMatchObject({ deviceId: DEV_ID, userId: "user-1" });
+    const dbHits = () => calls.filter((c) => c.method === "maybeSingle").length;
+    expect(dbHits()).toBe(1);
+
+    const wrong = `sk-device-${minted.kid}.not-the-secret`;
+    expect(await registry.verify(wrong)).toBeNull();
+    expect(dbHits()).toBe(1);
+
+    expect(await registry.verify(minted.token)).toMatchObject({ deviceId: DEV_ID });
+    expect(dbHits()).toBe(1);
+  });
+
+  it("verify reuses a cached row and caches a negative miss", async () => {
+    const minted = issueDeviceKey({
+      randomUUID: () => "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      randomBytes: (n) => Buffer.alloc(n, 9),
+    });
+    const hmac = hmacDeviceSecret("user-1", minted.secret, deps.pepper);
+    const { client, calls } = recordingClient({ data: { ...row, hmac }, error: null });
+    const cache = new DeviceVerifyCache({ now: () => 0, ttlMs: 5_000, maxEntries: 8 });
+    const registry = new SupabaseDeviceRegistry(client, { ...deps, verifyCache: cache });
+
+    await registry.verify(minted.token);
+    await registry.verify(minted.token);
+    expect(calls.filter((c) => c.method === "maybeSingle")).toHaveLength(1);
+
+    const { client: missClient, calls: missCalls } = recordingClient({ data: null, error: null });
+    const missCache = new DeviceVerifyCache({ now: () => 0, ttlMs: 5_000, negativeTtlMs: 2_000, maxEntries: 8 });
+    const missRegistry = new SupabaseDeviceRegistry(missClient, { ...deps, verifyCache: missCache });
+    const missing = `sk-device-missing-kid.${minted.secret}`;
+    expect(await missRegistry.verify(missing)).toBeNull();
+    expect(await missRegistry.verify(missing)).toBeNull();
+    expect(missCalls.filter((c) => c.method === "maybeSingle")).toHaveLength(1);
+  });
+
+  it("revoke drops the cached row so the token dies immediately", async () => {
+    const minted = issueDeviceKey({
+      randomUUID: () => "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      randomBytes: (n) => Buffer.alloc(n, 9),
+    });
+    const hmac = hmacDeviceSecret("user-1", minted.secret, deps.pepper);
+    const verifyRow = { ...row, hmac };
+    const { client } = recordingClient({ data: verifyRow, error: null });
+    const cache = new DeviceVerifyCache({ now: () => 0, ttlMs: 5_000, maxEntries: 8 });
+    const registry = new SupabaseDeviceRegistry(client, { ...deps, verifyCache: cache });
+    expect(await registry.verify(minted.token)).toMatchObject({ deviceId: DEV_ID });
+
+    const { client: revokeClient } = recordingClient({ data: [{ device_id: DEV_ID }], error: null });
+    const revoking = new SupabaseDeviceRegistry(revokeClient, { ...deps, verifyCache: cache });
+    expect(await revoking.revoke(DEV_ID)).toBe(true);
+
+    const { client: afterClient, calls: afterCalls } = recordingClient({ data: null, error: null });
+    const after = new SupabaseDeviceRegistry(afterClient, { ...deps, verifyCache: cache });
+    expect(await after.verify(minted.token)).toBeNull();
+    expect(afterCalls.filter((c) => c.method === "maybeSingle")).toHaveLength(1);
+  });
+
+  it("malformed tokens never hit the cache or the database", async () => {
+    const { client, calls } = recordingClient({ data: row, error: null });
+    const cache = new DeviceVerifyCache({ now: () => 0 });
+    const registry = new SupabaseDeviceRegistry(client, { ...deps, verifyCache: cache });
+    expect(await registry.verify("not-a-token")).toBeNull();
+    expect(await registry.verify("")).toBeNull();
+    expect(calls).toEqual([]);
+    expect(cache.size()).toBe(0);
   });
 
   it("findOwned refuses a malformed device id without touching the database", async () => {

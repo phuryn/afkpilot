@@ -1400,6 +1400,7 @@
   const dialogCancel = document.getElementById("dialog-cancel");
   const dialogConfirm = document.getElementById("dialog-confirm");
   let timer = null;
+  let pollEnabled = false;
   let dialogDeviceId = null;
   let installPrompt = null;
   const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
@@ -1971,6 +1972,25 @@
     } catch (e) { /* next tick */ }
   }
 
+  function stopDevicePoll() {
+    if (timer) { clearInterval(timer); timer = null; }
+  }
+
+  function startDevicePoll() {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    if (!timer) timer = setInterval(refresh, 3000);
+  }
+
+  function onPickerVisibility() {
+    if (!pollEnabled) return;
+    if (document.visibilityState === "hidden") {
+      stopDevicePoll();
+      return;
+    }
+    refresh();
+    startDevicePoll();
+  }
+
   function startPicker() {
     // Here rather than in showSignedIn(): mock mode reaches the picker without
     // ever signing in, and the link is just as useful there. Computers only —
@@ -1979,9 +1999,12 @@
     // Step 2's address is this deployment, not a hardcoded domain.
     document.querySelectorAll(".js-origin").forEach((el) => { el.textContent = location.host; });
     if (forwarding) document.getElementById("forwarding").hidden = false;
+    pollEnabled = true;
     refresh();
-    if (!timer) timer = setInterval(refresh, 3000);
+    startDevicePoll();
   }
+
+  document.addEventListener("visibilitychange", onPickerVisibility);
 
   function showIdentity(auth) {
     const el = document.getElementById("signed-in-as");

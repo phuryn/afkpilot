@@ -13,6 +13,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { DeviceClientInfo, DeviceRecord, DeviceRegistry } from "./devices.js";
 import { isDevicePlatform } from "./device-client.js";
 import { hmacDeviceSecret, issueDeviceKey, parseDeviceToken, safeEqual } from "./device-keys.js";
+import type { CachedVerifyEntry, DeviceVerifyCache } from "./device-verify-cache.js";
 
 interface DeviceRow {
   device_id: string;
@@ -56,6 +57,8 @@ export interface SupabaseDeviceRegistryDeps {
   randomBytes: (size: number) => Buffer;
   /** Server-side HMAC key for device secrets — required (main.ts exits without it). */
   pepper: string;
+  /** Optional in-memory memo of verify() rows (not verdicts). Wired in main.ts. */
+  verifyCache?: DeviceVerifyCache;
 }
 
 export class SupabaseDeviceRegistry implements DeviceRegistry {
@@ -93,6 +96,10 @@ export class SupabaseDeviceRegistry implements DeviceRegistry {
   async verify(token: string): Promise<DeviceRecord | null> {
     const parsed = parseDeviceToken(token);
     if (!parsed) return null; // malformed — no db hit
+    const cache = this.deps.verifyCache;
+    const cached = cache?.get(parsed.kid);
+    if (cached !== undefined) return this.matchPresentedSecret(parsed.secret, cached);
+
     const { data, error } = await this.db
       .from("devices")
       .select(VERIFY_COLS)
@@ -100,13 +107,22 @@ export class SupabaseDeviceRegistry implements DeviceRegistry {
       .is("revoked_at", null)
       .maybeSingle();
     if (error) throw new Error(`devices lookup failed: ${error.message}`);
-    if (!data) return null;
-    const row = data as VerifyRow;
-    // Recompute with the ROW's owner + the PRESENTED secret: a token replayed
-    // under another kid (different user) yields a different MAC and dies here.
-    const expected = hmacDeviceSecret(row.user_id, parsed.secret, this.deps.pepper);
-    if (!safeEqual(expected, row.hmac)) return null;
-    return toRecord(row);
+    const entry: CachedVerifyEntry | null = data
+      ? { hmac: (data as VerifyRow).hmac, record: toRecord(data as VerifyRow) }
+      : null;
+    cache?.set(parsed.kid, entry);
+    return this.matchPresentedSecret(parsed.secret, entry);
+  }
+
+  /**
+   * Always run, cache hit or miss. The cache holds the row; this is the
+   * verdict, and it is computed from the presented secret every time.
+   */
+  private matchPresentedSecret(secret: string, entry: CachedVerifyEntry | null): DeviceRecord | null {
+    if (!entry) return null;
+    const expected = hmacDeviceSecret(entry.record.userId, secret, this.deps.pepper);
+    if (!safeEqual(expected, entry.hmac)) return null;
+    return { ...entry.record };
   }
 
   async revoke(deviceId: string): Promise<boolean> {
@@ -117,6 +133,7 @@ export class SupabaseDeviceRegistry implements DeviceRegistry {
       .is("revoked_at", null)
       .select("device_id");
     if (error) throw new Error(`devices revoke failed: ${error.message}`);
+    this.deps.verifyCache?.invalidateDevice(deviceId);
     return (data?.length ?? 0) > 0;
   }
 

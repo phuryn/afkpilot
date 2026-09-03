@@ -3661,6 +3661,64 @@ window.grokRemoteClient = true;
     if (probeTimer) { clearTimeout(probeTimer); probeTimer = null; }
   }
 
+  // Reconnect backoff. Floor 1s, doubles to a 30s cap, equal jitter.
+  // Reset only after the socket has stayed open for the floor — not on OPEN —
+  // so a flap does not retry every second forever. Hidden tabs do not retry;
+  // becoming visible, focus, or a user action resets and dials at once.
+  var RECONNECT_FLOOR_MS = 1000;
+  var RECONNECT_CAP_MS = 30000;
+  var reconnectDelayMs = RECONNECT_FLOOR_MS;
+  var reconnectOpenedAt = 0;
+  var reconnectTimer = null;
+
+  function reconnectJitter(baseMs) {
+    return baseMs * (0.5 + 0.5 * Math.random());
+  }
+  function nextReconnectDelayMs() {
+    var delay = reconnectJitter(reconnectDelayMs);
+    reconnectDelayMs = Math.min(RECONNECT_CAP_MS, reconnectDelayMs * 2);
+    return delay;
+  }
+  function resetReconnectBackoff() {
+    reconnectDelayMs = RECONNECT_FLOOR_MS;
+    reconnectOpenedAt = 0;
+  }
+  function noteReconnectOpen() {
+    reconnectOpenedAt = Date.now();
+  }
+  function noteReconnectClosed() {
+    if (reconnectOpenedAt && (Date.now() - reconnectOpenedAt) >= RECONNECT_FLOOR_MS) {
+      reconnectDelayMs = RECONNECT_FLOOR_MS;
+    }
+    reconnectOpenedAt = 0;
+  }
+  function clearReconnectTimer() {
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  }
+  function pageIsHidden() {
+    return typeof document !== "undefined" && document.visibilityState === "hidden";
+  }
+  function scheduleReconnect() {
+    clearReconnectTimer();
+    if (pageIsHidden()) return;
+    var delay = nextReconnectDelayMs();
+    reconnectTimer = setTimeout(function () {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+  }
+  function reconnectNow() {
+    resetReconnectBackoff();
+    clearReconnectTimer();
+    if (pageIsHidden()) return;
+    if (socketIsLive(ws)) return;
+    connect();
+  }
+  function onReconnectUserAction() {
+    if (socketIsLive(ws)) return;
+    reconnectNow();
+  }
+
   // ---------------------------------------------------------------- presence
   //
   // Is a human actually here? The relay cannot tell: a person reading and a tab
@@ -3755,6 +3813,7 @@ window.grokRemoteClient = true;
     ws = socket;
     socket.addEventListener("open", function () {
       if (ws !== socket) return;
+      noteReconnectOpen();
       if (!firstConnect) {
         var m = document.getElementById("messages");
         if (m && m.scrollHeight - m.scrollTop - m.clientHeight > 80) resyncScrollTop = m.scrollTop;
@@ -3904,7 +3963,8 @@ window.grokRemoteClient = true;
       if (e.code === 4005) { notice(entitlementCloseCopy(document.documentElement.classList.contains("afk-app"), queue.length)); return; }
       if (e.code === 4003) { notice('Device not found — or it isn’t linked to your account. <a href="/" data-native-link>Pick another device</a>.' + (queue.length ? " Your unsent message is saved and will be handled when you return." : "")); return; }
       showReconnecting();
-      setTimeout(connect, 1000);
+      noteReconnectClosed();
+      scheduleReconnect();
     });
     socket.addEventListener("error", function () {
       if (ws !== socket) return;
@@ -3928,6 +3988,8 @@ window.grokRemoteClient = true;
     }
     showReconnecting();
     setVoiceTransportReady(false);
+    resetReconnectBackoff();
+    clearReconnectTimer();
     connect();
   }
 
@@ -3942,7 +4004,10 @@ window.grokRemoteClient = true;
 
   function onResumeVisible() {
     if (probeTimer) return;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      reconnectNow();
+      return;
+    }
     var generation = ++probeGeneration;
     try {
       ws.send(transportProbePayload());
@@ -3959,6 +4024,7 @@ window.grokRemoteClient = true;
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState === "hidden") {
       persistRenderedTranscript();
+      clearReconnectTimer();
       return;
     }
     onResumeVisible();
@@ -3968,6 +4034,12 @@ window.grokRemoteClient = true;
   });
   window.addEventListener("pageshow", function () {
     onResumeVisible();
+  });
+  window.addEventListener("focus", function () {
+    reconnectNow();
+  });
+  ["pointerdown", "keydown"].forEach(function (evt) {
+    document.addEventListener(evt, onReconnectUserAction, { passive: true });
   });
 
   function domReady() {

@@ -34,10 +34,10 @@ The relay is routing-policy-free by design. Capability and message policy live a
 | Live routing | `src/hub.ts` | Pair one device uplink with zero or more browser clients and route per-client frames. |
 | Wire types | `src/frames.ts` | Define and parse the relay envelope mirrored by the extension. |
 | Session verification | `src/auth.ts`, `src/auth-clerk.ts` | Provide the verifier seam, local mock verifier, Clerk verification, claim parsing, issuer checks, and authorized-party checks. |
-| Device credentials | `src/device-keys.ts`, `src/devices.ts`, `src/devices-supabase.ts` | Mint, hash, verify, list, and revoke device tokens in memory or Supabase. |
+| Device credentials | `src/device-keys.ts`, `src/devices.ts`, `src/devices-supabase.ts`, `src/device-verify-cache.ts` | Mint, hash, verify, list, and revoke device tokens in memory or Supabase. Production `verify()` memos the row (never the verdict) in a short-TTL in-memory cache so a reconnect storm is one lookup per TTL. |
 | Limits | `src/limits.ts`, `src/usage.ts`, `src/usage-supabase.ts` | Apply per-user connection and aggregate message controls in memory or Supabase. |
 | Distribution routes | `src/downloads.ts`, `src/update-feed.ts` | Resolve public desktop release assets and update metadata. |
-| Browser host | `web/chat.html` | Supply the remote shell, browser authentication, webview compatibility shim, and `/client` connection. |
+| Browser host | `web/chat.html` | Supply the remote shell, browser authentication, webview compatibility shim, and `/client` connection. Non-terminal reconnects use a capped exponential backoff and do not retry while the tab is hidden. |
 | Shared renderer | `web/vendor/` | Committed output of `npm run sync-ui`; generated from extension media and never edited directly. |
 
 The extension-side modules and provider boundary are documented in [Grok Build integration](grok-build-integration.md) and [Codex integration](codex-integration.md). The IDE, desktop, and browser boot paths are compared in [surfaces](surfaces.md).

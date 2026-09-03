@@ -5,6 +5,7 @@ import { LinkStore, makeLinkCode } from "./link-store.js";
 import { createDb } from "./supabase.js";
 import { InMemoryDeviceRegistry, type DeviceRegistry } from "./devices.js";
 import { SupabaseDeviceRegistry } from "./devices-supabase.js";
+import { DeviceVerifyCache } from "./device-verify-cache.js";
 import { MockSessionVerifier, type SessionVerifier } from "./auth.js";
 import { ClerkSessionVerifier } from "./auth-clerk.js";
 import { MinuteRateLimiter, type FreeTier, type MessageRate } from "./limits.js";
@@ -58,11 +59,19 @@ if (supabaseUrl && supabaseSecretKey) {
     process.exit(1);
   }
   const db = createDb(supabaseUrl, supabaseSecretKey);
-  devices = new SupabaseDeviceRegistry(db, { now: Date.now, randomUUID, randomBytes: randBytes, pepper });
+  // Short-TTL row cache in front of devices.verify(). A reconnect storm is one
+  // query per TTL, not one per attempt; the MAC is still checked every call.
+  devices = new SupabaseDeviceRegistry(db, {
+    now: Date.now,
+    randomUUID,
+    randomBytes: randBytes,
+    pepper,
+    verifyCache: new DeviceVerifyCache({ now: Date.now }),
+  });
   // Usage counters persist next to the devices (one aggregate row per user +
   // window — deploys no longer reset the free-tier quota).
   usage = new SupabaseUsageStore(db);
-  log(`[relay] device registry: Supabase (${supabaseUrl})`);
+  log(`[relay] device registry: Supabase (${supabaseUrl}); verify cache 5s`);
 } else {
   devices = new InMemoryDeviceRegistry({ now: Date.now, randomUUID, randomBytes: randBytes, randomId: randomUUID });
   usage = new InMemoryUsageStore();
