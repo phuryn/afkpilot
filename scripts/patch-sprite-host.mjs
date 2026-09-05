@@ -58,6 +58,11 @@ const API_BASE = process.env.SPRITES_API_BASE || "https://api.sprites.dev";
 const REPO = "https://github.com/phuryn/grok-build-vscode.git";
 const APP = "/home/sprite/afkpilot/squashfs-root";
 const RES = `${APP}/resources`;
+// pool-bootstrap.ts keeps its bookkeeping ONE LEVEL UP, in `$HOME/afkpilot`
+// (its own `APP`), not in the extracted image. Writing `.afkpilot-asset` beside
+// the app instead creates an inert file the bootstrap never reads, so the patch
+// looks pinned and is replaced on the next boot anyway.
+const HOME_APP = "/home/sprite/afkpilot";
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -129,7 +134,7 @@ if (REVERT) {
   await run("restore", `test -f ${RES}/app.asar.bak && cp ${RES}/app.asar.bak ${RES}/app.asar && echo RESTORED=$(wc -c < ${RES}/app.asar) || echo NO_BACKUP`);
   // Put back the release the machine really came from, so its next boot
   // resumes normal updating instead of believing it is already current.
-  await run("restore the asset record", `test -f ${APP}/.afkpilot-asset.bak && mv ${APP}/.afkpilot-asset.bak ${APP}/.afkpilot-asset && echo ASSET=$(cat ${APP}/.afkpilot-asset) || echo NO_ASSET_BACKUP`);
+  await run("restore the asset record", `test -f ${HOME_APP}/.afkpilot-asset.bak && mv ${HOME_APP}/.afkpilot-asset.bak ${HOME_APP}/.afkpilot-asset && echo ASSET=$(cat ${HOME_APP}/.afkpilot-asset) || echo NO_ASSET_BACKUP`);
   await run("start the host", "setsid nohup bash \"$HOME/afkpilot-boot.sh\" > /dev/null 2>&1 < /dev/null & sleep 5; echo LAUNCHED=ok");
   console.log("\nreverted — give it ~30s, then check the machine.");
   process.exit(0);
@@ -194,9 +199,13 @@ await run("install", `cp /tmp/app.asar.new ${RES}/app.asar; echo LIVE=$(wc -c < 
 const asset = await publishedAppImage();
 if (asset) {
   await run("pin the asset record", [
-    `cp -n ${APP}/.afkpilot-asset ${APP}/.afkpilot-asset.bak 2>/dev/null`,
-    `printf '%s\\n' '${asset}' > ${APP}/.afkpilot-asset`,
-    `echo ASSET=$(cat ${APP}/.afkpilot-asset)`,
+    `cp -n ${HOME_APP}/.afkpilot-asset ${HOME_APP}/.afkpilot-asset.bak 2>/dev/null`,
+    `printf '%s\\n' '${asset}' > ${HOME_APP}/.afkpilot-asset`,
+    // Also clear the weekly stamp's opposite risk: report what the bootstrap
+    // will actually read, so a wrong path shows up here instead of silently
+    // surviving until the next boot throws the patch away.
+    `echo ASSET=$(cat ${HOME_APP}/.afkpilot-asset)`,
+    `rm -f ${APP}/.afkpilot-asset`,
   ].join("; "));
 } else {
   console.log(
