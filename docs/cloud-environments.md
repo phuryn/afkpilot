@@ -160,9 +160,14 @@ recoverable and that the damage is confined to your own machine.
 
 ## Where the machines come from
 
-The preferred installation path downloads and extracts the Linux AppImage
-from the latest GitHub release. If that release has no AppImage, the current
-bootstrap falls back to cloning and building from source. That fallback took
+The preferred installation path downloads and extracts the Linux AppImage from
+GitHub. The lookup walks the published releases newest-first for one that
+actually carries an AppImage, rather than trusting `releases/latest`: a release
+exists for the minutes between its creation and its installers attaching, and a
+machine built in that window used to fall through to a source build and stay
+recorded as one. A lookup that fails outright now stops the install rather than
+authorising a build. Cloning and building from source survives only for the case
+where no published build exists at all. That fallback took
 **25 minutes**, measured end to end on 2026-08-27: `apt` 58s (a stock sprite has
 no display server and none of Chromium's libraries), clone 77s, `npm ci` 20
 minutes — I/O-bound on the VM's writable overlay — and compile 4.6 minutes.
