@@ -11,22 +11,23 @@ OS wake lock for precisely that reason, and
 says in its own comments that a standing wake lock drains laptops. A hosted
 environment is the version where closing the lid is fine.
 
-> **Status: built and tested; not switched on.** Provisioning, the pool, the
-> claim and the token handover all exist and are covered by the suite. The pool
-> stays off until `CLOUD_POOL_SIZE` and `RELAY_PUBLIC_URL` are set, and cloud
-> access is open to every account until `RELAY_CLOUD_FEATURE` names the plan it
-> belongs to.
+> **Availability is deployment-configured.** `SPRITES_TOKEN` enables cloud
+> services in the relay. The pool requires a positive `CLOUD_POOL_SIZE` and
+> `RELAY_PUBLIC_URL`; provisioning and handover also need a reachable public
+> relay URL. Cloud access is open to every account until `RELAY_CLOUD_FEATURE`
+> names the required feature. This document does not attest to a deployment's
+> current configuration.
 
 ## What it is, from the relay's side
 
-Almost nothing new. A cloud environment links through `/api/link/start` like any
-host, lands in the device registry, routes through the hub, and obeys the
+`POST /api/cloud/open` claims a spare machine or provisions one, issues its
+device identity, and hands that identity to the host through a single-use code.
+The resulting uplink uses the ordinary device registry and hub and obeys the
 extension's capability policy. Chat, sessions, projects, file browsing and
-routines all work because none of them ever cared what was on the other end of
-the socket.
+routines use that shared host protocol.
 
-The relay learns exactly **one** thing it does not know about a laptop: how to
-wake it.
+The relay also owns the cloud control plane: provisioning, pool inventory,
+identity handover, waking, and the exec holds that keep a machine running.
 
 That is necessary because the uplink is outbound-only. When an environment
 sleeps, its socket dies — and a sleeping environment is then indistinguishable
@@ -159,11 +160,14 @@ recoverable and that the damage is confined to your own machine.
 
 ## Where the machines come from
 
-Creating one takes a second. Making one *useful* took **25 minutes**, measured
-end to end on 2026-08-27: `apt` 58s (a stock sprite has no display server and
-none of Chromium's libraries), clone 77s, `npm ci` 20 minutes — I/O-bound on the
-VM's writable overlay, which is pathological for `node_modules` — and compile 4.6
-minutes.
+The preferred installation path downloads and extracts the Linux AppImage
+from the latest GitHub release. If that release has no AppImage, the current
+bootstrap falls back to cloning and building from source. That fallback took
+**25 minutes**, measured end to end on 2026-08-27: `apt` 58s (a stock sprite has
+no display server and none of Chromium's libraries), clone 77s, `npm ci` 20
+minutes — I/O-bound on the VM's writable overlay — and compile 4.6 minutes.
+This historical measurement describes the source-build path, not a current
+AppImage startup benchmark.
 
 That is not a wait to shrink. It is a wait to **move**. The relay keeps a shelf
 of `CLOUD_POOL_SIZE` machines built ahead of demand; the first open takes one off

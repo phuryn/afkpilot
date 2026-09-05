@@ -124,7 +124,7 @@ Run these commands from `grok-build-vscode`.
 
 ### Ordinary pull request
 
-For a relay-only change, run `npm test` plus the focused E2E command for the affected boundary. Before a change is eligible for relay promotion, run the full `npm run gate` and record the result for review. `e2e:lifecycle` is part of that gate; without a sibling `grok-build-vscode` checkout it prints why and exits 0. CI covers the real run via the `lifecycle` job, which checks out both public repos at their default-branch tips (no secrets). That job cannot pass until the host-side lifecycle contract is on the sibling's default branch — the same release-order rule as relay-before-extension.
+For a relay-only change, run `npm test` plus the focused E2E command for the affected boundary. Before a change is eligible for relay promotion, run the full `npm run gate` and record the result for review. `e2e:lifecycle` is part of that gate; without a sibling `grok-build-vscode` checkout it prints why and exits 0. Set `LIFECYCLE_REQUIRE_HOST=1` for release verification so that absence fails. There is no lifecycle CI job: record both repository commit IDs and any working-tree changes with the local result.
 
 For an extension change, run `npm test` and the appropriate integration or desktop suite locally. The pull request then receives the GitHub Actions unit/package and Linux/xvfb integration jobs.
 

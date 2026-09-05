@@ -1,13 +1,13 @@
 # Architecture
 
-`afkpilot` is a WebSocket relay and browser host for a coding-agent UI that runs on a developer's machine. The host extension makes one outbound uplink; authenticated browser clients connect to the relay and exchange the same webview messages used locally.
+`afkpilot` is a WebSocket relay and browser host for a coding-agent UI whose host runs in an IDE, a desktop app, or a Sprites cloud environment. The host makes one outbound uplink; authenticated browser clients connect to the relay and exchange the same webview messages used locally.
 
 This document is the map of that system. Follow its links for implementation detail.
 
 ## System boundary
 
 ```text
-IDE or Electron host
+IDE or Electron host (developer machine or Sprites environment)
   ACP client -> provider process
   shared chat renderer
   remote-policy.ts
@@ -19,9 +19,11 @@ relay Hub (in memory) <-> authenticated /client WebSocket <-> remote browser
         |
         +-> device registry
         +-> aggregate usage counters
+        +-> cloud environment / pool records and scheduled wake timestamp
+        +-> Sprites provisioning, wake and exec holds
 ```
 
-The provider process, workspace access, terminal access, approvals, and host-native actions remain on the developer's machine. The relay pairs an uplink with browser clients, authenticates the browser side, checks device ownership and configured entitlement, and forwards frames. It does not run a coding agent.
+The provider process, workspace access, terminal access, and approvals remain in the host process. For cloud environments that process runs inside the user's Sprite. The relay pairs an uplink with browser clients, authenticates the browser side, checks device ownership and configured entitlement, and forwards frames. It also provisions and wakes cloud hosts and holds them running while active. It does not execute the coding agent inside the relay process.
 
 The relay is routing-policy-free by design. Capability and message policy live at the trusted host boundary in the extension's `src/remote-policy.ts`; see [Grok Build integration](grok-build-integration.md). The server still validates transport envelopes and applies connection, payload-size, and usage controls. “Policy-free” does not mean that malformed frames are forwarded blindly.
 
@@ -39,6 +41,8 @@ The relay is routing-policy-free by design. Capability and message policy live a
 | Distribution routes | `src/downloads.ts`, `src/update-feed.ts` | Resolve public desktop release assets and update metadata. |
 | Browser host | `web/chat.html` | Supply the remote shell, browser authentication, webview compatibility shim, and `/client` connection. Non-terminal reconnects use a capped exponential backoff and do not retry while the tab is hidden. |
 | Shared renderer | `web/vendor/` | Committed output of `npm run sync-ui`; generated from extension media and never edited directly. |
+| Cloud lifecycle | `src/environment-provisioner.ts`, `src/environment-waker.ts`, `src/environment-keepalive.ts`, `src/presence.ts`, `src/wake-scheduler.ts` | Create and wake Sprites, hold them running during activity, track browser presence, and dispatch scheduled wakes. |
+| Cloud inventory and installation | `src/environment-store.ts`, `src/environment-pool-store.ts`, `src/pool-filler.ts`, `src/pool-bootstrap.ts`, `src/environment-handover.ts`, `src/sprite-exec.ts` | Track owned environments and spare machines, build hosts, and deliver device identity through single-use handover codes. |
 
 The extension-side modules and provider boundary are documented in [Grok Build integration](grok-build-integration.md) and [Codex integration](codex-integration.md). The IDE, desktop, and browser boot paths are compared in [surfaces](surfaces.md).
 
@@ -58,7 +62,7 @@ The remote page authenticates in the browser and upgrades `/client?device=...`. 
 
 Browser messages pass through the relay envelope to `remote-policy.ts` on the host before entering the ordinary sidebar message handler. Host messages pass through the outbound half of the same policy, which may mirror, transform, or suppress them before `remote-uplink.ts` writes to the socket.
 
-The relay does not persist prompts, source code, responses, or per-message metadata. These payloads exist only while a live WebSocket frame is being handled or buffered by an active connection. Persistent relay records are limited to device ownership and aggregate usage counters. See [security](security.md) for the corresponding trust boundary.
+The relay does not persist prompts, source code, responses, or per-message metadata. These payloads exist while frames are handled or buffered for routing. Persistent relay records include device ownership, aggregate usage counters, cloud environment and pool lifecycle metadata, and a next-wake timestamp. Conversation content and agent credentials belong on the host. See [security](security.md) for the trust boundary and [cloud environments](cloud-environments.md) for the provisioning and sleep lifecycle.
 
 ## Shared contracts
 

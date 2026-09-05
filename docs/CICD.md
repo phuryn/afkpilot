@@ -1,6 +1,6 @@
 # Delivery and release flow
 
-The repositories ship differently. The relay uses branch-connected deployment services, a GitHub Actions gate, and a local release gate that covers one mile CI cannot. The extension uses GitHub Actions for pull requests and a separate maintainer release process.
+The repositories ship differently. The relay uses branch-connected deployment services, a GitHub Actions gate, and a local release gate that covers authentication and host lifecycle beyond CI. The extension uses GitHub Actions for pull requests and a separate maintainer release process.
 
 ## What a contributor sees
 
@@ -10,7 +10,7 @@ Pushes and pull requests targeting `main` (and pushes to `production`) run `.git
 
 Two suites are therefore **not** covered by CI at all: `e2e:browser` needs Clerk credentials, and `e2e:lifecycle` needs a checkout of `phuryn/grok-build-vscode`. The local `npm run gate` before a promote is the only thing that runs them, which makes running it a real gate rather than a formality.
 
-`gate:ci` is `gate` minus `e2e:browser` and minus `e2e:lifecycle`. `e2e:browser` drives the real Clerk sign-in modal and needs the dev Clerk and Supabase keys; without them the relay starts in mock mode and the suite fails its Clerk check, so it cannot run unattended without repository secrets. `e2e:lifecycle` needs a checkout of `phuryn/grok-build-vscode` (real desktop host) and runs in its own job. Everything else blanks its credentials deliberately and is hermetic.
+`gate:ci` is `gate` minus `e2e:browser` and minus `e2e:lifecycle`. `e2e:browser` drives the real Clerk sign-in modal and needs the dev Clerk and Supabase keys; without them the relay starts in mock mode and the suite fails its Clerk check. `e2e:lifecycle` needs a checkout of `phuryn/grok-build-vscode` (real desktop host) and runs locally. CI supplies no service credentials. Locally, Vitest's Clerk and Supabase integration tests can load `.env` and run against configured test services; choosing the `default` Vitest project excludes Supabase integration tests but still includes the Clerk canaries.
 
 So the `gate` job does **not** cover the authenticated mile — ClerkJS hot-load, the sign-in modal, the `__session` cookie on the WebSocket upgrade, link approval and revocation — nor the cross-repo host-restart mile. Running `npm run gate` locally still covers the authenticated mile, and remains mandatory before promotion. Include the commands and results in the pull request so reviewers can distinguish an unrun gate from a failure.
 
@@ -27,7 +27,7 @@ These jobs do not publish a release. They establish that the source builds, unit
 
 ## Relay deployment
 
-Relay deployment is not driven by the GitHub Actions workflows in `.github/workflows/` (those run the test gate, including the cross-repo `lifecycle` job). The checked-in `Dockerfile` supplies the Node.js 20 production image, and `railway.json` defines the Docker build, `/api/health` health check, and restart policy.
+Relay deployment is not driven by the GitHub Actions workflows in `.github/workflows/` (those run the single `gate:ci` job). The checked-in `Dockerfile` supplies the Node.js 20 production image, and `railway.json` defines the Docker build, `/api/health` health check, and restart policy.
 
 The environment flow is:
 
@@ -45,7 +45,7 @@ git merge --ff-only main
 git push origin production
 ```
 
-Before that push, the exact candidate commit must pass:
+Before that push, the exact candidate commit must pass the full local gate. Set `LIFECYCLE_REQUIRE_HOST=1` in the invoking environment so a missing sibling checkout fails instead of skipping:
 
 ```sh
 npm run gate
@@ -61,7 +61,7 @@ Marketplace publication is an explicit maintainer action through `npm run publis
 
 ### Desktop two-dispatch workflow
 
-`.github/workflows/desktop-release.yml` is manually dispatched and runs on macOS and Windows.
+`.github/workflows/desktop-release.yml` is manually dispatched and runs on macOS, Windows, and Linux. The Linux AppImage supplies the cloud host installation path.
 
 Use it in two phases:
 
@@ -81,4 +81,4 @@ relay gate -> relay development deploy -> smoke -> production promotion
 
 Protocol additions must remain safe for older extensions during the rollout. See [repositories](repositories.md#release-ordering) and [testing](test.md) for the exact gate matrix.
 
-The same order applies to the lifecycle CI job. It checks out `phuryn/grok-build-vscode` at the default-branch tip and cannot pass until the host-side contract that job depends on is on that branch (unique fake session ids and stdin shutdown, sibling commit `357a300`). A local sibling checkout can run against an unpushed commit; CI cannot.
+Record both repository commit IDs with a local lifecycle result: it exercises the sibling working tree, including any uncommitted changes. There is no cross-repository lifecycle CI job. The vendored UI manifest records its source revision, but it does not establish that the live cloud host is running that revision; verify the deployed host and boot-script versions separately when promoting cloud changes.
