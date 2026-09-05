@@ -17,11 +17,20 @@
  * Reversible: the original archive is kept as `app.asar.bak` and `--revert`
  * puts it back.
  *
- * FOR DEV MACHINES. A patched host reports the version it was built from and is
- * not what `releases/latest` says the machine is running — `.afkpilot-asset`
- * still names the release it came from, which is deliberate: the bootstrap's
- * weekly check compares that URL, so it leaves the patch alone until a REAL
- * release supersedes it, and then correctly replaces it.
+ * FOR DEV MACHINES. A patched host reports the version it was built from, which
+ * is not what `releases/latest` says the machine is running.
+ *
+ * To keep the patch, this WRITES `.afkpilot-asset` with the currently published
+ * AppImage URL, because that is the value the bootstrap's host check compares
+ * against. The machine therefore keeps this build until a release NEWER than
+ * today's exists, and is then correctly replaced by it. `--revert` puts the
+ * original record back so normal updating resumes.
+ *
+ * Do not be tempted to drop that step on the grounds that the machine looks
+ * settled. The bootstrap skips its refresh entirely while a machine is
+ * unclaimed, so an unpinned patch looks perfectly stable right up until the
+ * moment someone CLAIMS the machine to test on it — which writes the env file,
+ * restarts the service, and installs latest over the patch on that first boot.
  *
  *     npm run build
  *     node scripts/patch-sprite-host.mjs --sprite <name> --ref <git-ref>
@@ -94,9 +103,33 @@ async function run(label, line, { quiet = false } = {}) {
   return out;
 }
 
+/**
+ * The newest published, non-prerelease AppImage — the same asset
+ * `pool-bootstrap.ts` resolves, and the value it compares `.afkpilot-asset`
+ * against. Returns "" if the lookup fails; the caller decides what that means.
+ */
+async function publishedAppImage() {
+  try {
+    const releases = await (await fetch(
+      `https://api.github.com/repos/phuryn/grok-build-vscode/releases?per_page=100`,
+    )).json();
+    if (!Array.isArray(releases)) return "";
+    for (const release of releases) {
+      if (!release || release.draft !== false || release.prerelease !== false) continue;
+      const asset = (release.assets || []).find((a) =>
+        typeof a.browser_download_url === "string" && a.browser_download_url.endsWith(".AppImage"));
+      if (asset) return asset.browser_download_url;
+    }
+  } catch { /* treated as "unknown" below */ }
+  return "";
+}
+
 if (REVERT) {
   await run("stop the host", `pkill -f '${APP}/grok-build-desktop' 2>/dev/null; sleep 3; echo PROCS=$(ps -eo comm --no-headers | grep -c grok-build-desk)`);
   await run("restore", `test -f ${RES}/app.asar.bak && cp ${RES}/app.asar.bak ${RES}/app.asar && echo RESTORED=$(wc -c < ${RES}/app.asar) || echo NO_BACKUP`);
+  // Put back the release the machine really came from, so its next boot
+  // resumes normal updating instead of believing it is already current.
+  await run("restore the asset record", `test -f ${APP}/.afkpilot-asset.bak && mv ${APP}/.afkpilot-asset.bak ${APP}/.afkpilot-asset && echo ASSET=$(cat ${APP}/.afkpilot-asset) || echo NO_ASSET_BACKUP`);
   await run("start the host", "setsid nohup bash \"$HOME/afkpilot-boot.sh\" > /dev/null 2>&1 < /dev/null & sleep 5; echo LAUNCHED=ok");
   console.log("\nreverted — give it ~30s, then check the machine.");
   process.exit(0);
@@ -140,6 +173,37 @@ console.log(`\nverified: packed out/sidebar.js matches the build (${built.slice(
 //    starting it with one already live gives you two.
 await run("stop the host", `pkill -f '${APP}/grok-build-desktop' 2>/dev/null; sleep 4; echo PROCS=$(ps -eo comm --no-headers | grep -c grok-build-desk)`);
 await run("install", `cp /tmp/app.asar.new ${RES}/app.asar; echo LIVE=$(wc -c < ${RES}/app.asar)`);
+
+// 5b. Make the patch survive a claim.
+//
+// The docstring above promises the bootstrap leaves a patch alone until a real
+// release supersedes it. That is only true when `.afkpilot-asset` ALREADY names
+// `releases/latest`, because `refresh_host_if_stale` short-circuits on a URL
+// compare. On a machine that is behind — which every pool machine is, right
+// after provisioning — the compare differs and the bootstrap installs latest
+// OVER the patch, silently.
+//
+// It does not bite while the machine is unclaimed, because that function
+// returns early with no `~/.afkpilot.env`. It bites on the CLAIM: that writes
+// the env file and restarts the service, so the first boot of the machine you
+// just took is the one that discards what you patched onto it. The tester then
+// exercises a stale host and reports its age as a bug.
+//
+// So record the URL the bootstrap would fetch. The machine keeps this build
+// until a NEWER release than today's exists, which is exactly the promise.
+const asset = await publishedAppImage();
+if (asset) {
+  await run("pin the asset record", [
+    `cp -n ${APP}/.afkpilot-asset ${APP}/.afkpilot-asset.bak 2>/dev/null`,
+    `printf '%s\\n' '${asset}' > ${APP}/.afkpilot-asset`,
+    `echo ASSET=$(cat ${APP}/.afkpilot-asset)`,
+  ].join("; "));
+} else {
+  console.log(
+    "\n=== pin the asset record ===\nWARNING: could not resolve the published AppImage.\n" +
+    "The patch will be replaced by releases/latest when this machine is claimed.",
+  );
+}
 await run("clean up", "rm -rf /tmp/gbv /tmp/appsrc /tmp/app.asar.new /tmp/verify; echo CLEANED=ok");
 await run("start the host", "setsid nohup bash \"$HOME/afkpilot-boot.sh\" > /dev/null 2>&1 < /dev/null & sleep 5; echo LAUNCHED=ok");
 
