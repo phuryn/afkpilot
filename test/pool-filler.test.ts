@@ -8,7 +8,8 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { sweepPool, startPoolFiller, type PoolFillerDeps } from "../src/pool-filler";
-import { InMemoryEnvironmentPoolStore } from "../src/environment-pool-store";
+import { InMemoryEnvironmentPoolStore, SupabaseEnvironmentPoolStore } from "../src/environment-pool-store";
+import { supabaseResult } from "./helpers/supabase-result";
 import { BUILD_TIMEOUT_MS, MAX_BUILDS_PER_SWEEP } from "../src/environment-pool";
 
 function deps(over: Partial<PoolFillerDeps> = {}): PoolFillerDeps & {
@@ -41,6 +42,25 @@ function deps(over: Partial<PoolFillerDeps> = {}): PoolFillerDeps & {
     ...over,
   };
 }
+
+it.each(["ready", "building", "both"])("C3: buys nothing after a returned %s count error, then rechecks", async side => {
+  const d = deps({ target: 1 });
+  await d.pool.add("existing-ready", "s");
+  await d.pool.markReady("existing-ready", "s", 0);
+  const counts = d.pool.counts.bind(d.pool);
+  const sql = new SupabaseEnvironmentPoolStore(supabaseResult(state =>
+    side === "both" || state === side
+      ? { data: null, count: null, error: { message: "read failed" } }
+      : { data: null, count: state === "ready" ? 1 : 0, error: null }));
+  d.pool.counts = sql.counts.bind(sql);
+  expect((await sweepPool(d)).started).toBe(0);
+  expect(d.created).toEqual([]);
+  expect(d.builds).toEqual([]);
+  d.pool.counts = counts;
+  expect((await sweepPool(d)).started).toBe(0); // the shelf was already full
+  await d.pool.remove("existing-ready");
+  expect((await sweepPool(d)).started).toBe(1); // recovery still permits filling
+});
 
 describe("filling", () => {
   it("reserves a row, creates the machine, then starts its build", async () => {

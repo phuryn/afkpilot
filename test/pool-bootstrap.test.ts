@@ -17,7 +17,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { poolBootstrapScript, poolBuildCommand } from "../src/pool-bootstrap";
@@ -26,6 +26,36 @@ const script = poolBootstrapScript({ relayHttpUrl: "https://relay.example/" });
 
 /** The name electron-builder actually produced for v3.19.0. Not a guess. */
 const REAL_APPIMAGE = "Grok-Build-Desktop-3.19.0-linux-x86_64.AppImage";
+
+function shellFunction(name: string): string {
+  const start = script.indexOf(`${name}() {`);
+  expect(start).toBeGreaterThan(-1);
+  return script.slice(start, script.indexOf("\n}\n", start) + 3);
+}
+
+const release = (url?: string, over: Record<string, unknown> = {}) => ({
+  draft: false, prerelease: false, tag_name: "v3.19.0",
+  assets: url ? [{ browser_download_url: url }] : [], ...over,
+});
+const releasedUrl = `https://example/${REAL_APPIMAGE}`;
+const releaseWindow = [
+  release(), // latest release is still waiting for its Linux leg
+  release("https://example/draft.AppImage", { draft: true }),
+  release("https://example/prerelease.AppImage", { prerelease: true }),
+  release(releasedUrl),
+  release("https://example/older.AppImage"),
+];
+
+function runShell(bash: string, body: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "afk-release-"));
+  try {
+    const path = join(dir, "harness.sh");
+    writeFileSync(path, `#!/usr/bin/env bash\nset -uo pipefail\n${body}\n`);
+    return execFileSync(bash, [bashPath(path)], { cwd: dir, encoding: "utf8", timeout: 15_000 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 /** A path bash can open. It reads its arguments as POSIX strings, so a Windows
  *  separator arrives consumed as an escape and `C:\\Users\\x` becomes
@@ -129,28 +159,52 @@ describe("it is a shell script", () => {
 });
 
 describe("finding the published build", () => {
-  /** The script's own asset pattern, lifted out and applied here. */
-  function assetUrlFrom(apiJson: string): string | null {
-    const m = /"browser_download_url": *"([^"]*\.AppImage)"/.exec(apiJson);
-    return m ? m[1] : null;
-  }
-
-  it("matches the name electron-builder really produces", () => {
-    // THE ONE THAT WAS WRONG. Every other target is `-x64`; AppImage alone is
-    // `-x86_64`, so a pattern built by analogy matched nothing — and matching
-    // nothing is not an error here, it is a silent 25-minute fallback.
-    const json = `{"assets":[{"browser_download_url": "https://example/${REAL_APPIMAGE}"}]}`;
-    expect(assetUrlFrom(json)).toBe(`https://example/${REAL_APPIMAGE}`);
-    // And the script must carry that same extension-only pattern, not an
-    // architecture string that will drift again.
-    expect(script).toContain('[^"]*\\.AppImage"');
-    expect(script).not.toContain("linux-x64\\.AppImage");
+  it("R1: first install uses the older published AppImage during a release window", ctx => {
+    const bash = bashOr(ctx);
+    if (!bash) return;
+    // Run the actual install block through its kind/asset writes, stopping
+    // before agent installers and the service's permanent wait loop.
+    const start = script.indexOf('if [ ! -f "$STAMP" ]; then');
+    const install = script.slice(start, script.indexOf("  # ALL THREE agent CLIs", start)) + "fi";
+    const out = runShell(bash, `
+APP="$PWD/app"
+STAMP="$APP/.afkpilot-installed"
+LOG="$PWD/log"
+step() { echo "$*"; }
+sudo() { :; }
+sleep() { :; }
+git() { echo SOURCE-BUILD; return 1; }
+curl() {
+  local out="" prev=""
+  for a in "$@"; do if [ "$prev" = "-o" ]; then out="$a"; fi; prev="$a"; done
+  if [ -z "$out" ]; then echo '${JSON.stringify(releaseWindow)}'; return 0; fi
+  printf '#!/bin/sh\nmkdir -p squashfs-root\nprintf "#!/bin/sh\\necho host\\n" > squashfs-root/AppRun\nchmod +x squashfs-root/AppRun\n' > "$out"
+}
+${shellFunction("published_appimage")}
+${install}
+echo "KIND: $(cat "$APP/.afkpilot-kind")"
+echo "ASSET: $(cat "$APP/.afkpilot-asset")"
+`);
+    expect(out).toContain("KIND: appimage");
+    expect(out).toContain(`ASSET: ${releasedUrl}`);
+    expect(out).not.toContain("SOURCE-BUILD");
   });
 
-  it("finds nothing in a release that has none, so the fallback runs", () => {
-    const json = `{"assets":[{"browser_download_url": "https://example/App-3.19.0-win-x64.exe"}]}`;
-    expect(assetUrlFrom(json)).toBeNull();
-    expect(script).toContain("no published build; building from source");
+  it("walks release pages before deciding no published build exists", ctx => {
+    const bash = bashOr(ctx);
+    if (!bash) return;
+    const out = runShell(bash, `
+curl() {
+  case "$*" in
+    *'per_page=100&page=1'*) echo '${JSON.stringify(Array.from({ length: 100 }, () => release()))}' ;;
+    *'per_page=100&page=2'*) echo '${JSON.stringify(releaseWindow)}' ;;
+    *) return 22 ;;
+  esac
+}
+${shellFunction("published_appimage")}
+published_appimage
+`);
+    expect(out.trim()).toBe(releasedUrl);
   });
 
   it("survives a slow or stalled download instead of hanging until the sweep", () => {
@@ -285,6 +339,7 @@ describe("updating the host on a machine nobody can walk up to", () => {
     installedAsset?: string;
     unpacks?: boolean;
     lastChecked?: string;
+    afterFirstBoot?: string;
     /** A download left behind by an earlier attempt, and what it came from. */
     partial?: { asset: string; bytes: string };
   }) {
@@ -298,9 +353,9 @@ describe("updating the host on a machine nobody can walk up to", () => {
 
       const harness = [
         "#!/usr/bin/env bash",
-        "set -u",
-        `APP="${dir.split(String.fromCharCode(92)).join("/")}/afkpilot"`,
-        `ENVFILE="${dir.split(String.fromCharCode(92)).join("/")}/env"`,
+        "set -uo pipefail",
+        'APP="$PWD/afkpilot"',
+        'ENVFILE="$PWD/env"',
         "AGENT_MAX_AGE=604800",
         'HOST_STAMP="$APP/.afkpilot-host-checked"',
         'ASSET_RECORD="$APP/.afkpilot-asset"',
@@ -324,8 +379,10 @@ describe("updating the host on a machine nobody can walk up to", () => {
           `printf '%s' "${opts.partial.bytes}" > "$APP/next/afkpilot.AppImage"`,
           `printf '%s\n' "${opts.partial.asset}" > "$APP/next/.asset"`,
         ] : []),
+        shellFunction("published_appimage"),
         fn,
         "refresh_host_if_stale",
+        opts.afterFirstBoot ?? "",
         '[ -f "$HOST_STAMP" ] || echo STAMP-GONE',
         'ls "$APP" | sort | sed "s/^/APP: /"',
         'echo "APPRUN: $(cat "$APP/squashfs-root/AppRun" 2>/dev/null | tail -1)"',
@@ -335,7 +392,7 @@ describe("updating the host on a machine nobody can walk up to", () => {
 
       const path = join(dir, "harness.sh");
       writeFileSync(path, harness);
-      return execFileSync(bash, [bashPath(path)], { encoding: "utf8" });
+      return execFileSync(bash, [bashPath(path)], { cwd: dir, encoding: "utf8", timeout: 15_000, stdio: "pipe" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -347,7 +404,7 @@ describe("updating the host on a machine nobody can walk up to", () => {
     '  local out="" prev=""',
     '  for a in "$@"; do if [ "$prev" = "-o" ]; then out="$a"; fi; prev="$a"; done',
     '  if [ -z "$out" ]; then',
-    '    echo \'"browser_download_url": "https://new.example/a-9.9.9-linux-x86_64.AppImage"\'',
+    `    echo '${JSON.stringify([release("https://new.example/a-9.9.9-linux-x86_64.AppImage")])}'`,
     "    return 0",
     "  fi",
   ];
@@ -361,6 +418,41 @@ describe("updating the host on a machine nobody can walk up to", () => {
 
   /** Serves a release URL, then fails the download with curl exit 28. */
   const timingOutCurl = () => [...curlLookup, "  return 28"].join(String.fromCharCode(10));
+
+  it("R1: weekly refresh keeps the older published build when latest lacks its AppImage", ctx => {
+    const bash = bashOr(ctx);
+    if (!bash) return;
+    const out = runRefresh(bash, {
+      installedAsset: releasedUrl,
+      curlBehaviour: `echo '${JSON.stringify(releaseWindow)}'`,
+    });
+    expect(out).toContain(`ASSET: ${releasedUrl}`);
+    expect(out).toContain("APPRUN: echo old");
+    expect(out).not.toContain("host update: fetching");
+  });
+
+  it.each(["empty", "http error", "invalid JSON"])("R4: %s lookup spends no week; the next boot rechecks", (failure, ctx) => {
+    const bash = bashOr(ctx);
+    if (!bash) return;
+    const first = failure === "empty" ? "echo '[]'" : failure === "http error" ? "return 22" : "echo invalid";
+    const out = runRefresh(bash, {
+      installedAsset: releasedUrl,
+      curlBehaviour: `
+echo called >> "$APP/lookups"
+if [ -f "$APP/second-boot" ]; then echo '${JSON.stringify(releaseWindow)}'; else ${first}; fi`,
+      afterFirstBoot: `
+echo "FIRST-STAMP: $(cat "$HOST_STAMP")"
+touch "$APP/second-boot"
+refresh_host_if_stale
+echo "SECOND-STAMP: $(cat "$HOST_STAMP")"
+refresh_host_if_stale
+echo "LOOKUPS: $(wc -l < "$APP/lookups" | tr -d ' ')"`,
+    });
+    expect(out).toContain("FIRST-STAMP: 0");
+    expect(out).not.toContain("SECOND-STAMP: 0");
+    expect(out).toContain("LOOKUPS: 2");
+    expect(out).toContain(`ASSET: ${releasedUrl}`);
+  });
 
   it("installs a newer build and keeps the machine startable", (ctx) => {
     const bash = bashOr(ctx);
@@ -385,7 +477,7 @@ describe("updating the host on a machine nobody can walk up to", () => {
         '  local out="" prev=""',
         '  for a in "$@"; do if [ "$prev" = "-o" ]; then out="$a"; fi; prev="$a"; done',
         '  if [ -z "$out" ]; then',
-        '    echo \'"browser_download_url": "https://new.example/a-9.9.9-linux-x86_64.AppImage"\'',
+        `    echo '${JSON.stringify([release("https://new.example/a-9.9.9-linux-x86_64.AppImage")])}'`,
         "    return 0",
         "  fi",
         "  return 22",
@@ -473,6 +565,44 @@ describe("updating the host on a machine nobody can walk up to", () => {
     // Not even the release lookup: the age check comes first, so a daily wake
     // costs nothing at all.
     expect(out).not.toContain("host update:");
+  });
+});
+
+describe("fleet refresh release selection", () => {
+  // Extract only this read operation. Importing the operator script itself
+  // would load .env and contact the fleet, which these tests must never do.
+  const source = readFileSync(new URL("../scripts/refresh-sprite-hosts.mjs", import.meta.url), "utf8");
+  const definition = source.match(/^async function latestAssetUrl\(\) \{[\s\S]*?^\}/m)?.[0];
+  const releasesUrl = source.match(/^const RELEASES = "([^"]+)"/m)?.[1];
+  const lookup = (fetch: typeof globalThis.fetch) => {
+    expect(definition).toBeTruthy();
+    expect(releasesUrl).toBe("https://api.github.com/repos/phuryn/grok-build-vscode/releases");
+    return new Function("fetch", "RELEASES", `${definition}; return latestAssetUrl();`)(fetch, releasesUrl);
+  };
+
+  it("selects the same published AppImage as bootstrap during the release window", async () => {
+    const urls: string[] = [];
+    const selected = await lookup((async (url: string) => {
+      urls.push(url);
+      return { ok: true, json: async () => releaseWindow };
+    }) as typeof fetch);
+    expect(urls).toEqual([`${releasesUrl}?per_page=100&page=1`]);
+    expect(selected).toEqual({ url: releasedUrl, tag: "v3.19.0" });
+  });
+
+  it("continues to an older page when all 100 newer releases lack usable assets", async () => {
+    let calls = 0;
+    const selected = await lookup((async () => ({
+      ok: true,
+      json: async () => ++calls === 1 ? Array.from({ length: 100 }, () => release()) : releaseWindow,
+    })) as typeof fetch);
+    expect(calls).toBe(2);
+    expect(selected.url).toBe(releasedUrl);
+  });
+
+  it("reports an empty inventory and rejects a failed lookup", async () => {
+    expect(await lookup((async () => ({ ok: true, json: async () => [] })) as typeof fetch)).toEqual({});
+    await expect(lookup((async () => ({ ok: false, status: 503 })) as typeof fetch)).rejects.toThrow("HTTP 503");
   });
 });
 

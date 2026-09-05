@@ -13,17 +13,15 @@
  * about authenticity. The migration it bought was not worth the channel it
  * opened.
  *
- * So a change here reaches the fleet by REBUILDING it: scrap the shelf and let
- * the filler refill it, which is a routine operation and was measured at 139
- * seconds for ten machines on 2026-08-28. What a machine can update on its own
- * is the HOST — from GitHub Releases, which is where the published build lives
- * and is a different party from the relay.
+ * A change reaches existing machines through the operator's
+ * scripts/refresh-sprite-hosts.mjs tool, or by rebuilding unclaimed stock.
+ * What a machine can update on its own is the HOST — from GitHub Releases,
+ * which is a different party from the relay.
  *
  * Served by the relay at `/api/environment/pool-bootstrap.sh` and fetched by
  * the sprite, rather than pushed into it. Exec takes no usable stdin, so the
  * only thing that fits down that channel is a URL — and a script that arrives
- * over HTTPS from the relay is also a script that can be fixed without
- * rebuilding a shelf of machines.
+ * over HTTPS from the relay gives newly built machines the current installer.
  *
  * It contains NO secrets. The two arguments it takes are the machine's own name
  * and a per-row token whose entire power is "mark this one row ready"; the
@@ -141,6 +139,29 @@ refresh_agents_if_stale() {
 HOST_STAMP="$APP/.afkpilot-host-checked"
 ASSET_RECORD="$APP/.afkpilot-asset"
 
+# GitHub lists newest releases first. The newest may still be waiting for its
+# Linux installer, so walk back to a published, non-prerelease AppImage.
+# Node is already part of the Sprite toolchain (also used by the agent CLIs).
+published_appimage() {
+  local page=1 asset
+  while :; do
+    asset=$(curl -fsSL --max-time 60 "https://api.github.com/repos/phuryn/grok-build-vscode/releases?per_page=100&page=$page" \\
+      | node -e '
+        const releases = JSON.parse(require("fs").readFileSync(0, "utf8"));
+        if (!Array.isArray(releases)) process.exit(1);
+        for (const release of releases) {
+          if (!release || release.draft !== false || release.prerelease !== false) continue;
+          const asset = (release.assets || []).find(a =>
+            typeof a.browser_download_url === "string" && a.browser_download_url.endsWith(".AppImage"));
+          if (asset) { console.log(asset.browser_download_url); process.exit(0); }
+        }
+        if (releases.length === 100) console.log("next");
+      ') || return 1
+    if [ "$asset" != "next" ]; then printf '%s\\n' "$asset"; return 0; fi
+    page=$((page + 1))
+  done
+}
+
 # Keep the HOST current too, for the same reason as the CLIs and with a sharper
 # edge: the install was one-shot, so a machine took whatever build existed on
 # the day it was made and kept it for ever. Nobody can walk up to a cloud
@@ -162,15 +183,12 @@ refresh_host_if_stale() {
   [ -f "$HOST_STAMP" ] && last=$(cat "$HOST_STAMP" 2>/dev/null || echo 0)
   local now; now=$(date +%s)
   [ $((now - last)) -lt "$AGENT_MAX_AGE" ] && return 0
-  # Stamped BEFORE the work: a release whose asset cannot be fetched must not
-  # make every wake for the rest of the week retry the whole download.
-  date +%s > "$HOST_STAMP"
-
   local asset
-  asset=$(curl -fsSL --max-time 60 https://api.github.com/repos/phuryn/grok-build-vscode/releases/latest \\
-    | grep -o '"browser_download_url": *"[^"]*\\.AppImage"' \\
-    | head -1 | sed 's/.*"\\(https[^"]*\\)"/\\1/')
+  asset=$(published_appimage) || { step "host update: release lookup failed"; return 0; }
   [ -n "\${asset:-}" ] || { step "host update: no published build found"; return 0; }
+  # Only a lookup that found a usable asset spends the weekly budget. Missing
+  # metadata or installers are rechecked on the next boot.
+  date +%s > "$HOST_STAMP"
   # The URL carries the version, so an unchanged one means there is nothing to
   # do — and finding that out costs one small request instead of 110 MB.
   [ "$asset" = "$(cat "$ASSET_RECORD" 2>/dev/null)" ] && return 0
@@ -209,7 +227,7 @@ refresh_host_if_stale() {
   #
   # So: no retries, two minutes, and KEEP the partial file. This runs on a wake
   # with somebody very likely waiting, and the host does not start until it
-  # returns. A slow link therefore finishes the update over successive weekly
+  # returns. A slow link therefore finishes the update over successive boot
   # attempts instead of holding any single boot open.
   if ! curl -fL "$asset" -o "$APP/next/afkpilot.AppImage" \\
       --retry 0 --continue-at - \\
@@ -264,9 +282,7 @@ if [ ! -f "$STAMP" ]; then
   # machine while looking like it was working as designed. There is only ever
   # one AppImage in a release, so the extension is the whole identity needed.
   step "install: looking for a published Linux build"
-  ASSET=$(curl -fsSL https://api.github.com/repos/phuryn/grok-build-vscode/releases/latest \\
-    | grep -o '"browser_download_url": *"[^"]*\\.AppImage"' \\
-    | head -1 | sed 's/.*"\\(https[^"]*\\)"/\\1/')
+  ASSET=$(published_appimage) || { step "install: release lookup FAILED"; exit 76; }
 
   if [ -n "\${ASSET:-}" ]; then
     rm -rf "$APP"; mkdir -p "$APP"
@@ -315,8 +331,8 @@ if [ ! -f "$STAMP" ]; then
     fi
   fi
 
-  # Fallback: build it. Slow, and correct — this is what runs until a Linux
-  # build is published, and what keeps working if a release is ever missing one.
+  # Historical fallback when no published Linux build exists, or the download
+  # cannot be unpacked. Source installs do not receive automatic host updates.
   if [ ! -f "$APP/.afkpilot-kind" ]; then
     step "install: no published build; building from source"
     rm -rf "$APP"

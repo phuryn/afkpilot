@@ -37,9 +37,9 @@ interface Held extends HandoverPayload {
  * Single-use handover codes, in memory.
  *
  * In memory on purpose. These live for two minutes and mean nothing after; a
- * relay restart in that window costs one open, which retries. Persisting them
- * would put device tokens in the database, and the relay does not keep
- * credentials it can avoid keeping.
+ * relay restart before redemption loses the code. Open returns the existing
+ * environment without retrying handover, so it can remain "creating" until
+ * the user resets it. Persisting codes would also persist their device tokens.
  */
 export class HandoverCodes {
   private held = new Map<string, Held>();

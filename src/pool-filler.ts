@@ -216,9 +216,9 @@ export async function sweepPool(deps: PoolFillerDeps): Promise<SweepResult> {
       const name = poolSpriteName(deps.randomId);
       const secret = deps.randomId();
 
-      // RESERVE FIRST. The row is the thing everything else counts, so writing
-      // it before the machine exists is what stops two builders — parallel
-      // here, or a second relay instance — from filling the same slot twice.
+      // Reserve before creating so later sweeps count the in-flight build.
+      // Counts and reservations are separate calls: two relay instances can
+      // still both observe a shortage and overfill it.
       const reserved = await deps.pool.add(name, secret).catch(() => false);
       if (!reserved) return false; // name already taken; vanishingly rare
 

@@ -42,7 +42,7 @@ import {
 import type { ProvisionCoordinator } from "./environment-provisioner.js";
 import type { EnvironmentPoolStore } from "./environment-pool-store.js";
 import { claimOutcome } from "./environment-pool.js";
-import type { KeepAliveCoordinator } from "./environment-keepalive.js";
+import { KEEPALIVE_IDLE_MS, type KeepAliveCoordinator } from "./environment-keepalive.js";
 import { HandoverCodes, handoverCommand, handoverEnvFile, redactCode } from "./environment-handover.js";
 import { poolBootstrapScript, poolBuildCommand } from "./pool-bootstrap.js";
 import { PRESENCE_TYPE, PresenceTracker } from "./presence.js";
@@ -665,8 +665,14 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
       // than an error.
       return { status: 403, body: { ok: false, error: "upgrade" } };
     }
-    const existing = (await environments.listByUser(claims.userId).catch(() => []))[0];
+    const existing = (await environments.listByUser(claims.userId))[0];
     if (existing) return { status: 200, body: { ok: true, deviceId: existing.deviceId } };
+
+    // Refuse before claiming or buying anything if we cannot deliver its setup.
+    if (!handover || !publicUrl) {
+      log("[relay] cloud provisioning unavailable: handover and RELAY_PUBLIC_URL are required");
+      return { status: 503, body: { ok: false, error: "unavailable" } };
+    }
 
     // THE SHELF FIRST. A pooled machine is already installed, so claiming
     // one turns a twenty-five-minute build into handing over a token. An
@@ -870,12 +876,9 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         return sendJson(res, 200, store.poll(typeof body?.code === "string" ? body.code : ""));
       }
       if (req.method === "GET" && p === "/api/environment/pool-bootstrap.sh") {
-        // The install script a pooled machine fetches. PUBLIC and secret-free
-        // on purpose: exec takes no stdin and returns no output, so a URL is
-        // the only thing that fits in the command line, and serving it means a
-        // broken build step is fixed by a deploy rather than by rebuilding a
-        // shelf of machines.
-        if (!pool || !publicUrl) return sendText(res, 404, "not found");
+        // Both pooled and on-demand machines fetch this public, secret-free
+        // installer. Each keeps its own copy; a deploy changes future fetches.
+        if (!provisioner || !publicUrl) return sendText(res, 404, "not found");
         return sendText(res, 200, poolBootstrapScript({ relayHttpUrl: publicUrl }), "text/x-shellscript");
       }
       if (req.method === "POST" && p === "/api/environment/pool/ready") {
@@ -942,23 +945,34 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         if (!environments || !provisioner) return sendJson(res, 404, { ok: false, error: "not-supported" });
         const claims = await sessions.verify(sessionTokenFromRequest(authHeaders(req)));
         if (!claims) return sendJson(res, 401, { ok: false, error: "auth" });
-        const existing = (await environments.listByUser(claims.userId).catch(() => []))[0];
+        const inventory = await environments.listByUser(claims.userId).catch(() => null);
+        if (!inventory) return sendJson(res, 503, { ok: false, error: "unavailable" });
+        const existing = inventory[0];
         // Nothing to reset is a success, not an error: the end state the caller
         // asked for is the end state they have.
         if (!existing) return sendJson(res, 200, { ok: true, reset: false });
 
-        const gone = await provisioner.destroy(existing.externalId);
+        const gone = await provisioner.destroy(existing.externalId).catch(() => false);
         if (!gone) return sendJson(res, 503, { ok: false, error: "unavailable" });
         // Bookkeeping AFTER the machine is actually gone. The other order leaves
         // a sprite nobody has a record of, which is a bill with no owner.
-        await environments.remove(existing.deviceId).catch(() => false);
-        await devices.revoke(existing.deviceId).catch(() => false);
+        // Keep the environment row until all bookkeeping finishes, so another
+        // Reset can retry. Destroy accepts an already-gone machine; revoke may
+        // return false for a device revoked by an earlier reset attempt.
+        try {
+          const revoked = await devices.revoke(existing.deviceId);
+          if (!revoked && await devices.findOwned(existing.deviceId, claims.userId)) {
+            return sendJson(res, 503, { ok: false, error: "unavailable" });
+          }
+          if (!await environments.remove(existing.deviceId)) {
+            return sendJson(res, 503, { ok: false, error: "unavailable" });
+          }
+        } catch {
+          return sendJson(res, 503, { ok: false, error: "unavailable" });
+        }
         log(`[relay] reset cloud environment for ${claims.userId}`);
-        // Not re-provisioned here. The ROW never goes away — every account has
-        // one whether or not a machine backs it — so the person is never left
-        // without a way in, and the machine itself waits for the next open. That
-        // is the same path a first-time user takes, and therefore the one that
-        // is actually tested.
+        // The picker keeps a Cloud placeholder after the environment row is
+        // removed. Its next Open provisions through the first-use path.
         return sendJson(res, 200, { ok: true, reset: true });
       }
       if (req.method === "POST" && p === "/api/environment/wake-at") {
@@ -1433,20 +1447,40 @@ export function createRelayServer(opts: RelayServerOptions): RelayServer {
         .catch(() => {});
     }
 
-    // Resolved ONCE per uplink, because the alternative is a database read per
-    // frame. A laptop leaves this undefined and pays nothing for the feature.
-    let keepAliveTarget: string | undefined;
-    if (keepAlive && environments) {
+    // A successful lookup is final, including null for a laptop. A failed
+    // lookup retries on later traffic, at most once per five seconds.
+    let keepAliveTarget: string | null | undefined;
+    let keepAliveLookupPending = false;
+    let keepAliveRetryAt = 0;
+    let lastUplinkActivityAt: number | undefined;
+    const resolveKeepAliveTarget = () => {
+      if (!keepAlive || !environments || keepAliveTarget !== undefined
+        || keepAliveLookupPending || Date.now() < keepAliveRetryAt) return;
+      keepAliveLookupPending = true;
       void environments.find(device.deviceId)
-        .then((env) => { if (env) keepAliveTarget = env.externalId; })
-        .catch(() => {});
-    }
+        .then((env) => {
+          keepAliveTarget = env?.externalId ?? null;
+          // Traffic can arrive while the lookup is pending. Protect that work
+          // without waiting for another frame, but never revive a closed socket.
+          if (keepAliveTarget && ws.readyState === WebSocket.OPEN
+            && lastUplinkActivityAt !== undefined
+            && Date.now() - lastUplinkActivityAt < KEEPALIVE_IDLE_MS) {
+            keepAlive.noteActivity(device.deviceId, keepAliveTarget);
+          }
+        })
+        .catch(() => { keepAliveRetryAt = Date.now() + 5_000; })
+        .finally(() => { keepAliveLookupPending = false; });
+    };
+    resolveKeepAliveTarget();
     admit((raw) => {
       // A frame arrived, so this machine is working. What the frame SAYS is not
       // consulted — the relay stays payload-blind and an idle host sends
       // nothing at all, so arrival alone is the signal.
+      lastUplinkActivityAt = Date.now();
       if (keepAlive && keepAliveTarget) {
         keepAlive.noteActivity(device.deviceId, keepAliveTarget);
+      } else {
+        resolveKeepAliveTarget();
       }
       const result = hub.fromUplink(device.deviceId, raw);
       if (result.kind === "accepted") backfillDeviceClient(device, raw);

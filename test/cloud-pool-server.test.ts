@@ -14,7 +14,8 @@ import { createRelayServer, type RelayServer } from "../src/server";
 import { Hub } from "../src/hub";
 import { InMemoryDeviceRegistry, MOCK_USER_ID } from "../src/devices";
 import { LinkStore } from "../src/link-store";
-import { InMemoryEnvironmentStore } from "../src/environment-store";
+import { InMemoryEnvironmentStore, SupabaseEnvironmentStore } from "../src/environment-store";
+import { supabaseResult } from "./helpers/supabase-result";
 import { InMemoryEnvironmentPoolStore } from "../src/environment-pool-store";
 import { HandoverCodes } from "../src/environment-handover";
 import { WakeCoordinator } from "../src/environment-waker";
@@ -33,7 +34,7 @@ let codeSeq = 0;
 
 const PUBLIC = "https://relay.example";
 
-async function boot() {
+async function boot(opts: { noPool?: boolean; noPublicUrl?: boolean; noHandover?: boolean } = {}) {
   created = [];
   execs = [];
   codeSeq = 0;
@@ -51,9 +52,9 @@ async function boot() {
     sessions: { verify: async () => ({ userId: MOCK_USER_ID, features: [] }) },
     hub: new Hub(),
     environments,
-    pool,
-    handover,
-    publicUrl: PUBLIC,
+    pool: opts.noPool ? undefined : pool,
+    handover: opts.noHandover ? undefined : handover,
+    publicUrl: opts.noPublicUrl ? undefined : PUBLIC,
     waker: new WakeCoordinator({ wake: async () => ({ ok: true }) }),
     provisioner: new ProvisionCoordinator({
       create: async (userId: string) => { created.push(spriteNameFor(userId)); return { ok: true, externalId: spriteNameFor(userId) }; },
@@ -84,6 +85,49 @@ const post = (path: string, body?: unknown, headers: Record<string, string> = {}
 
 beforeEach(async () => { await boot(); });
 afterEach(async () => { await handle?.close(); handle = undefined; });
+
+it("C6: a failed production inventory read cannot claim a second machine", async () => {
+  await environments.create({ deviceId: "existing-device", userId: MOCK_USER_ID, externalId: "existing-sprite", provider: "sprite" });
+  await pool.add("spare", "s");
+  await pool.markReady("spare", "s", 1_000);
+  const original = environments.listByUser.bind(environments);
+  const sql = new SupabaseEnvironmentStore(supabaseResult(() => ({ data: null, error: { message: "read failed" } })));
+  environments.listByUser = sql.listByUser.bind(sql);
+  const res = await post("/api/cloud/open");
+  expect(res.status).toBe(503);
+  expect(await res.json()).toEqual({ ok: false, error: "unavailable" });
+  expect(await original(MOCK_USER_ID)).toHaveLength(1);
+  expect((await pool.counts(1_700_000_000_000)).ready).toBe(1);
+  expect(created).toEqual([]);
+  expect(execs).toEqual([]);
+});
+
+it("C5: serves the actual installer GET with provisioning enabled and no pool", async () => {
+  await handle?.close();
+  await boot({ noPool: true });
+  expect((await post("/api/cloud/open")).status).toBe(200);
+  expect(execs[0].argv.join(" ")).toContain(`${PUBLIC}/api/environment/pool-bootstrap.sh`);
+  const res = await fetch(`${base}/api/environment/pool-bootstrap.sh`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toContain("text/x-shellscript");
+  expect(await res.text()).toContain(`RELAY="${PUBLIC}"`);
+});
+
+it.each(["noPublicUrl", "noHandover"] as const)("refuses allocation before claiming or creating with %s", async missing => {
+  await handle?.close();
+  await boot({ [missing]: true });
+  // Check both a full shelf and the on-demand path.
+  for (const stocked of [false, true]) {
+    if (stocked) { await pool.add("spare", "s"); await pool.markReady("spare", "s", 1_000); }
+    const res = await post("/api/cloud/open");
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ ok: false, error: "unavailable" });
+    expect((await pool.counts(1_700_000_000_000)).ready).toBe(stocked ? 1 : 0);
+  }
+  expect(created).toEqual([]);
+  expect(execs).toEqual([]);
+  expect(await environments.listByUser(MOCK_USER_ID)).toEqual([]);
+});
 
 describe("opening with a stocked shelf", () => {
   it("takes a machine instead of building one", async () => {

@@ -45,7 +45,7 @@ git merge --ff-only main
 git push origin production
 ```
 
-Before that push, the exact candidate commit must pass the full local gate. Set `LIFECYCLE_REQUIRE_HOST=1` in the invoking environment so a missing sibling checkout fails instead of skipping:
+Before that push, the exact candidate commit must pass the full local gate, which requires the sibling host checkout:
 
 ```sh
 npm run gate

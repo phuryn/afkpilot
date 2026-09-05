@@ -7,10 +7,28 @@
  * slot forever, a claimed row that wanders back onto the shelf.
  */
 import { describe, expect, it } from "vitest";
-import { InMemoryEnvironmentPoolStore } from "../src/environment-pool-store";
+import { InMemoryEnvironmentPoolStore, SupabaseEnvironmentPoolStore } from "../src/environment-pool-store";
+import { supabaseResult } from "./helpers/supabase-result";
 import { BUILD_TIMEOUT_MS } from "../src/environment-pool";
 
 const SECRET = "s3cr3t";
+
+describe("Supabase pool counts (C3)", () => {
+  it.each(["ready", "building", "both"])("throws when %s counts fail", async (side) => {
+    const store = new SupabaseEnvironmentPoolStore(supabaseResult(state =>
+      side === "both" || state === side
+        ? { data: null, count: null, error: { message: "read failed" } }
+        : { data: null, count: 3, error: null }));
+    await expect(store.counts(1_000_000)).rejects.toThrow("read failed");
+  });
+
+  it("accepts explicit zero counts and rejects absent counts", async () => {
+    const empty = new SupabaseEnvironmentPoolStore(supabaseResult(() => ({ data: null, count: 0, error: null })));
+    expect(await empty.counts(0)).toEqual({ ready: 0, building: 0 });
+    const missing = new SupabaseEnvironmentPoolStore(supabaseResult(() => ({ data: null, count: null, error: null })));
+    await expect(missing.counts(0)).rejects.toThrow("no count");
+  });
+});
 
 function store(now = () => 1_000_000) {
   return new InMemoryEnvironmentPoolStore(now);

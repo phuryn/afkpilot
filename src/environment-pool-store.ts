@@ -2,9 +2,9 @@
  * Where the shelf is kept.
  *
  * Split from `environment-store.ts` because it answers a different question. An
- * environment belongs to somebody and the relay's only job with it is to wake
- * it. A pooled sprite belongs to NOBODY — that is the whole point — and the
- * only questions are how many there are and which one to hand over next.
+ * environment belongs to somebody. A pooled sprite belongs to NOBODY — that
+ * is the whole point — and the questions are how many there are and which one
+ * to hand over next.
  *
  * The claim is the part that has to be right, and it is not implemented here:
  * it is a SQL function (`claim_pool_sprite`) so that selecting a row and
@@ -28,6 +28,7 @@ export interface PoolEntry {
 export interface EnvironmentPoolStore {
   /**
    * Ready and in-flight counts, with stale builds excluded from `building`.
+   * Throws if either count is unavailable; zero means a successful empty read.
    *
    * Excluded rather than merely reported, because the filler subtracts this
    * from its target: a build nobody will ever finish, still counted, is a slot
@@ -162,10 +163,11 @@ export class SupabaseEnvironmentPoolStore implements EnvironmentPoolStore {
     const building = await this.db
       .from("environment_pool").select("external_id", { count: "exact", head: true })
       .eq("state", "building").gt("created_at", cutoff);
-    return {
-      ready: ready.error ? 0 : (ready.count ?? 0),
-      building: building.error ? 0 : (building.count ?? 0),
-    };
+    const error = ready.error ?? building.error;
+    if (error || ready.count === null || building.count === null) {
+      throw new Error(`environment_pool.counts failed: ${error?.message ?? "no count"}`);
+    }
+    return { ready: ready.count, building: building.count };
   }
 
   async add(externalId: string, claimSecret: string): Promise<boolean> {

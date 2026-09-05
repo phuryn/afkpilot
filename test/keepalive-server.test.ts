@@ -3,7 +3,7 @@
  *
  * The coordinator's own suite covers when to hold and when to let go. This
  * covers the wiring, which is where the feature would actually fail: the
- * externalId is resolved once per uplink from the environment store, and if
+ * externalId is resolved from the environment store, and if
  * that lookup is wrong or never runs, every hold silently doesn't happen. There
  * is no error to see — just machines that go to sleep mid-turn, which is
  * indistinguishable from the bug this was built to fix.
@@ -12,7 +12,7 @@
  * minute after its last interaction, and suspended is FROZEN — a service
  * writing every five seconds stopped dead the moment the machine went `warm`.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import WebSocket from "ws";
 import { randomUUID, randomBytes } from "node:crypto";
 import { join } from "node:path";
@@ -89,7 +89,80 @@ async function cloudDevice(externalId = "sprite-1") {
 }
 
 beforeEach(async () => { await boot(); });
-afterEach(async () => { await handle?.close(); handle = undefined; });
+afterEach(async () => { await handle?.close(); handle = undefined; vi.restoreAllMocks(); });
+
+/** Pong establishes that the preceding frames reached the loopback server. */
+async function framesArrived(ws: WebSocket) {
+  await new Promise<void>(resolve => { ws.once("pong", () => resolve()); ws.ping(); });
+}
+
+describe("recovering the hold target", () => {
+  it("C9: retries failed lookups on the same uplink, bounded across frame bursts", async () => {
+    const d = await cloudDevice("sprite-recovered");
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const find = environments.find.bind(environments);
+    let recovered = false;
+    const lookup = vi.spyOn(environments, "find").mockImplementation(async id => {
+      if (!recovered) throw new Error("read failed");
+      return find(id);
+    });
+    const ws = await openUplink(d.token);
+    for (let i = 0; i < 8; i++) ws.send(JSON.stringify({ t: "working" }));
+    await framesArrived(ws);
+    expect(lookup).toHaveBeenCalledTimes(1);
+    expect(holds).toEqual([]);
+    now += 5_000;
+    for (let i = 0; i < 8; i++) ws.send(JSON.stringify({ t: "working" }));
+    await framesArrived(ws);
+    expect(lookup).toHaveBeenCalledTimes(2);
+    expect(holds).toEqual([]);
+    recovered = true;
+    now += 5_000;
+    ws.send(JSON.stringify({ t: "working" }));
+    await framesArrived(ws);
+    expect(lookup).toHaveBeenCalledTimes(3);
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    expect(holds).toEqual(["sprite-recovered"]);
+    expect(keepAlive.holding(d.deviceId)).toBe(true);
+    now += 60_000;
+    for (let i = 0; i < 8; i++) ws.send(JSON.stringify({ t: "working" }));
+    await framesArrived(ws);
+    expect(lookup).toHaveBeenCalledTimes(3);
+    ws.close();
+  });
+
+  it("a successful non-cloud lookup is final even after later activity", async () => {
+    const d = await devices.issue("Laptop", MOCK_USER_ID);
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const lookup = vi.spyOn(environments, "find");
+    const ws = await openUplink(d.token);
+    now += 60_000;
+    for (let i = 0; i < 8; i++) ws.send(JSON.stringify({ t: "working" }));
+    await framesArrived(ws);
+    expect(lookup).toHaveBeenCalledTimes(1);
+    expect(holds).toEqual([]);
+    ws.close();
+  });
+
+  it.each([false, true])("retains activity during one pending lookup; socket closed = %s", async closed => {
+    const d = await cloudDevice("sprite-delayed");
+    const env = await environments.find(d.deviceId);
+    let resolve!: (value: typeof env) => void;
+    const lookup = vi.spyOn(environments, "find").mockReturnValue(new Promise(r => { resolve = r; }));
+    const ws = await openUplink(d.token);
+    for (let i = 0; i < 8; i++) ws.send(JSON.stringify({ t: "working" }));
+    await framesArrived(ws);
+    expect(lookup).toHaveBeenCalledTimes(1);
+    expect(holds).toEqual([]);
+    if (closed) await new Promise<void>(r => { ws.once("close", () => r()); ws.close(); });
+    resolve(env);
+    await settle();
+    expect(holds).toEqual(closed ? [] : ["sprite-delayed"]);
+    ws.close();
+  });
+});
 
 describe("what starts a hold", () => {
   it("holds the machine a working frame came from", async () => {

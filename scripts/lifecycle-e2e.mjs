@@ -45,8 +45,8 @@
 // so that interleaving ends as interrupted-after-echo — named, not treated
 // as arrival. Isolation still runs so one red does not hide the other.
 //
-// Locally, skip loudly (print why, exit 0) when the sibling checkout is
-// absent. CI sets LIFECYCLE_REQUIRE_HOST=1 so the same absence fails.
+// The standalone command skips loudly when the sibling checkout is absent.
+// The local promotion gate passes --require-host so that absence fails.
 // Never skip silently. Precedent: grok-build-vscode f5006be.
 //
 // Run: npm run e2e:lifecycle
@@ -130,9 +130,9 @@ export function parseInvert(raw = process.env.LIFECYCLE_INVERT) {
   );
 }
 
-export function hostRequired(env = process.env) {
+export function hostRequired(env = process.env, argv = process.argv) {
   const v = String(env.LIFECYCLE_REQUIRE_HOST || "").trim().toLowerCase();
-  return v === "1" || v === "true" || v === "yes";
+  return argv.includes("--require-host") || v === "1" || v === "true" || v === "yes";
 }
 
 export function hostProcessGone(handle) {
@@ -919,9 +919,9 @@ async function main() {
   if (skip) {
     log(`SKIP: ${skip}`);
     if (hostRequired()) {
-      throw new Error(`LIFECYCLE_REQUIRE_HOST is set but ${skip}`);
+      throw new Error(`Lifecycle host is required but ${skip}`);
     }
-    log("Exiting 0 so a bare clone's local gate stays runnable. CI sets LIFECYCLE_REQUIRE_HOST=1.");
+    log("Exiting 0 for the optional standalone run. npm run gate requires the host with --require-host.");
     return 0;
   }
 

@@ -5,10 +5,9 @@
  * `main.ts` picks the implementation. In-memory for keyless dev (so a
  * contributor can run the whole thing with no account), Supabase in production.
  *
- * The interface is deliberately small. The relay does one thing with an
- * environment — wake it — so the store answers only the questions that serves:
- * which environment is this device, which are due, and what did the host ask
- * for. No prompts, no routine names, no schedules beyond a single timestamp.
+ * The store tracks ownership, readiness and the next wake for provisioning,
+ * reset and activity holds. No prompts, no routine names, no schedules beyond
+ * a single timestamp.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { EnvironmentProvider, EnvironmentRecord } from "./environments.js";
@@ -16,7 +15,7 @@ import type { EnvironmentProvider, EnvironmentRecord } from "./environments.js";
 export interface EnvironmentStore {
   /** The environment for a device, or null when it is an ordinary machine. */
   find(deviceId: string): Promise<EnvironmentRecord | null>;
-  /** Live environments for one user. Server-side filtered — never fetch-all. */
+  /** Live environments for one user. Throws on read failure; [] means none. */
   listByUser(userId: string): Promise<EnvironmentRecord[]>;
   /** Register a device as a cloud environment. Idempotent on deviceId. */
   create(input: {
@@ -157,7 +156,7 @@ export class SupabaseEnvironmentStore implements EnvironmentStore {
   async listByUser(userId: string): Promise<EnvironmentRecord[]> {
     const { data, error } = await this.db
       .from("environments").select(COLS).eq("user_id", userId);
-    if (error || !data) return [];
+    if (error || !data) throw new Error(`environments.listByUser failed: ${error?.message ?? "no data"}`);
     return (data as unknown as EnvironmentRow[]).map(toRecord);
   }
 

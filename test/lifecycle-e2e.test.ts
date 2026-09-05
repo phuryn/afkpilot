@@ -104,8 +104,23 @@ describe("lifecycle e2e harness", () => {
       env: { ...process.env, GROK_BUILD_VSCODE: missing, LIFECYCLE_REQUIRE_HOST: "1" },
     });
     expect(run.status).not.toBe(0);
-    expect(`${run.stdout}\n${run.stderr}`).toMatch(/LIFECYCLE_REQUIRE_HOST/);
+    expect(`${run.stdout}\n${run.stderr}`).toMatch(/host is required/);
     expect(`${run.stdout}\n${run.stderr}`).toMatch(/not found/);
+  });
+
+  it("R3: the promotion gate requires the sibling even without an environment override", () => {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    const step = pkg.scripts.gate.split(" && ").find((s: string) => s.startsWith("npm run e2e:lifecycle"));
+    expect(step).toBe("npm run e2e:lifecycle -- --require-host");
+    expect(pkg.scripts["gate:ci"]).not.toContain("e2e:lifecycle");
+    const args = step.split(" -- ")[1].split(" ");
+    const run = spawnSync(process.execPath, ["scripts/lifecycle-e2e.mjs", ...args], {
+      encoding: "utf8", timeout: 15_000,
+      env: { ...process.env, GROK_BUILD_VSCODE: join(tmpdir(), "afk-no-sibling-gate"), LIFECYCLE_REQUIRE_HOST: "" },
+    });
+    expect(run.status).toBe(1);
+    expect(`${run.stdout}\n${run.stderr}`).toMatch(/host is required.*not found/);
+    expect(hostRequired({}, ["--require-host"])).toBe(true);
   });
 
   it("treats a POSIX signal death as the process being gone", () => {

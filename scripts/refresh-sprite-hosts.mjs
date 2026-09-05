@@ -2,8 +2,8 @@
  * Force every cloud machine to pick up the newest published desktop host.
  *
  * YOU DO NOT NORMALLY NEED THIS. `pool-bootstrap.ts` already refreshes the host
- * from `releases/latest` by itself: at boot, non-destructively (the new build is
- * unpacked beside the running one and swapped in only once its AppRun exists),
+ * from published releases carrying an AppImage: at boot, non-destructively
+ * (unpacked beside the running one and swapped in only once its AppRun exists),
  * throttled to once a week per machine. Linux has no in-app updater — the
  * electron-updater feed is win32/darwin only — so that boot check is the only
  * thing keeping a sprite current, and it is enough for an ordinary release.
@@ -58,7 +58,7 @@ import { createHash } from "node:crypto";
 import { spriteExec } from "../dist/sprite-exec.js";
 
 const API_BASE = process.env.SPRITES_API_BASE || "https://api.sprites.dev";
-const RELEASES = "https://api.github.com/repos/phuryn/grok-build-vscode/releases/latest";
+const RELEASES = "https://api.github.com/repos/phuryn/grok-build-vscode/releases";
 const APPLY = process.argv.includes("--apply");
 /**
  * Install packages the bootstrap has learned about SINCE these machines were
@@ -163,11 +163,23 @@ async function listSprites() {
 }
 
 async function latestAssetUrl() {
-  const res = await fetch(RELEASES, { headers: { "user-agent": "afkpilot-refresh" } });
-  if (!res.ok) throw new Error(`releases: HTTP ${res.status}`);
-  const body = await res.json();
-  const asset = (body.assets ?? []).find((a) => String(a.name).endsWith(".AppImage"));
-  return { url: asset?.browser_download_url, tag: body.tag_name };
+  // Same newest-first selection as the machine's published_appimage lookup.
+  for (let page = 1; ; page++) {
+    const res = await fetch(`${RELEASES}?per_page=100&page=${page}`, {
+      headers: { "user-agent": "afkpilot-refresh" },
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!res.ok) throw new Error(`releases: HTTP ${res.status}`);
+    const releases = await res.json();
+    if (!Array.isArray(releases)) throw new Error("releases: expected a list");
+    for (const release of releases) {
+      if (!release || release.draft !== false || release.prerelease !== false) continue;
+      const asset = (release.assets || []).find(a =>
+        typeof a.browser_download_url === "string" && a.browser_download_url.endsWith(".AppImage"));
+      if (asset) return { url: asset.browser_download_url, tag: release.tag_name };
+    }
+    if (releases.length < 100) return {};
+  }
 }
 
 /**
@@ -194,7 +206,7 @@ const bootHash = FORCE_HOST ? await servedBootScriptHash() : null;
 
 const { url: wantUrl, tag } = await latestAssetUrl();
 if (!wantUrl) {
-  console.error("The latest release publishes no .AppImage — nothing to roll out.");
+  console.error("No published release carries an .AppImage — nothing to roll out.");
   process.exit(1);
 }
 const sprites = await listSprites();
